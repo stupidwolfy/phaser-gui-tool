@@ -563,3 +563,12 @@ input {
   color: #fff;
   font-weight: 700;
 }
+
+.toolbar__groupLabel {
+  align-self: center;
+  padding-right: 2px;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}

@@ -7,7 +7,8 @@ export interface ToolbarActions {
   onSave: () => void;
   onSaveAs: () => void;
   onFit: () => void;
-  onExportScene: () => void;
+  onExportSceneTs: () => void;
+  onExportSceneJs: () => void;
   onExportHtml: () => void;
 }
 
@@ -89,19 +90,27 @@ export function Toolbar({
 
       {!compact && (
         <div className="toolbar__group">
+          <span className="toolbar__groupLabel">Export</span>
           <button
             className="btn"
-            onClick={actions.onExportScene}
+            onClick={actions.onExportSceneTs}
             title="Export a TypeScript Phaser Scene class"
           >
-            Export .ts
+            .ts
+          </button>
+          <button
+            className="btn"
+            onClick={actions.onExportSceneJs}
+            title="Export a JavaScript Phaser Scene class"
+          >
+            .js
           </button>
           <button
             className="btn"
             onClick={actions.onExportHtml}
             title="Export a self-contained page that runs this scene"
           >
-            Export .html
+            .html
           </button>
         </div>
       )}
@@ -162,16 +171,19 @@ export function FilePanel({ actions }: { actions: ToolbarActions }) {
 
       <div className="panel__section">Export to Phaser</div>
       <div className="stack">
-        <button className="btn btn--block" onClick={actions.onExportScene}>
+        <button className="btn btn--block" onClick={actions.onExportSceneTs}>
           Scene class (.ts)
+        </button>
+        <button className="btn btn--block" onClick={actions.onExportSceneJs}>
+          Scene class (.js)
         </button>
         <button className="btn btn--block" onClick={actions.onExportHtml}>
           Runnable page (.html)
         </button>
       </div>
       <p className="hint">
-        The .ts file drops into an existing Phaser project. The .html runs on its own —
-        open it in a browser to see the scene.
+        The .ts and .js files are ES modules that drop into an existing Phaser project.
+        The .html needs nothing — open it in a browser and the scene runs.
       </p>
 
       <p className="hint">
