@@ -198,6 +198,21 @@ project full of hostile names and content — that is what caught the `</script>
 
 Promoting these scripts into a committed Playwright suite is a good early task.
 
+## Writing commits and pull requests
+
+Describe the change, not the conversation that produced it. A reader six months from
+now has none of that context and does not need it.
+
+- No "you asked for", "as requested", "reported by", "here it is". If a bug came from
+  testing on a phone, the useful fact is *the browser reclaimed the gesture*, not who
+  noticed.
+- Prefer the change as subject over yourself as subject: "the drag handler now
+  positions the object" rather than "I made the drag handler position the object".
+- Say what changed, why it is built that way, and how it was verified. Keep verification
+  concrete — the numbers, the checks that ran, what they proved.
+- Note anything a reviewer would otherwise have to rediscover: a non-obvious constraint,
+  a decision between two reasonable options, a trap in the tooling.
+
 ## Deployment
 
 Push to `main` → `.github/workflows/deploy.yml` builds and publishes to Pages. Repository
