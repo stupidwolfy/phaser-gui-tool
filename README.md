@@ -8,38 +8,67 @@ No install, no account, no server. Projects are saved as a plain JSON file on yo
 device, and nothing you make is ever uploaded anywhere. It works on a phone as well as
 on a desktop.
 
-## Status: iteration 2
-
-The goal is to eventually cover the whole Phaser surface. Iteration 1 built the
-foundation and got it deployed; iteration 2 added code export and the editing operations
-that make it usable for more than a couple of objects.
-
-**Works today**
+## What it does
 
 - Place rectangles, ellipses and text in a scene
 - Select and drag objects on the canvas; pan and pinch-zoom the camera
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
 - Duplicate, copy and paste objects, keeping their styling
-- Change draw order: Arrange buttons in the inspector, or drag rows in the scene tree
-- Keyboard: arrow keys nudge (Shift for 10px), Delete removes, Escape deselects,
-  Ctrl/Cmd+D/C/V/Z/S/O
-- Undo/redo, grouped sensibly (one drag, one field edit or one held arrow key is one step)
-- Save and open `.phaser.json` project files from your device
-- Autosaved draft in the browser, so a closed tab doesn't lose your work
-- Responsive: three panels on desktop, canvas plus bottom sheets on a phone
+- Change draw order with the inspector's Arrange buttons, or by dragging rows in the
+  scene tree (the first row is the object furthest back)
+- Undo/redo, grouped by gesture — one drag, one field edit or one held arrow key is one
+  step
+- Save and open `.phaser.json` project files from your device, with an autosaved draft in
+  the browser so a closed tab doesn't lose your work
 - Export the scene as real Phaser code: a Scene class in TypeScript or JavaScript, or a
   self-contained runnable HTML page
+- Three panels on desktop, canvas plus bottom sheets on a phone
 
-**Not yet** — sprites and asset management, animations, tilemaps, physics, particles,
-audio, cameras, multiple scenes and prefabs.
+### Keyboard
 
-## How it works
+| Keys | Does |
+| --- | --- |
+| Arrow keys | Nudge 1px — hold Shift for 10px |
+| Delete / Backspace | Delete the selected object |
+| Escape | Deselect |
+| Ctrl/Cmd + D, C, V | Duplicate, copy, paste |
+| Ctrl/Cmd + Z, Shift+Z | Undo, redo |
+| Ctrl/Cmd + S, O | Save, open |
 
-One rule shapes the whole codebase: **the project document is the single source of truth,
-and Phaser is only a renderer.** React draws the UI from that document, Phaser draws the
-canvas from it, and both write edits back to it. Nothing about the editor's live state
-lives anywhere else — which is what makes "save to a file" complete by construction, and
-what will make adding the rest of Phaser's object types additive rather than a rewrite.
+On a phone, tapping an object selects it and only a second drag moves it — a fingertip
+covers enough of the screen that honouring the first touch as a drag moved whichever
+object it happened to graze.
+
+### Saving
+
+Where the File System Access API exists (desktop Chrome and Edge), **Save** writes back to
+the same file. Everywhere else — including Chrome on Android and Safari on iOS — it
+downloads the file, and **Open** uses a normal file picker. That fallback is the path most
+phone users take, not a degraded mode.
+
+## Status
+
+The goal is to eventually cover the whole Phaser surface; two iterations in, it is a
+working editor but a small one.
+
+**Not built yet** — sprites and asset management, animations, tilemaps, physics,
+particles, audio, cameras, multiple scenes, prefabs, nesting/containers, and multi-select.
+
+**Not verified automatically** — there is no test suite and no CI on pull requests.
+`npm run build` (which typechecks) is the only gate; changes to the canvas, layout or file
+I/O are checked by driving the production build in Chromium at 1440×900 and 390×844.
+Committing that as a Playwright suite is the next infrastructure task.
+
+## Development
+
+```sh
+npm install
+npm run dev        # http://localhost:5173/phaser-gui-tool/  (note the base path)
+npm run build      # typecheck + production build to dist/
+npm run preview    # serve the production build
+```
+
+Requires Node 20+. Built with Vite, React and Phaser 4.
 
 ```
 src/
@@ -51,32 +80,17 @@ src/
   ui/                 toolbar, scene tree, inspector, responsive shell
 ```
 
-Saving uses the File System Access API where it exists (desktop Chrome and Edge, which
-lets "Save" write back to the same file), and falls back to a normal download everywhere
-else — including Chrome on Android and Safari on iOS, where that API is unavailable. The
-fallback is the path most phone users take, not a degraded mode.
-
-## Development
-
-```sh
-npm install
-npm run dev        # http://localhost:5173/phaser-gui-tool/
-npm run build      # typecheck + production build to dist/
-npm run preview    # serve the production build
-```
-
-Requires Node 20+. Built with Vite, React and Phaser 4.
+One rule shapes all of it: **the project document is the single source of truth, and
+Phaser is only a renderer.** `CLAUDE.md` has the architecture notes and the traps worth
+knowing before changing the canvas or the file format.
 
 ## Deployment
 
-Pushing to `main` builds and publishes to GitHub Pages via
-[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). You can also run it by
-hand from a branch with **Actions → Deploy to GitHub Pages → Run workflow**.
-
-One-time repository setup: **Settings → Pages → Source: GitHub Actions**.
-
-If you fork this under a different repository name, set `VITE_BASE` to `/<your-repo>/`
-when building — otherwise the deployed page loads but its assets 404.
+Pushing to `main` publishes to GitHub Pages via
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml); it can also be run by hand
+from a branch under **Actions**. Forking under a different repository name means setting
+`VITE_BASE` to `/<your-repo>/` when building, or the deployed page loads with 404ing
+assets.
 
 ## License
 
