@@ -1,6 +1,7 @@
 import { useActiveScene, useEditorStore, useSelectedNode } from '../core/store';
 import type { GameObjectNode } from '../core/schema';
-import { ColorField, NumberField, TextField } from './fields';
+import { AssetPicker, AssetSummary } from './AssetPicker';
+import { CheckboxField, ColorField, NumberField, TextField } from './fields';
 
 /** Edits the selected object, or the scene itself when nothing is selected. */
 export function Inspector() {
@@ -44,6 +45,14 @@ function SceneInspector() {
     </div>
   );
 }
+
+/** Heading for the per-type section, which is the only thing that differs. */
+const SECTION_TITLE: Record<GameObjectNode['type'], string> = {
+  rectangle: 'Shape',
+  ellipse: 'Shape',
+  text: 'Text',
+  sprite: 'Image',
+};
 
 /**
  * Draw order controls. The labels talk about front and back rather than up and
@@ -171,9 +180,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
         />
       </div>
 
-      <div className="panel__section">
-        {node.type === 'text' ? 'Text' : 'Shape'}
-      </div>
+      <div className="panel__section">{SECTION_TITLE[node.type]}</div>
 
       {/* The union in schema.ts narrows node.props per branch, so adding a node
           type later turns every missed case here into a compile error. */}
@@ -206,6 +213,43 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
             max={1}
             onChange={(alpha) => setProp({ alpha })}
           />
+        </>
+      )}
+
+      {node.type === 'sprite' && (
+        <>
+          <AssetSummary assetId={node.props.assetId} />
+          <AssetPicker
+            selectedAssetId={node.props.assetId}
+            onPick={(assetId) => setProp({ assetId })}
+          />
+
+          <div className="panel__section">Appearance</div>
+          <ColorField
+            label="Tint"
+            value={node.props.tint}
+            onChange={(tint) => setProp({ tint })}
+          />
+          <NumberField
+            label="Alpha"
+            value={node.props.alpha}
+            step={0.05}
+            min={0}
+            max={1}
+            onChange={(alpha) => setProp({ alpha })}
+          />
+          <div className="field-row">
+            <CheckboxField
+              label="Flip X"
+              value={node.props.flipX}
+              onChange={(flipX) => setProp({ flipX })}
+            />
+            <CheckboxField
+              label="Flip Y"
+              value={node.props.flipY}
+              onChange={(flipY) => setProp({ flipY })}
+            />
+          </div>
         </>
       )}
 

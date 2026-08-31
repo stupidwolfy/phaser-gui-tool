@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, type Project } from '../core/schema';
+import { SCHEMA_VERSION, type ImageAsset, type Project } from '../core/schema';
 
 /**
  * Saving and opening project files, entirely on the user's device.
@@ -139,6 +139,52 @@ export async function saveProject(
 
 export class ProjectParseError extends Error {}
 
+/**
+ * The only data URLs an asset may carry.
+ *
+ * Import re-encodes every image to PNG or JPEG, so this is exactly what this
+ * editor writes — but a project file is untrusted input, and its asset table is
+ * the one place in the document whose contents get handed to an `<img>` and
+ * embedded verbatim in exported code. An SVG data URL can carry script, and
+ * `javascript:` is not an image at all; neither has any business here, and
+ * neither is something the editor can produce.
+ */
+const ASSET_DATA_URL = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/;
+
+/**
+ * Keeps only the assets that are actually usable, rather than failing the whole
+ * open. A project with one unreadable image should still give the user back the
+ * rest of their work; the sprites pointing at it fall back to the placeholder,
+ * which is the same state as an image they deleted.
+ */
+function parseAssets(raw: unknown): ImageAsset[] {
+  if (!Array.isArray(raw)) return [];
+
+  const assets: ImageAsset[] = [];
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const asset = candidate as Partial<ImageAsset>;
+    if (typeof asset.id !== 'string' || !asset.id) continue;
+    if (typeof asset.dataUrl !== 'string' || !ASSET_DATA_URL.test(asset.dataUrl)) continue;
+
+    const width = Number(asset.width);
+    const height = Number(asset.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      continue;
+    }
+
+    assets.push({
+      id: asset.id,
+      name: typeof asset.name === 'string' ? asset.name : 'image',
+      mimeType: asset.dataUrl.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
+      dataUrl: asset.dataUrl,
+      width,
+      height,
+    });
+  }
+  return assets;
+}
+
 /** Parses and validates untrusted file contents into a Project. */
 export function parseProject(contents: string): Project {
   let raw: unknown;
@@ -179,6 +225,8 @@ export function parseProject(contents: string): Project {
     name: typeof candidate.name === 'string' ? candidate.name : 'Untitled Project',
     phaserVersion:
       typeof candidate.phaserVersion === 'string' ? candidate.phaserVersion : 'unknown',
+    // Absent in v1 files, which is a valid project with no images.
+    assets: parseAssets(candidate.assets),
     scenes,
     activeSceneId,
   };
@@ -209,18 +257,27 @@ export async function openProject(): Promise<OpenResult | null> {
     }
   }
 
-  const file = await pickFileViaInput();
+  const file = await pickFileViaInput('application/json,.json');
   if (!file) return null;
   const project = parseProject(await file.text());
   currentHandle = null; // No handle on this path: saving re-downloads.
   return { project, fileName: file.name };
 }
 
-function pickFileViaInput(): Promise<File | null> {
+/**
+ * Asks the user for an image.
+ *
+ * There is no File System Access path here on purpose: `<input type="file">`
+ * with an image accept list is what opens the camera roll on a phone, which is
+ * where the images are, and it is the one mechanism every browser has.
+ */
+export const pickImageFile = (): Promise<File | null> => pickFileViaInput('image/*');
+
+function pickFileViaInput(accept: string): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'application/json,.json';
+    input.accept = accept;
     // Keep it in the DOM but invisible: iOS Safari ignores clicks on detached
     // inputs, and `display:none` suppresses the picker in some browsers.
     input.style.position = 'fixed';

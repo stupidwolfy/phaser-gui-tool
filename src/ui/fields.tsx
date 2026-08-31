@@ -113,3 +113,21 @@ export function ColorField({ label, value, onChange }: FieldProps<string>) {
     </label>
   );
 }
+
+/**
+ * A boolean toggle. No transaction wrapper: a checkbox produces exactly one
+ * edit per press, so it is already one undo step.
+ */
+export function CheckboxField({ label, value, onChange }: FieldProps<boolean>) {
+  return (
+    <label className="field field--check">
+      <input
+        className="field__check"
+        type="checkbox"
+        checked={value}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span className="field__label">{label}</span>
+    </label>
+  );
+}

@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { activeScene, useEditorStore, type EditorState } from '../../core/store';
-import { findNode, type GameObjectNode } from '../../core/schema';
+import { findNode, type GameObjectNode, type Project } from '../../core/schema';
+import { decodeImage, decodedImage } from '../../core/assets';
 
 /**
  * The editing surface.
@@ -20,6 +21,15 @@ const MAX_ZOOM = 4;
 const SELECTION_COLOR = 0x00e5ff;
 const FRAME_COLOR = 0x5a6478;
 
+/**
+ * Texture keys are namespaced so that `syncTextures` can tell the textures it
+ * owns from Phaser's own (`__DEFAULT`, `__MISSING`) and never remove those.
+ */
+const textureKeyForAsset = (assetId: string): string => `asset:${assetId}`;
+const PLACEHOLDER_TEXTURE = 'editor:no-image';
+/** Side of the stand-in square drawn for a sprite with no image yet. */
+const PLACEHOLDER_SIZE = 96;
+
 /** '#rrggbb' -> 0xrrggbb, tolerating a missing '#' or a malformed value. */
 function hexToNumber(hex: string, fallback = 0xffffff): number {
   const parsed = Number.parseInt(String(hex).replace('#', ''), 16);
@@ -29,7 +39,8 @@ function hexToNumber(hex: string, fallback = 0xffffff): number {
 type Renderable =
   | Phaser.GameObjects.Rectangle
   | Phaser.GameObjects.Ellipse
-  | Phaser.GameObjects.Text;
+  | Phaser.GameObjects.Text
+  | Phaser.GameObjects.Image;
 
 /**
  * Hit areas are expressed in the object's local space with (0,0) at its
@@ -53,6 +64,12 @@ export class EditorScene extends Phaser.Scene {
   static readonly KEY = 'editor';
 
   private displayObjects = new Map<string, Renderable>();
+  /** Texture keys this scene created, so shutdown and pruning only touch ours. */
+  private assetTextures = new Set<string>();
+  /** Data URLs currently being decoded, so a slow image is only decoded once. */
+  private decoding = new Set<string>();
+  /** False after SHUTDOWN, so an in-flight decode can't touch a dead scene. */
+  private alive = true;
   private sceneFrame!: Phaser.GameObjects.Rectangle;
   private selectionOutline!: Phaser.GameObjects.Rectangle;
   private unsubscribe?: () => void;
@@ -81,6 +98,12 @@ export class EditorScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.alive = true;
+    // Before anything can ask for a texture: a sprite with no image yet still
+    // has to be drawn, selected and dragged, so it gets a real stand-in rather
+    // than nothing at all.
+    this.createPlaceholderTexture();
+
     // Outline of the scene's own bounds, so the user can see where the game
     // canvas ends even when the camera is zoomed out past it.
     this.sceneFrame = this.add
@@ -116,10 +139,98 @@ export class EditorScene extends Phaser.Scene {
     });
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.alive = false;
       this.scale.off(Phaser.Scale.Events.RESIZE);
       this.unsubscribe?.();
       this.unsubscribe = undefined;
+      // Textures outlive scenes — they belong to the game — so an editor that
+      // tore down and rebuilt its scene would otherwise leak every image the
+      // user had ever imported.
+      for (const key of this.assetTextures) this.textures.remove(key);
+      this.assetTextures.clear();
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Images
+  // ---------------------------------------------------------------------------
+
+  /**
+   * A visible stand-in for a sprite that has no image yet, drawn once into a
+   * canvas texture. Magenta because it should read as "unfinished", not as a
+   * design choice — and it is nothing like the selection cyan or the accent.
+   */
+  private createPlaceholderTexture(): void {
+    if (this.textures.exists(PLACEHOLDER_TEXTURE)) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = PLACEHOLDER_SIZE;
+    canvas.height = PLACEHOLDER_SIZE;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+
+    context.fillStyle = '#2a2f3a';
+    context.fillRect(0, 0, PLACEHOLDER_SIZE, PLACEHOLDER_SIZE);
+    context.strokeStyle = '#ff6bd6';
+    context.lineWidth = 2;
+    context.setLineDash([6, 4]);
+    context.strokeRect(1, 1, PLACEHOLDER_SIZE - 2, PLACEHOLDER_SIZE - 2);
+    context.setLineDash([]);
+    context.fillStyle = '#ff6bd6';
+    context.font = '600 40px system-ui, sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText('?', PLACEHOLDER_SIZE / 2, PLACEHOLDER_SIZE / 2 + 2);
+
+    this.textures.addCanvas(PLACEHOLDER_TEXTURE, canvas);
+  }
+
+  /**
+   * Brings the game's textures in line with the document's asset table.
+   *
+   * The document holds data URLs; Phaser needs decoded images. Decoding is
+   * asynchronous and this sync is not, so an asset whose image is not in the
+   * decode cache yet — every asset in a project that was just opened — starts a
+   * decode and re-runs the sync when it lands. Until then its sprites draw the
+   * placeholder, which is the same thing they show for an image that has been
+   * deleted, and is why that placeholder exists at all.
+   */
+  private syncTextures(project: Project): void {
+    const wanted = new Set<string>();
+
+    for (const asset of project.assets) {
+      const key = textureKeyForAsset(asset.id);
+      wanted.add(key);
+      if (this.textures.exists(key)) continue;
+
+      const image = decodedImage(asset.dataUrl);
+      if (image) {
+        this.textures.addImage(key, image);
+        this.assetTextures.add(key);
+      } else if (!this.decoding.has(asset.dataUrl)) {
+        this.decoding.add(asset.dataUrl);
+        void decodeImage(asset.dataUrl)
+          .catch(() => undefined)
+          .then(() => {
+            this.decoding.delete(asset.dataUrl);
+            // A decode that resolves after the scene is gone must not touch it.
+            if (this.alive) this.syncFromStore(useEditorStore.getState());
+          });
+      }
+    }
+
+    for (const key of this.assetTextures) {
+      if (wanted.has(key)) continue;
+      this.textures.remove(key);
+      this.assetTextures.delete(key);
+    }
+  }
+
+  /** The texture a sprite should be drawn with, falling back to the placeholder. */
+  private textureKeyFor(assetId: string | null): string {
+    if (!assetId) return PLACEHOLDER_TEXTURE;
+    const key = textureKeyForAsset(assetId);
+    return this.textures.exists(key) ? key : PLACEHOLDER_TEXTURE;
   }
 
   // ---------------------------------------------------------------------------
@@ -334,6 +445,10 @@ export class EditorScene extends Phaser.Scene {
 
     this.sceneFrame.setPosition(0, 0).setSize(scene.width, scene.height);
 
+    // Before the nodes: a sprite created this pass needs its texture to already
+    // exist, or Phaser falls back to its own missing-texture green square.
+    this.syncTextures(state.project);
+
     // Only top-level nodes render for now. Nested children exist in the schema
     // but need Phaser Containers to position correctly, which arrives with the
     // container node type — drawing them flat here would just place them wrong.
@@ -382,6 +497,9 @@ export class EditorScene extends Phaser.Scene {
       case 'text':
         object = this.add.text(0, 0, node.props.text).setOrigin(0.5);
         break;
+      case 'sprite':
+        object = this.add.image(0, 0, this.textureKeyFor(node.props.assetId));
+        break;
     }
 
     object.setData('nodeId', node.id);
@@ -415,6 +533,18 @@ export class EditorScene extends Phaser.Scene {
         if (shape.width !== node.props.width || shape.height !== node.props.height) {
           shape.setSize(node.props.width, node.props.height);
         }
+        break;
+      }
+      case 'sprite': {
+        const image = object as Phaser.GameObjects.Image;
+        const key = this.textureKeyFor(node.props.assetId);
+        // Swapping the image changes the object's size, which the hit area
+        // below then follows — the same reason text needs it as you type.
+        if (image.texture.key !== key) image.setTexture(key);
+        image.setAlpha(node.props.alpha);
+        // Multiply is the default tint mode, so white is exactly "no tint".
+        image.setTint(hexToNumber(node.props.tint));
+        image.setFlip(node.props.flipX, node.props.flipY);
         break;
       }
       case 'text': {

@@ -6,6 +6,7 @@ const ADDABLE: { type: NodeType; label: string }[] = [
   { type: 'rectangle', label: 'Rectangle' },
   { type: 'ellipse', label: 'Ellipse' },
   { type: 'text', label: 'Text' },
+  { type: 'sprite', label: 'Image' },
 ];
 
 /**

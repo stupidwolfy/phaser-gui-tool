@@ -1,7 +1,9 @@
 import { activeScene } from '../core/store';
 import {
   TARGET_PHASER_VERSION,
+  findAsset,
   type GameObjectNode,
+  type ImageAsset,
   type Project,
   type SceneDoc,
 } from '../core/schema';
@@ -96,8 +98,79 @@ function toClassName(name: string): string {
   return /^[a-zA-Z_$]/.test(joined) ? joined || 'GeneratedScene' : `Scene${joined}`;
 }
 
-/** The `add.*` call for one node, without any trailing modifiers. */
-function constructorFor(node: GameObjectNode): string {
+/**
+ * A texture key for each image the scene actually uses, in use order.
+ *
+ * Only referenced assets are emitted: an export should not carry a megabyte of
+ * an image the user imported and then deleted from the scene. Keys come from
+ * the file name so the generated `this.load.image('player', ...)` reads like
+ * hand-written Phaser rather than like a list of UUIDs.
+ */
+interface UsedAsset {
+  asset: ImageAsset;
+  key: string;
+}
+
+function collectAssets(project: Project, scene: SceneDoc): Map<string, UsedAsset> {
+  const used = new Map<string, UsedAsset>();
+  const keys = new Set<string>();
+
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'sprite' && node.props.assetId && !used.has(node.props.assetId)) {
+        const asset = findAsset(project, node.props.assetId);
+        // A sprite can point at an image that is no longer in the table only in
+        // a hand-edited file; the editor clears those references itself.
+        if (asset) {
+          // Strip the extension first: "player.png" should key as "player".
+          used.set(asset.id, {
+            asset,
+            key: toIdentifier(asset.name.replace(/\.[^.]+$/, ''), keys),
+          });
+        }
+      }
+      walk(node.children);
+    }
+  };
+  walk(scene.children);
+  return used;
+}
+
+/**
+ * The image table, as an object literal keyed by texture key.
+ *
+ * Emitted as a named const rather than inlined into each `load.image` call so
+ * that the one thing an exported file's reader is most likely to want to change
+ * — swapping embedded bytes for real asset paths — is a single object at the
+ * top, not a data URL buried in the middle of `preload`.
+ */
+function buildAssetTable(used: Map<string, UsedAsset>, indent: string): string {
+  const lines = [
+    '/**',
+    ' * Images from the editor, embedded so this file needs nothing alongside it.',
+    ' * To serve them as real files instead, replace each value with its path.',
+    ' */',
+    'const ASSETS = {',
+    ...[...used.values()].map(({ asset, key }) => `  ${str(key)}: ${str(asset.dataUrl)},`),
+    '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/** The body of `preload()`, or '' when the scene uses no images. */
+function buildPreloadBody(used: Map<string, UsedAsset>): string {
+  return [...used.values()]
+    .map(({ key }) => `    this.load.image(${str(key)}, ASSETS[${str(key)}]);`)
+    .join('\n');
+}
+
+/**
+ * The `add.*` call for one node, without any trailing modifiers.
+ *
+ * Null means "emit nothing for this node" — currently only a sprite with no
+ * image chosen, which has no valid constructor call to make.
+ */
+function constructorFor(node: GameObjectNode, used: Map<string, UsedAsset>): string | null {
   const { x, y } = node.transform;
 
   switch (node.type) {
@@ -105,6 +178,11 @@ function constructorFor(node: GameObjectNode): string {
       return `this.add.rectangle(${num(x)}, ${num(y)}, ${num(node.props.width)}, ${num(node.props.height)}, ${hexLiteral(node.props.fill)})`;
     case 'ellipse':
       return `this.add.ellipse(${num(x)}, ${num(y)}, ${num(node.props.width)}, ${num(node.props.height)}, ${hexLiteral(node.props.fill)})`;
+    case 'sprite': {
+      const entry = node.props.assetId ? used.get(node.props.assetId) : undefined;
+      if (!entry) return null;
+      return `this.add.image(${num(x)}, ${num(y)}, ${str(entry.key)})`;
+    }
     case 'text':
       return (
         `this.add.text(${num(x)}, ${num(y)}, ${str(node.props.text)}, {\n` +
@@ -128,13 +206,25 @@ function modifiersFor(node: GameObjectNode): string[] {
   if (node.type === 'text') out.push('.setOrigin(0.5)');
   if (rotation !== 0) out.push(`.setAngle(${num(rotation)})`);
   if (scaleX !== 1 || scaleY !== 1) out.push(`.setScale(${num(scaleX)}, ${num(scaleY)})`);
+
+  if (node.type === 'sprite') {
+    // White is Phaser's untinted state under the default multiply mode, so
+    // emitting setTint(0xffffff) would be a no-op line on every sprite.
+    if (hexLiteral(node.props.tint) !== '0xffffff') {
+      out.push(`.setTint(${hexLiteral(node.props.tint)})`);
+    }
+    if (node.props.flipX || node.props.flipY) {
+      out.push(`.setFlip(${node.props.flipX}, ${node.props.flipY})`);
+    }
+  }
+
   if (node.props.alpha !== 1) out.push(`.setAlpha(${num(node.props.alpha)})`);
   if (!node.visible) out.push('.setVisible(false)');
   return out;
 }
 
 /** The body of `create()`, shared verbatim by both outputs. */
-function buildCreateBody(scene: SceneDoc): string {
+function buildCreateBody(scene: SceneDoc, assets: Map<string, UsedAsset>): string {
   const used = new Set<string>(['this']);
   const lines: string[] = [
     `this.cameras.main.setBackgroundColor(${str(scene.backgroundColor)});`,
@@ -143,10 +233,19 @@ function buildCreateBody(scene: SceneDoc): string {
   if (scene.children.length > 0) lines.push('');
 
   for (const node of scene.children) {
+    const constructor = constructorFor(node, assets);
+    if (constructor === null) {
+      // Say so rather than skipping silently: an object missing from the export
+      // with no explanation reads as an exporter bug.
+      lines.push(`// ${node.name}: no image chosen in the editor, so nothing to add.`);
+      lines.push('');
+      continue;
+    }
+
     const id = toIdentifier(node.name, used);
     const modifiers = modifiersFor(node);
     const chain = modifiers.length > 0 ? `\n      ${modifiers.join('\n      ')}` : '';
-    lines.push(`const ${id} = ${constructorFor(node)}${chain};`);
+    lines.push(`const ${id} = ${constructor}${chain};`);
     // Carries the editor name through, so objects stay findable at runtime.
     lines.push(`${id}.setName(${str(node.name)});`);
     lines.push('');
@@ -182,17 +281,24 @@ export function generateScene(
 ): string {
   const className = toClassName(scene.name);
   const returnType = language === 'ts' ? ': void' : '';
+  const assets = collectAssets(project, scene);
+
+  // A scene with no images emits no ASSETS const and no preload() at all, so
+  // shape-only projects export exactly what they always did.
+  const table = assets.size > 0 ? `\n${buildAssetTable(assets, '')}\n` : '';
+  const preload =
+    assets.size > 0 ? `  preload()${returnType} {\n${buildPreloadBody(assets)}\n  }\n\n` : '';
 
   return `${header(project)}
 import Phaser from 'phaser';
-
+${table}
 export class ${className} extends Phaser.Scene {
   constructor() {
     super(${str(scene.name)});
   }
 
-  create()${returnType} {
-${buildCreateBody(scene)}
+${preload}  create()${returnType} {
+${buildCreateBody(scene, assets)}
   }
 }
 
@@ -217,8 +323,49 @@ export function generateRunnableHtml(
     ? project.phaserVersion
     : TARGET_PHASER_VERSION;
   const cdn = `https://cdn.jsdelivr.net/npm/phaser@${version}/dist/phaser.min.js`;
-  const body = escapeForScriptTag(buildCreateBody(scene).replace(/^/gm, '    '));
-  const comment = escapeForScriptTag(header(project)).replace(/\n/g, '\n      ');
+  const assets = collectAssets(project, scene);
+
+  const table =
+    assets.size > 0 ? `${buildAssetTable(assets, '      ')}\n\n` : '';
+  const preload =
+    assets.size > 0
+      ? `        preload() {\n${buildPreloadBody(assets).replace(/^/gm, '    ')}\n        }\n\n`
+      : '';
+
+  /**
+   * The whole script, escaped in one pass at the end rather than fragment by
+   * fragment.
+   *
+   * Escaping the pieces individually is how the scene name and the background
+   * colour were left raw here for a release: they are interpolated straight
+   * into the script, and nothing about `${str(...)}` at the call site says
+   * whether the result is about to be embedded in HTML. Composing first and
+   * escaping once means a new interpolation cannot be forgotten — there is only
+   * one place left to forget.
+   */
+  const script = `${header(project).replace(/\n/g, '\n      ')}
+
+${table}      class ${className} extends Phaser.Scene {
+        constructor() {
+          super(${str(scene.name)});
+        }
+
+${preload}        create() {
+${buildCreateBody(scene, assets).replace(/^/gm, '    ')}
+        }
+      }
+
+      new Phaser.Game({
+        type: Phaser.AUTO,
+        width: ${num(scene.width)},
+        height: ${num(scene.height)},
+        backgroundColor: ${str(scene.backgroundColor)},
+        scale: {
+          mode: Phaser.Scale.FIT,
+          autoCenter: Phaser.Scale.CENTER_BOTH,
+        },
+        scene: ${className},
+      });`;
 
   return `<!doctype html>
 <html lang="en">
@@ -235,28 +382,7 @@ export function generateRunnableHtml(
   <body>
     <script src="${cdn}"></script>
     <script>
-      ${comment}
-      class ${className} extends Phaser.Scene {
-        constructor() {
-          super(${str(scene.name)});
-        }
-
-        create() {
-${body}
-        }
-      }
-
-      new Phaser.Game({
-        type: Phaser.AUTO,
-        width: ${num(scene.width)},
-        height: ${num(scene.height)},
-        backgroundColor: ${str(scene.backgroundColor)},
-        scale: {
-          mode: Phaser.Scale.FIT,
-          autoCenter: Phaser.Scale.CENTER_BOTH,
-        },
-        scene: ${className},
-      });
+      ${escapeForScriptTag(script)}
     </script>
   </body>
 </html>

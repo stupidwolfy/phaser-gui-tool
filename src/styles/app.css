@@ -274,6 +274,10 @@ input {
   font-size: 13px;
 }
 
+.hint--error {
+  color: var(--danger);
+}
+
 /* ------------------------------------------------------------ scene tree -- */
 
 .add-row {
@@ -362,6 +366,83 @@ input {
   background: #7ee787;
 }
 
+.tree__type[data-type='sprite'] {
+  background: #ff6bd6;
+}
+
+/* ---------------------------------------------------------------- assets -- */
+
+.assets {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  /* The library grows without bound as images are imported, and it sits inside
+     a panel that is already scrolling on a phone. Capping it keeps the sprite
+     controls below reachable without a long scroll past the thumbnails. */
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.assets__item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+
+.assets__item.is-selected {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent);
+}
+
+.assets__pick {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: var(--touch);
+  padding: 4px 6px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.assets__thumb {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  /* contain, not cover: a thumbnail that crops is actively misleading when the
+     point of it is to tell you which image this is. */
+  object-fit: contain;
+  background:
+    /* Checkerboard, so a transparent PNG reads as transparent rather than as
+       whatever the panel happens to be coloured. */
+    repeating-conic-gradient(#2a2f3a 0% 25%, #1e222b 0% 50%) 0 0 / 12px 12px;
+  border-radius: 4px;
+}
+
+.assets__meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.assets__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assets__detail {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
 /* ---------------------------------------------------------------- fields -- */
 
 .field {
@@ -390,6 +471,24 @@ input {
 .field__input:focus {
   border-color: var(--accent);
   outline: none;
+}
+
+.field--check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--touch);
+}
+
+.field__check {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.field--check .field__label {
+  margin-bottom: 0;
 }
 
 .field-row {
