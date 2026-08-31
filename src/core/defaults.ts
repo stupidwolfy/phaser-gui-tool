@@ -66,6 +66,24 @@ export function createNode(
 }
 
 /**
+ * Deep copy of a node with fresh ids all the way down, for duplicate and paste.
+ * Ids must not repeat: they are the key the Phaser sync diffs display objects
+ * against, so a shared id would leave the two copies fighting over one object.
+ *
+ * The cast is the same one the store needs: spreading a value of a
+ * discriminated union widens `props` past the branch `type` picked.
+ */
+export function cloneWithNewIds(node: GameObjectNode): GameObjectNode {
+  return {
+    ...node,
+    id: newId(),
+    transform: { ...node.transform },
+    props: { ...node.props },
+    children: node.children.map(cloneWithNewIds),
+  } as GameObjectNode;
+}
+
+/**
  * A new project is never empty — an empty canvas gives a first-time visitor
  * nothing to click, and no way to tell the editor from a broken page.
  */

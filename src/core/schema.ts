@@ -109,16 +109,3 @@ export function findNode(
   }
   return undefined;
 }
-
-/** Depth-first flatten, used by the scene tree and by the Phaser sync diff. */
-export function flattenNodes(nodes: GameObjectNode[]): GameObjectNode[] {
-  const out: GameObjectNode[] = [];
-  const walk = (list: GameObjectNode[]) => {
-    for (const node of list) {
-      out.push(node);
-      walk(node.children);
-    }
-  };
-  walk(nodes);
-  return out;
-}

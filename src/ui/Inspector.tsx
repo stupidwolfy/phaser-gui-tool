@@ -45,6 +45,68 @@ function SceneInspector() {
   );
 }
 
+/**
+ * Draw order controls. The labels talk about front and back rather than up and
+ * down the list: array order *is* draw order, and the tree lists the array as
+ * it is, so the first row is the object furthest back.
+ */
+function ArrangeRow({ node }: { node: GameObjectNode }) {
+  const scene = useActiveScene();
+  const reorderNode = useEditorStore((s) => s.reorderNode);
+  const duplicateNode = useEditorStore((s) => s.duplicateNode);
+
+  const index = scene.children.findIndex((child) => child.id === node.id);
+  const last = scene.children.length - 1;
+  const move = (to: number) => reorderNode(node.id, to);
+
+  return (
+    <>
+      <div className="panel__section">Arrange</div>
+      <div className="arrange-row">
+        <button
+          className="btn btn--add"
+          title="Send to back"
+          disabled={index <= 0}
+          onClick={() => move(0)}
+        >
+          ⤓
+        </button>
+        <button
+          className="btn btn--add"
+          title="Send backward"
+          disabled={index <= 0}
+          onClick={() => move(index - 1)}
+        >
+          ↓
+        </button>
+        <button
+          className="btn btn--add"
+          title="Bring forward"
+          disabled={index === -1 || index >= last}
+          onClick={() => move(index + 1)}
+        >
+          ↑
+        </button>
+        <button
+          className="btn btn--add"
+          title="Bring to front"
+          disabled={index === -1 || index >= last}
+          onClick={() => move(last)}
+        >
+          ⤒
+        </button>
+        <button
+          className="btn btn--add"
+          title="Duplicate"
+          onClick={() => duplicateNode(node.id)}
+        >
+          Duplicate
+        </button>
+      </div>
+    </>
+  );
+}
+
 function NodeInspector({ node }: { node: GameObjectNode }) {
   const renameNode = useEditorStore((s) => s.renameNode);
   const updateTransform = useEditorStore((s) => s.updateTransform);
@@ -71,6 +133,8 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
         value={node.name}
         onChange={(name) => renameNode(node.id, name)}
       />
+
+      <ArrangeRow node={node} />
 
       <div className="panel__section">Transform</div>
       <div className="field-row">

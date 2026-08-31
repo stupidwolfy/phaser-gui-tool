@@ -11,7 +11,9 @@ saved as JSON files on the user's own device.
 
 The long-term goal is to cover the whole Phaser surface. Iteration 1 (shipped) built the
 foundation: rectangles, ellipses and text; select/drag/zoom; inspector; save and open.
-See the README for the user-facing feature list.
+Iteration 2 (shipped) added code export, and the editing operations around it: duplicate,
+copy/paste, draw-order control and a keyboard layer. See the README for the user-facing
+feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -65,6 +67,9 @@ This is the repeating unit of work for most future iterations. Add a `sprite`, a
 4. `src/ui/Inspector.tsx` — a properties section.
 5. `src/ui/SceneTree.tsx` — add to `ADDABLE`; add a `.tree__type[data-type=...]` colour
    chip in `src/styles/app.css`.
+6. `src/io/exportPhaser.ts` — a `constructorFor` case. This one fails silently rather
+   than at compile time: an unhandled type exports nothing at all, so check it in the
+   same pass as the `EditorScene` case.
 
 Bump `SCHEMA_VERSION` only for a change existing files can't be read under. `parseProject`
 already rejects files from a *newer* schema with a readable message.
@@ -83,8 +88,18 @@ Each of these was a real bug found in browser testing. Don't re-derive them.
 - **Hit areas must be resized as the object changes** (`applyHitArea`). A text object's
   size follows its content, so it drifts out of step as you type.
 - **Undo is transaction-grouped.** `beginTransaction`/`endTransaction` wrap drags
-  (dragstart/dragend) and inspector fields (focus/blur), so one gesture is one undo step.
-  New editing UI must do the same or it will flood the history stack.
+  (dragstart/dragend), inspector fields (focus/blur) and arrow-key nudges (first
+  keydown/keyup), so one gesture is one undo step. New editing UI must do the same or it
+  will flood the history stack. A held arrow key is the sharpest case: it repeats at the
+  OS rate, so an ungrouped nudge buries the stack in a second. `App.tsx` closes that
+  transaction on an idle timer as well as on keyup, because a keyup is lost if the window
+  loses focus mid-press.
+- **Draw order is the array order, and nothing else.** There is no `depth` field in the
+  schema: `applyNode` calls `setDepth(index)` with the node's index in `scene.children`,
+  and the exporter emits the array in order. So `reorderNode` splicing the array is the
+  whole of raise/lower/front/back, and the scene tree deliberately lists the array as it
+  is — the first row is the object furthest back. Showing it front-first would read more
+  like Photoshop but would put an index flip between every UI action and the store.
 - **Phaser's drag system never moves anything itself.** `DRAG` only reports `dragX/dragY`;
   the handler must call `setPosition`. Because the store sync deliberately skips the object
   under the pointer (`EditorScene.draggingId`, which stops the rounded store value fighting
@@ -226,7 +241,10 @@ with the `VITE_BASE` env var for a fork or custom domain.
 ## Not built yet
 
 Sprites and asset management, animations, tilemaps, physics, particles, audio, cameras,
-multiple scenes, prefabs, and code export. The schema's `children` array and Phaser
+multiple scenes, and prefabs. Multi-select is not built either — `selectedId: string |
+null` runs through the store, the scene and the move bar, so it is its own iteration.
+There is still no committed test suite; promoting the Playwright scripts described under
+Verification is the standing next-best task. The schema's `children` array and Phaser
 Containers are the intended path for nesting — `EditorScene` currently renders only
 top-level nodes on purpose, since nested ones would be positioned wrong without
 Containers.
