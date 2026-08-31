@@ -282,6 +282,13 @@ input {
   margin-bottom: 10px;
 }
 
+/* Same shape as .add-row, but it lives in the inspector: on a phone the tree
+   row is already three controls wide, so draw order is arranged from here. */
+.arrange-row {
+  display: flex;
+  gap: 4px;
+}
+
 .tree {
   list-style: none;
   margin: 0;
@@ -293,6 +300,20 @@ input {
   align-items: center;
   gap: 2px;
   border-radius: var(--radius);
+}
+
+.tree__item.is-dragging {
+  opacity: 0.45;
+}
+
+/* Inset lines rather than a real element: a spacer between rows would move the
+   list under the pointer and make the drop target jump as you approach it. */
+.tree__item.is-drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tree__item.is-drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .tree__item.is-selected {

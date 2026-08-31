@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { createNode, newProject } from './defaults';
+import { cloneWithNewIds, createNode, newProject } from './defaults';
 import {
   findNode,
   type GameObjectNode,
@@ -28,6 +28,12 @@ export interface EditorState {
    * move bar's cancel button can put it back where it started.
    */
   moveOrigin: { id: string; transform: Transform } | null;
+  /**
+   * Copied node, kept outside the document so it survives undo, redo and
+   * opening another file. Paste offsets from it and writes the result back, so
+   * pasting repeatedly cascades instead of stacking copies on one spot.
+   */
+  clipboard: GameObjectNode | null;
 
   // -- document lifecycle ----------------------------------------------------
   loadProject: (project: Project, fileName: string | null) => void;
@@ -45,6 +51,16 @@ export interface EditorState {
   // -- editing ---------------------------------------------------------------
   addNode: (type: NodeType) => void;
   deleteNode: (id: string) => void;
+  /** Copies the node, its style and its subtree, one step above the original. */
+  duplicateNode: (id: string) => void;
+  copyNode: (id: string) => void;
+  pasteNode: () => void;
+  /**
+   * Moves a top-level node to `toIndex`, clamped. Array order *is* draw order —
+   * the Phaser sync sets each object's depth from its index — so this is the
+   * whole of raise, lower, bring to front and send to back.
+   */
+  reorderNode: (id: string, toIndex: number) => void;
   renameNode: (id: string, name: string) => void;
   setNodeVisible: (id: string, visible: boolean) => void;
   updateTransform: (id: string, patch: Partial<Transform>) => void;
@@ -85,6 +101,33 @@ function removeNode(nodes: GameObjectNode[], id: string): GameObjectNode[] {
         ? node
         : { ...node, children: removeNode(node.children, id) },
     );
+}
+
+/** How far a duplicate or a paste lands from its source, in scene pixels. */
+const COPY_OFFSET = 16;
+
+/**
+ * "Ball" -> "Ball copy" -> "Ball copy 2". Without the counter, duplicating a
+ * duplicate gives "Ball copy copy", which gets unreadable in three presses.
+ */
+function nextCopyName(name: string): string {
+  const match = /^(.*) copy(?: (\d+))?$/.exec(name);
+  if (!match) return `${name} copy`;
+  return `${match[1]} copy ${Number(match[2] ?? 1) + 1}`;
+}
+
+/** A fresh node just off the original, for duplicate and paste to place. */
+function offsetCopy(node: GameObjectNode): GameObjectNode {
+  const copy = cloneWithNewIds(node);
+  return {
+    ...copy,
+    name: nextCopyName(copy.name),
+    transform: {
+      ...copy.transform,
+      x: copy.transform.x + COPY_OFFSET,
+      y: copy.transform.y + COPY_OFFSET,
+    },
+  } as GameObjectNode;
 }
 
 export function activeScene(project: Project): SceneDoc {
@@ -133,6 +176,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     future: [],
     txDepth: 0,
     moveOrigin: null,
+    clipboard: null,
 
     loadProject: (project, fileName) =>
       set({
@@ -196,6 +240,51 @@ export const useEditorStore = create<EditorState>((set, get) => {
       editScene((scene) => ({ ...scene, children: removeNode(scene.children, id) }));
       if (get().selectedId === id) set({ selectedId: null, moveOrigin: null });
     },
+
+    duplicateNode: (id) => {
+      const children = activeScene(get().project).children;
+      const index = children.findIndex((node) => node.id === id);
+      if (index === -1) return;
+      const copy = offsetCopy(children[index]);
+      editScene((scene) => ({
+        ...scene,
+        // Directly after the original, so the copy sits one step in front of
+        // what it was copied from rather than jumping to the top of the scene.
+        children: [
+          ...scene.children.slice(0, index + 1),
+          copy,
+          ...scene.children.slice(index + 1),
+        ],
+      }));
+      get().select(copy.id);
+    },
+
+    copyNode: (id) => {
+      const node = findNode(activeScene(get().project).children, id);
+      if (node) set({ clipboard: node });
+    },
+
+    pasteNode: () => {
+      const { clipboard } = get();
+      if (!clipboard) return;
+      const copy = offsetCopy(clipboard);
+      editScene((scene) => ({ ...scene, children: [...scene.children, copy] }));
+      // Cascade: the next paste offsets from where this one landed.
+      set({ clipboard: copy });
+      get().select(copy.id);
+    },
+
+    reorderNode: (id, toIndex) =>
+      editScene((scene) => {
+        const from = scene.children.findIndex((node) => node.id === id);
+        if (from === -1) return scene;
+        const to = Math.max(0, Math.min(scene.children.length - 1, toIndex));
+        if (to === from) return scene;
+        const children = scene.children.slice();
+        const [node] = children.splice(from, 1);
+        children.splice(to, 0, node);
+        return { ...scene, children };
+      }),
 
     renameNode: (id, name) =>
       editScene((scene) => ({

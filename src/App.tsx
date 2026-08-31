@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type Phaser from 'phaser';
-import { useEditorStore } from './core/store';
+import { activeScene, useEditorStore } from './core/store';
+import { findNode } from './core/schema';
 import { clearDraft, loadDraft, scheduleDraftSave } from './io/autosave';
 import { ProjectParseError, downloadFile, openProject, saveProject } from './io/fileIO';
 import {
@@ -15,6 +16,16 @@ import { Layout } from './ui/Layout';
 import { SceneTree } from './ui/SceneTree';
 import { FilePanel, Toolbar, type ToolbarActions } from './ui/Toolbar';
 import { useIsMobile } from './ui/useMediaQuery';
+
+/** Arrow-key nudge, in scene pixels; Shift takes the coarse step. */
+const COARSE_NUDGE = 10;
+const NUDGE_IDLE_MS = 600;
+const NUDGE_STEPS: Record<string, { dx: number; dy: number }> = {
+  ArrowLeft: { dx: -1, dy: 0 },
+  ArrowRight: { dx: 1, dy: 0 },
+  ArrowUp: { dx: 0, dy: -1 },
+  ArrowDown: { dx: 0, dy: 1 },
+};
 
 export default function App() {
   const isMobile = useIsMobile();
@@ -99,28 +110,111 @@ export default function App() {
   // Keyboard shortcuts, skipped while a field has focus so Ctrl+Z still means
   // "undo my typing" inside an input.
   useEffect(() => {
+    // Held arrow keys repeat at the OS rate, and every repeat is a store edit.
+    // One transaction per press-and-hold keeps a nudge to a single undo step,
+    // the same way a drag does. The timer is the fallback for a keyup lost to
+    // the window losing focus mid-press.
+    let nudging = false;
+    let nudgeTimer: number | undefined;
+
+    const beginNudge = () => {
+      if (!nudging) {
+        nudging = true;
+        useEditorStore.getState().beginTransaction();
+      }
+      window.clearTimeout(nudgeTimer);
+      nudgeTimer = window.setTimeout(endNudge, NUDGE_IDLE_MS);
+    };
+
+    const endNudge = () => {
+      window.clearTimeout(nudgeTimer);
+      if (!nudging) return;
+      nudging = false;
+      useEditorStore.getState().endTransaction();
+    };
+
+    const nudge = (step: { dx: number; dy: number }, coarse: boolean) => {
+      const { selectedId, updateTransform, project } = useEditorStore.getState();
+      if (!selectedId) return;
+      const node = findNode(activeScene(project).children, selectedId);
+      if (!node) return;
+      const distance = coarse ? COARSE_NUDGE : 1;
+      beginNudge();
+      updateTransform(selectedId, {
+        x: node.transform.x + step.dx * distance,
+        y: node.transform.y + step.dy * distance,
+      });
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const inField =
         target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
-      const mod = event.ctrlKey || event.metaKey;
-      if (!mod) return;
+      const store = useEditorStore.getState();
 
-      const key = event.key.toLowerCase();
-      if (key === 's') {
+      if (event.ctrlKey || event.metaKey) {
+        const key = event.key.toLowerCase();
+        if (key === 's') {
+          event.preventDefault();
+          void handleSave(false);
+        } else if (key === 'o') {
+          event.preventDefault();
+          void handleOpen();
+        } else if (inField) {
+          // Everything below is an editor command; inside a field the browser's
+          // own undo, copy and paste are what the user means.
+          return;
+        } else if (key === 'z') {
+          event.preventDefault();
+          if (event.shiftKey) store.redo();
+          else store.undo();
+        } else if (key === 'd' && store.selectedId) {
+          event.preventDefault();
+          store.duplicateNode(store.selectedId);
+        } else if (key === 'c' && store.selectedId) {
+          event.preventDefault();
+          store.copyNode(store.selectedId);
+        } else if (key === 'v') {
+          event.preventDefault();
+          store.pasteNode();
+        }
+        return;
+      }
+
+      if (inField) return;
+
+      if (event.key === 'Escape') {
         event.preventDefault();
-        void handleSave(false);
-      } else if (key === 'z' && !inField) {
+        store.select(null);
+        return;
+      }
+
+      if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedId) {
+        event.preventDefault(); // Backspace still means "go back" in some browsers.
+        store.deleteNode(store.selectedId);
+        return;
+      }
+
+      const step = NUDGE_STEPS[event.key];
+      if (step && store.selectedId) {
         event.preventDefault();
-        if (event.shiftKey) useEditorStore.getState().redo();
-        else useEditorStore.getState().undo();
-      } else if (key === 'o') {
-        event.preventDefault();
-        void handleOpen();
+        nudge(step, event.shiftKey);
       }
     };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key in NUDGE_STEPS) endNudge();
+    };
+
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', endNudge);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', endNudge);
+      endNudge();
+    };
   }, [handleSave, handleOpen]);
 
   // Export always downloads rather than using the file picker: there is no

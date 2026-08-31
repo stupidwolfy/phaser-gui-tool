@@ -8,23 +8,30 @@ No install, no account, no server. Projects are saved as a plain JSON file on yo
 device, and nothing you make is ever uploaded anywhere. It works on a phone as well as
 on a desktop.
 
-## Status: iteration 1
+## Status: iteration 2
 
-The goal is to eventually cover the whole Phaser surface. This first iteration builds the
-foundation and gets it deployed — it is a working editor, but a small one.
+The goal is to eventually cover the whole Phaser surface. Iteration 1 built the
+foundation and got it deployed; iteration 2 added code export and the editing operations
+that make it usable for more than a couple of objects.
 
 **Works today**
 
 - Place rectangles, ellipses and text in a scene
 - Select and drag objects on the canvas; pan and pinch-zoom the camera
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
-- Undo/redo, grouped sensibly (one drag or one field edit is one step)
+- Duplicate, copy and paste objects, keeping their styling
+- Change draw order: Arrange buttons in the inspector, or drag rows in the scene tree
+- Keyboard: arrow keys nudge (Shift for 10px), Delete removes, Escape deselects,
+  Ctrl/Cmd+D/C/V/Z/S/O
+- Undo/redo, grouped sensibly (one drag, one field edit or one held arrow key is one step)
 - Save and open `.phaser.json` project files from your device
 - Autosaved draft in the browser, so a closed tab doesn't lose your work
 - Responsive: three panels on desktop, canvas plus bottom sheets on a phone
+- Export the scene as real Phaser code: a Scene class in TypeScript or JavaScript, or a
+  self-contained runnable HTML page
 
 **Not yet** — sprites and asset management, animations, tilemaps, physics, particles,
-audio, cameras, multiple scenes, prefabs, and code export.
+audio, cameras, multiple scenes and prefabs.
 
 ## How it works
 
@@ -36,11 +43,12 @@ what will make adding the rest of Phaser's object types additive rather than a r
 
 ```
 src/
-  core/schema.ts    the project document types (the file format)
-  core/store.ts     zustand store: document, selection, undo/redo
-  io/fileIO.ts      save/open, File System Access API + download fallback
-  editor/phaser/    the Phaser scene that renders the document
-  ui/               toolbar, scene tree, inspector, responsive shell
+  core/schema.ts      the project document types (the file format)
+  core/store.ts       zustand store: document, selection, undo/redo
+  io/fileIO.ts        save/open, File System Access API + download fallback
+  io/exportPhaser.ts  the document turned into runnable Phaser code
+  editor/phaser/      the Phaser scene that renders the document
+  ui/                 toolbar, scene tree, inspector, responsive shell
 ```
 
 Saving uses the File System Access API where it exists (desktop Chrome and Edge, which
