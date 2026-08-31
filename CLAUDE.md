@@ -85,8 +85,15 @@ Each of these was a real bug found in browser testing. Don't re-derive them.
 - **Undo is transaction-grouped.** `beginTransaction`/`endTransaction` wrap drags
   (dragstart/dragend) and inspector fields (focus/blur), so one gesture is one undo step.
   New editing UI must do the same or it will flood the history stack.
-- **The drag guard matters.** `EditorScene.draggingId` makes the store sync skip the
-  position of the object under the pointer; without it the sync fights the drag.
+- **Phaser's drag system never moves anything itself.** `DRAG` only reports `dragX/dragY`;
+  the handler must call `setPosition`. Because the store sync deliberately skips the object
+  under the pointer (`EditorScene.draggingId`, which stops the rounded store value fighting
+  the gesture), forgetting that leaves the object not following the finger at all.
+- **Clear `draggingId` *before* calling `endTransaction()`.** `endTransaction` publishes a
+  store change, and the sync it triggers is what settles the object on its final position.
+  Clearing afterwards meant that sync was still skipped, so the object stayed visually
+  stale until some later unrelated store change redrew it — which looked like "the move
+  only applies when I press the confirm button".
 - **The File System Access API is desktop-Chromium only** — absent on Chrome for Android,
   iOS Safari and Firefox. `src/io/fileIO.ts` feature-detects and falls back to a download
   plus an `<input type="file">`. That fallback is the majority path, not a degraded one.
@@ -130,6 +137,19 @@ There is no automated suite. Changes to the canvas, layout or file I/O were veri
 driving the production build in Chromium via Playwright, at **1440×900 and 390×844**,
 checking: add → select → drag → inspector edit → undo → save → reload → reopen, with a
 console-error assertion.
+
+**Assert what is drawn, not just what is stored.** The bug above passed every
+store-level assertion — the document held the right coordinates the whole time while the
+canvas showed something else. The harness now scans the canvas screenshot for the
+rectangle's fill colour and compares centroids across each step.
+
+Two traps in that pixel approach, both of which produced confident wrong answers:
+
+- The move bar floats *over* the canvas and its confirm button is `--accent`, the same
+  colour as the default rectangle fill, so it was counted as part of the object. Clip the
+  bottom band off the screenshot.
+- Clip the screenshot, but compute pointer coordinates from the *full* canvas box, or the
+  touches land in empty space and every assertion silently reads "nothing moved".
 
 Two things to know if you rebuild that harness:
 

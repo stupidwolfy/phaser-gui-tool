@@ -208,6 +208,13 @@ export class EditorScene extends Phaser.Scene {
       ) => {
         const id = object.getData('nodeId') as string | undefined;
         if (!id || this.dragRejected) return;
+
+        // Phaser's drag system reports the pointer but never moves anything
+        // itself, and the store sync deliberately skips the object under the
+        // pointer (below). So this is the only thing moving it — without it the
+        // object simply does not follow your finger.
+        (object as Renderable).setPosition(dragX, dragY);
+
         store
           .getState()
           .updateTransform(id, { x: Math.round(dragX), y: Math.round(dragY) });
@@ -219,8 +226,13 @@ export class EditorScene extends Phaser.Scene {
         this.dragRejected = false;
         return;
       }
-      store.getState().endTransaction();
+      // Order matters: endTransaction publishes a store change, and the sync it
+      // triggers is what settles the object on its final rounded position.
+      // Clearing draggingId afterwards meant that sync was still skipped, and
+      // the object stayed visually stale until some later, unrelated store
+      // change happened to redraw it.
       this.draggingId = null;
+      store.getState().endTransaction();
     });
 
     // A gesture can end without DRAG_END: the browser reclaims the touch, or the
@@ -230,8 +242,8 @@ export class EditorScene extends Phaser.Scene {
       this.isPanning = false;
       this.pinchDistance = 0;
       if (this.draggingId !== null) {
-        store.getState().endTransaction();
         this.draggingId = null;
+        store.getState().endTransaction();
       }
       this.dragRejected = false;
     };
@@ -369,8 +381,9 @@ export class EditorScene extends Phaser.Scene {
   private applyNode(object: Renderable, node: GameObjectNode, index: number): void {
     const { transform } = node;
 
-    // Skip the position of the object currently under the pointer: the drag
-    // handler already moved it, and re-applying mid-gesture causes jitter.
+    // Skip the position of the object under the pointer. The DRAG handler is
+    // already tracking it 1:1, and re-applying the rounded store value on every
+    // pointer-move would fight that with visible jitter.
     if (this.draggingId !== node.id) {
       object.setPosition(transform.x, transform.y);
     }
