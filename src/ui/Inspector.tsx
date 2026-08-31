@@ -121,6 +121,9 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
   const updateTransform = useEditorStore((s) => s.updateTransform);
   const updateProps = useEditorStore((s) => s.updateProps);
   const deleteNode = useEditorStore((s) => s.deleteNode);
+  const scaleNode = useEditorStore((s) => s.scaleNode);
+  const lockAspect = useEditorStore((s) => s.lockAspect);
+  const setLockAspect = useEditorStore((s) => s.setLockAspect);
 
   const setProp = (patch: Record<string, unknown>) => updateProps(node.id, patch);
 
@@ -170,15 +173,20 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
           label="Scale X"
           value={node.transform.scaleX}
           step={0.1}
-          onChange={(scaleX) => updateTransform(node.id, { scaleX })}
+          onChange={(scaleX) => scaleNode(node.id, 'x', scaleX)}
         />
         <NumberField
           label="Scale Y"
           value={node.transform.scaleY}
           step={0.1}
-          onChange={(scaleY) => updateTransform(node.id, { scaleY })}
+          onChange={(scaleY) => scaleNode(node.id, 'y', scaleY)}
         />
       </div>
+      <CheckboxField
+        label="Scale X and Y together"
+        value={lockAspect}
+        onChange={setLockAspect}
+      />
 
       <div className="panel__section">{SECTION_TITLE[node.type]}</div>
 

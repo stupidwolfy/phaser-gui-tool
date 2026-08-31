@@ -203,6 +203,7 @@ input {
 
 .btn--add {
   flex: 1;
+  min-width: 0;
   padding: 0 6px;
   font-size: 13px;
 }
@@ -281,7 +282,13 @@ input {
 /* ------------------------------------------------------------ scene tree -- */
 
 .add-row {
-  display: flex;
+  /* A grid, not a flex row: the buttons have unequal labels and `nowrap`, so a
+     flex row could not shrink them below their text and clipped the last one
+     off the 260px scene-tree column the moment a fourth object type arrived.
+     auto-fit means the count follows the width — two columns in the desktop
+     sidebar, four across a phone sheet — with no breakpoint to maintain. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
   gap: 4px;
   margin-bottom: 10px;
 }

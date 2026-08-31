@@ -93,10 +93,16 @@ Each of these was a real bug found in browser testing. Don't re-derive them.
   rectangle fill, so the outline vanished on the object you had just selected. It is cyan
   for that reason.
 - **Hit areas must be resized as the object changes** (`applyHitArea`). A text object's
-  size follows its content, so it drifts out of step as you type.
+  size follows its content, so it drifts out of step as you type. `setSize` does not carry
+  the hit area with it — that is also why the scale handle keeps a 44px touch target
+  around the 14px square it draws, re-applied every frame against the camera zoom.
+- **The add-row is a grid, not a flex row.** The buttons are `nowrap`, so a flex row
+  cannot shrink them below their labels; the fourth object type clipped `+ Image` in half
+  in the 260px scene-tree column. `repeat(auto-fit, minmax(84px, 1fr))` lets the column
+  count follow the width with no breakpoint to maintain.
 - **Undo is transaction-grouped.** `beginTransaction`/`endTransaction` wrap drags
-  (dragstart/dragend), inspector fields (focus/blur) and arrow-key nudges (first
-  keydown/keyup), so one gesture is one undo step. New editing UI must do the same or it
+  (dragstart/dragend), corner-handle scaling, inspector fields (focus/blur) and
+  arrow-key nudges (first keydown/keyup), so one gesture is one undo step. New editing UI must do the same or it
   will flood the history stack. A held arrow key is the sharpest case: it repeats at the
   OS rate, so an ungrouped nudge buries the stack in a second. `App.tsx` closes that
   transaction on an idle timer as well as on keyup, because a keyup is lost if the window
@@ -187,6 +193,21 @@ Touch and mouse deliberately differ, keyed off `pointer.wasTouch`:
 `DRAG_START` must compare against `EditorScene.selectionAtPress`, not the live
 `selectedId` — `GAMEOBJECT_DOWN` has already selected the object by then, so the live
 value always matches and the two-step rule silently stops working.
+
+The corner scale handle is the one thing exempt from that rule. It carries no `nodeId`,
+so the `DRAG_START` comparison would find `null !== selectionAtPress`, decide they differ
+and reject every scale drag made with a finger — the handle branch has to come first.
+It also only exists while something is selected, so the two-step rule has already been
+satisfied by the time it can be touched.
+
+Scaling resolves against the state captured at `beginScale`, not against the previous
+frame, so dragging out and back returns the object to the size it started at. The maths
+runs in the object's own unrotated frame (a rotated object scales along its own axes),
+and with the aspect lock on it projects the pointer onto the starting diagonal rather
+than copying one axis onto the other — copying makes the object lurch whenever the drag
+is more vertical than horizontal. `store.lockAspect` is editor state, not document state,
+and both the handle and the inspector's Scale fields go through `scaleNode` so the lock
+cannot mean two different things.
 
 `src/ui/MoveBar.tsx` makes that rule visible on mobile: it appears on selection and gives
 the move an explicit ending (✓ keep, ✗ put it back, using the `moveOrigin` snapshot the

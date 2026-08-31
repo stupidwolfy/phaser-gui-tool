@@ -30,6 +30,24 @@ const PLACEHOLDER_TEXTURE = 'editor:no-image';
 /** Side of the stand-in square drawn for a sprite with no image yet. */
 const PLACEHOLDER_SIZE = 96;
 
+/**
+ * The corner scale handle, in *screen* pixels — it is resized against the
+ * camera zoom every frame so it stays the same size to the eye and to the
+ * finger, whatever the camera is doing.
+ *
+ * The touch target is far larger than the square it draws: 14px is the size
+ * that reads as a handle without covering the object it belongs to, and 44px is
+ * the size a thumb can actually hit.
+ */
+const HANDLE_SIZE = 14;
+const HANDLE_TOUCH_SIZE = 44;
+/** A scale below this is indistinguishable from gone, and can't be dragged back. */
+const MIN_SCALE = 0.02;
+
+/** Three decimals: finer than the eye at any zoom, and readable in a field. */
+const roundScale = (value: number): number =>
+  Math.max(MIN_SCALE, Math.round(value * 1000) / 1000);
+
 /** '#rrggbb' -> 0xrrggbb, tolerating a missing '#' or a malformed value. */
 function hexToNumber(hex: string, fallback = 0xffffff): number {
   const parsed = Number.parseInt(String(hex).replace('#', ''), 16);
@@ -72,7 +90,25 @@ export class EditorScene extends Phaser.Scene {
   private alive = true;
   private sceneFrame!: Phaser.GameObjects.Rectangle;
   private selectionOutline!: Phaser.GameObjects.Rectangle;
+  private scaleHandle!: Phaser.GameObjects.Rectangle;
   private unsubscribe?: () => void;
+
+  /**
+   * The state a corner-scale gesture needs to be resolved against its start
+   * rather than against the previous frame, so a drag out and back returns the
+   * object to the size it began at instead of accumulating rounding drift.
+   */
+  private scaling: {
+    id: string;
+    /** Unscaled half-size of the object, in world units. */
+    halfWidth: number;
+    halfHeight: number;
+    scaleX: number;
+    scaleY: number;
+    /** Corner minus pointer at grab time, so the handle doesn't jump to it. */
+    grabOffsetX: number;
+    grabOffsetY: number;
+  } | null = null;
 
   /** Set between dragstart/dragend so the store sync can't fight the pointer. */
   private draggingId: string | null = null;
@@ -120,6 +156,18 @@ export class EditorScene extends Phaser.Scene {
       .setFillStyle()
       .setDepth(1000)
       .setVisible(false);
+
+    // Sits above the outline so it is never the outline that takes the press.
+    this.scaleHandle = this.add
+      .rectangle(0, 0, HANDLE_SIZE, HANDLE_SIZE, SELECTION_COLOR)
+      .setDepth(1001)
+      .setVisible(false);
+    this.scaleHandle.setData('handle', 'scale');
+    this.scaleHandle.setInteractive(
+      new Phaser.Geom.Rectangle(0, 0, HANDLE_SIZE, HANDLE_SIZE),
+      Phaser.Geom.Rectangle.Contains,
+    );
+    this.input.setDraggable(this.scaleHandle);
 
     this.registerInput();
 
@@ -293,6 +341,14 @@ export class EditorScene extends Phaser.Scene {
     this.input.on(
       Phaser.Input.Events.DRAG_START,
       (pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.GameObject) => {
+        // The handle first, and before the touch rule below: it carries no
+        // nodeId, so that rule would compare null against the selection, decide
+        // they differ and reject every scale drag made with a finger.
+        if (object.getData('handle') === 'scale') {
+          this.beginScale(pointer);
+          return;
+        }
+
         const id = (object.getData('nodeId') as string | undefined) ?? null;
 
         // Touch is a two-step interaction: the first press only selects, and
@@ -315,11 +371,19 @@ export class EditorScene extends Phaser.Scene {
     this.input.on(
       Phaser.Input.Events.DRAG,
       (
-        _pointer: Phaser.Input.Pointer,
+        pointer: Phaser.Input.Pointer,
         object: Phaser.GameObjects.GameObject,
         dragX: number,
         dragY: number,
       ) => {
+        if (object.getData('handle') === 'scale') {
+          // dragX/dragY describe where the handle would go; the scale is a
+          // function of where the pointer is relative to the object, so this
+          // gesture reads the pointer directly instead.
+          this.applyScale(pointer);
+          return;
+        }
+
         const id = object.getData('nodeId') as string | undefined;
         if (!id || this.dragRejected) return;
 
@@ -363,6 +427,27 @@ export class EditorScene extends Phaser.Scene {
    */
   private finishDrag(): void {
     this.dragRejected = false;
+
+    // A scale gesture ends through exactly the same paths as a move, for the
+    // same reason: on a real device several of them fire and some of them
+    // don't, and a transaction left open swallows every later edit's undo step.
+    if (this.scaling) {
+      const { id } = this.scaling;
+      this.scaling = null;
+      const store = useEditorStore.getState();
+      const node = findNode(activeScene(store.project).children, id);
+      if (node) {
+        // Settle on a readable number, the way a move settles on whole pixels.
+        // Inside the transaction, so it is part of the same undo step and not a
+        // second one the user never asked for.
+        store.updateTransform(id, {
+          scaleX: roundScale(node.transform.scaleX),
+          scaleY: roundScale(node.transform.scaleY),
+        });
+      }
+      store.endTransaction();
+    }
+
     const id = this.draggingId;
     if (id === null) return;
     this.draggingId = null;
@@ -376,6 +461,103 @@ export class EditorScene extends Phaser.Scene {
       });
     }
     store.getState().endTransaction();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Corner scaling
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Records what the gesture will be resolved against: the object's unscaled
+   * size, the scale it started at, and how far the pointer was from the corner
+   * when it grabbed it.
+   *
+   * The grab offset is what stops the object jumping the instant you touch the
+   * handle — a fingertip lands somewhere in a 44px target, not on the corner.
+   */
+  private beginScale(pointer: Phaser.Input.Pointer): void {
+    const store = useEditorStore.getState();
+    const id = store.selectedId;
+    const object = id ? this.displayObjects.get(id) : undefined;
+    if (!id || !object) return;
+
+    const halfWidth = object.width / 2;
+    const halfHeight = object.height / 2;
+    // A zero-sized object has no corner to drag and no ratio to scale by.
+    if (halfWidth <= 0 || halfHeight <= 0) return;
+
+    const corner = this.cornerOf(object);
+    this.scaling = {
+      id,
+      halfWidth,
+      halfHeight,
+      scaleX: object.scaleX,
+      scaleY: object.scaleY,
+      grabOffsetX: corner.x - pointer.worldX,
+      grabOffsetY: corner.y - pointer.worldY,
+    };
+    // One undo entry for the whole gesture, exactly as a move drag does.
+    store.beginTransaction();
+  }
+
+  /**
+   * Turns the pointer's position into a scale.
+   *
+   * The maths is done in the object's own unrotated frame, so a rotated object
+   * scales along its own axes rather than the screen's — dragging the corner of
+   * a tilted object outward makes it bigger, not sheared.
+   */
+  private applyScale(pointer: Phaser.Input.Pointer): void {
+    const gesture = this.scaling;
+    const object = gesture ? this.displayObjects.get(gesture.id) : undefined;
+    if (!gesture || !object) return;
+
+    const angle = -object.rotation;
+    const dx = pointer.worldX + gesture.grabOffsetX - object.x;
+    const dy = pointer.worldY + gesture.grabOffsetY - object.y;
+    const localX = dx * Math.cos(angle) - dy * Math.sin(angle);
+    const localY = dx * Math.sin(angle) + dy * Math.cos(angle);
+
+    const store = useEditorStore.getState();
+    let scaleX: number;
+    let scaleY: number;
+
+    if (store.lockAspect) {
+      // Project the pointer onto the diagonal the corner started on. Taking one
+      // axis and copying it to the other would make the object lurch whenever
+      // the drag was more vertical than horizontal; a projection lets the
+      // corner track the pointer as closely as one number can.
+      const cornerX = gesture.halfWidth * gesture.scaleX;
+      const cornerY = gesture.halfHeight * gesture.scaleY;
+      const lengthSquared = cornerX * cornerX + cornerY * cornerY;
+      if (lengthSquared === 0) return;
+      const factor = (localX * cornerX + localY * cornerY) / lengthSquared;
+      scaleX = gesture.scaleX * factor;
+      scaleY = gesture.scaleY * factor;
+    } else {
+      scaleX = localX / gesture.halfWidth;
+      scaleY = localY / gesture.halfHeight;
+    }
+
+    // Clamped rather than allowed through zero into a mirrored object: a flip
+    // is a separate idea, and a scale that passes through 0 leaves the handle
+    // stuck at the object's centre with no way back.
+    store.updateTransform(gesture.id, {
+      scaleX: Math.max(MIN_SCALE, scaleX),
+      scaleY: Math.max(MIN_SCALE, scaleY),
+    });
+  }
+
+  /** The object's own bottom-right corner in world space, rotation included. */
+  private cornerOf(object: Renderable): { x: number; y: number } {
+    const offsetX = (object.width / 2) * object.scaleX;
+    const offsetY = (object.height / 2) * object.scaleY;
+    const cos = Math.cos(object.rotation);
+    const sin = Math.sin(object.rotation);
+    return {
+      x: object.x + offsetX * cos - offsetY * sin,
+      y: object.y + offsetX * sin + offsetY * cos,
+    };
   }
 
   update(): void {
@@ -588,6 +770,7 @@ export class EditorScene extends Phaser.Scene {
 
     if (!target || !target.visible) {
       this.selectionOutline.setVisible(false);
+      this.scaleHandle.setVisible(false);
       return;
     }
 
@@ -600,5 +783,41 @@ export class EditorScene extends Phaser.Scene {
       .setSize(bounds.width, bounds.height)
       // Constant on-screen thickness regardless of how far the camera is zoomed.
       .setStrokeStyle(2 / this.cameras.main.zoom, SELECTION_COLOR);
+
+    this.updateScaleHandle(target);
+  }
+
+  /**
+   * Parks the scale handle on the selected object's bottom-right corner.
+   *
+   * On the object's *own* corner, not the corner of the axis-aligned selection
+   * box: for a rotated object those are different points, and the handle has to
+   * sit where the maths in `applyScale` thinks it is or the object jumps when
+   * you grab it.
+   *
+   * Everything is divided by the camera zoom so the handle keeps one size on
+   * screen. A handle that shrank with the scene would be untappable at the zoom
+   * levels where precise sizing matters most.
+   */
+  private updateScaleHandle(target: Renderable): void {
+    const { zoom } = this.cameras.main;
+    const size = HANDLE_SIZE / zoom;
+    const touch = HANDLE_TOUCH_SIZE / zoom;
+    const corner = this.cornerOf(target);
+
+    this.scaleHandle
+      .setVisible(true)
+      .setPosition(corner.x, corner.y)
+      .setSize(size, size)
+      .setStrokeStyle(1 / zoom, 0x0d1117);
+
+    // setSize does not carry the hit area with it, and the hit area is what the
+    // finger actually hits — it stays the touch target's size, centred on the
+    // much smaller square that is drawn.
+    const area = this.scaleHandle.input?.hitArea;
+    if (area instanceof Phaser.Geom.Rectangle) {
+      const pad = (touch - size) / 2;
+      area.setTo(-pad, -pad, touch, touch);
+    }
   }
 }
