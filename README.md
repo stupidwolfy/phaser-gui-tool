@@ -12,6 +12,7 @@ on a desktop.
 
 - Place rectangles, ellipses, text and images in a scene
 - Select and drag objects on the canvas; pan and pinch-zoom the camera
+- Resize by dragging the corner handle, keeping the aspect ratio unless you unlink it
 - Import your own images and use them as sprites, with tint, flip and alpha
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
 - Duplicate, copy and paste objects, keeping their styling

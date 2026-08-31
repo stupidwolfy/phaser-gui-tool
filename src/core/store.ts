@@ -35,6 +35,22 @@ export interface EditorState {
    * pasting repeatedly cascades instead of stacking copies on one spot.
    */
   clipboard: GameObjectNode | null;
+  /**
+   * Whether scaling keeps the object's aspect ratio. Editor state, not document
+   * state: it is a preference about the tool, like `selectedId`, and two people
+   * opening the same file should not disagree about the shape of its objects.
+   *
+   * On by default — a non-uniform scale is almost always a slip rather than an
+   * intent, and it is the corner handle's normal behaviour everywhere else.
+   */
+  lockAspect: boolean;
+  setLockAspect: (lockAspect: boolean) => void;
+  /**
+   * Scales a node, honouring `lockAspect`. Both the inspector's Scale fields
+   * and the canvas corner handle go through here so the lock cannot mean one
+   * thing in one place and something else in the other.
+   */
+  scaleNode: (id: string, axis: 'x' | 'y', value: number) => void;
 
   // -- document lifecycle ----------------------------------------------------
   loadProject: (project: Project, fileName: string | null) => void;
@@ -213,6 +229,32 @@ export const useEditorStore = create<EditorState>((set, get) => {
     txDepth: 0,
     moveOrigin: null,
     clipboard: null,
+    lockAspect: true,
+
+    setLockAspect: (lockAspect) => set({ lockAspect }),
+
+    scaleNode: (id, axis, value) => {
+      const state = get();
+      const node = findNode(activeScene(state.project).children, id);
+      if (!node) return;
+
+      const { scaleX, scaleY } = node.transform;
+      if (!state.lockAspect) {
+        return state.updateTransform(id, axis === 'x' ? { scaleX: value } : { scaleY: value });
+      }
+
+      // Keep the ratio the object already has rather than forcing X === Y:
+      // an object deliberately built at 2:1 should stay 2:1 when the lock is
+      // switched on, not snap square on the next keystroke.
+      const from = axis === 'x' ? scaleX : scaleY;
+      const other = axis === 'x' ? scaleY : scaleX;
+      // A zero scale carries no ratio to preserve, so fall back to matching.
+      const next = from === 0 ? value : other * (value / from);
+      state.updateTransform(
+        id,
+        axis === 'x' ? { scaleX: value, scaleY: next } : { scaleY: value, scaleX: next },
+      );
+    },
 
     loadProject: (project, fileName) =>
       set({
