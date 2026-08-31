@@ -3,6 +3,7 @@ import { cloneWithNewIds, createNode, newProject } from './defaults';
 import {
   findNode,
   type GameObjectNode,
+  type ImageAsset,
   type NodeType,
   type Project,
   type SceneDoc,
@@ -47,6 +48,15 @@ export interface EditorState {
   cancelMove: () => void;
   /** Mobile move bar: accept the move and leave move mode. */
   commitMove: () => void;
+
+  // -- assets ----------------------------------------------------------------
+  addAsset: (asset: ImageAsset) => void;
+  /**
+   * Removes an image and clears it from every sprite pointing at it, in one
+   * undo step. Dropping only the asset would leave dangling references in a
+   * saved file, so the document can never be in that state by any action here.
+   */
+  removeAsset: (id: string) => void;
 
   // -- editing ---------------------------------------------------------------
   addNode: (type: NodeType) => void;
@@ -103,6 +113,25 @@ function removeNode(nodes: GameObjectNode[], id: string): GameObjectNode[] {
     );
 }
 
+/** Points every sprite using `assetId` back at nothing. See `removeAsset`. */
+function clearAssetReferences(nodes: GameObjectNode[], assetId: string): GameObjectNode[] {
+  let changed = false;
+  const next = nodes.map((node) => {
+    const children =
+      node.children.length === 0 ? node.children : clearAssetReferences(node.children, assetId);
+    if (node.type === 'sprite' && node.props.assetId === assetId) {
+      changed = true;
+      return { ...node, props: { ...node.props, assetId: null }, children };
+    }
+    if (children === node.children) return node;
+    changed = true;
+    return { ...node, children };
+  });
+  // Identity is the signal editProject reads for "nothing happened", so an
+  // untouched branch has to come back as the very same array.
+  return changed ? next : nodes;
+}
+
 /** How far a duplicate or a paste lands from its source, in scene pixels. */
 const COPY_OFFSET = 16;
 
@@ -139,22 +168,17 @@ export function activeScene(project: Project): SceneDoc {
 
 export const useEditorStore = create<EditorState>((set, get) => {
   /**
-   * Applies `fn` to the active scene and records an undo step (unless we are
-   * inside a transaction). Every editing action goes through here, so history
-   * and the dirty flag can never drift out of sync with the document.
+   * Applies `fn` to the whole document and records an undo step (unless we are
+   * inside a transaction). Every editing action lands here eventually, so
+   * history and the dirty flag can never drift out of sync with the document.
+   *
+   * Returning the project unchanged is how an action says "nothing happened",
+   * and costs no undo entry.
    */
-  const editScene = (fn: (scene: SceneDoc) => SceneDoc) => {
+  const editProject = (fn: (project: Project) => Project) => {
     const state = get();
-    const current = activeScene(state.project);
-    const next = fn(current);
-    if (next === current) return;
-
-    const project: Project = {
-      ...state.project,
-      scenes: state.project.scenes.map((scene) =>
-        scene.id === current.id ? next : scene,
-      ),
-    };
+    const project = fn(state.project);
+    if (project === state.project) return;
 
     const recordHistory = state.txDepth === 0;
     set({
@@ -166,6 +190,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
       future: recordHistory ? [] : state.future,
     });
   };
+
+  /** The same, narrowed to the scene the user is looking at. */
+  const editScene = (fn: (scene: SceneDoc) => SceneDoc) =>
+    editProject((project) => {
+      const current = activeScene(project);
+      const next = fn(current);
+      if (next === current) return project;
+      return {
+        ...project,
+        scenes: project.scenes.map((scene) => (scene.id === current.id ? next : scene)),
+      };
+    });
 
   return {
     project: newProject(),
@@ -226,6 +262,19 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
 
     commitMove: () => set({ selectedId: null, moveOrigin: null }),
+
+    addAsset: (asset) =>
+      editProject((project) => ({ ...project, assets: [...project.assets, asset] })),
+
+    removeAsset: (id) =>
+      editProject((project) => ({
+        ...project,
+        assets: project.assets.filter((asset) => asset.id !== id),
+        scenes: project.scenes.map((scene) => ({
+          ...scene,
+          children: clearAssetReferences(scene.children, id),
+        })),
+      })),
 
     addNode: (type) => {
       const scene = activeScene(get().project);
@@ -376,6 +425,22 @@ export const useEditorStore = create<EditorState>((set, get) => {
 /** Convenience selector — the scene every panel is currently looking at. */
 export const useActiveScene = (): SceneDoc =>
   useEditorStore((state) => activeScene(state.project));
+
+/**
+ * How many objects in the whole project use an image. Shown in the picker,
+ * because deleting an image in use silently blanks those sprites.
+ */
+export function countAssetUses(project: Project, assetId: string): number {
+  let count = 0;
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'sprite' && node.props.assetId === assetId) count += 1;
+      walk(node.children);
+    }
+  };
+  for (const scene of project.scenes) walk(scene.children);
+  return count;
+}
 
 export const useSelectedNode = (): GameObjectNode | null =>
   useEditorStore((state) =>

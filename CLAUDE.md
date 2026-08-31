@@ -12,8 +12,8 @@ saved as JSON files on the user's own device.
 The long-term goal is to cover the whole Phaser surface. Iteration 1 (shipped) built the
 foundation: rectangles, ellipses and text; select/drag/zoom; inspector; save and open.
 Iteration 2 (shipped) added code export, and the editing operations around it: duplicate,
-copy/paste, draw-order control and a keyboard layer. See the README for the user-facing
-feature list.
+copy/paste, draw-order control and a keyboard layer. Iteration 3 (shipped) added sprites
+and image assets. See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -56,11 +56,13 @@ makes new object types additive. **Do not stash state on Phaser game objects** b
 
 ## Adding a Phaser object type
 
-This is the repeating unit of work for most future iterations. Add a `sprite`, and:
+This is the repeating unit of work for most future iterations. Add a `tileSprite`, and:
 
 1. `src/core/schema.ts` — add to the `NodeType` union and add its props interface to
    `NodePropsByType`. The union is built so this turns every unhandled case elsewhere
    into a **compile error**, which is the intended way to find the rest of the work.
+   Not everywhere, though: step 4 below is conditional JSX and step 5 is a data table,
+   so neither fails the build. Check those two by hand.
 2. `src/core/defaults.ts` — a `createNode` case with sensible starting values.
 3. `src/editor/phaser/EditorScene.ts` — a `createDisplayObject` case and an `applyNode`
    case.
@@ -71,8 +73,13 @@ This is the repeating unit of work for most future iterations. Add a `sprite`, a
    than at compile time: an unhandled type exports nothing at all, so check it in the
    same pass as the `EditorScene` case.
 
-Bump `SCHEMA_VERSION` only for a change existing files can't be read under. `parseProject`
-already rejects files from a *newer* schema with a readable message.
+Bump `SCHEMA_VERSION` when a *deployed older build* would break on the new file, not only
+when this build can't read an old one — those are different directions and the second is
+the one that bites. Adding `sprite` kept every v1 file readable but made v2 files fatal to
+a v1 build, whose `createDisplayObject` has no case for the type and leaves the object
+undefined; the bump turns that crash into `parseProject`'s "made with a newer version of
+the editor" message. Pages serves whatever build a browser has cached, so this is a real
+combination, not a hypothetical one.
 
 ## Non-obvious things, learned the hard way
 
@@ -129,6 +136,45 @@ Each of these was a real bug found in browser testing. Don't re-derive them.
   perfectly on a phone and not at all in the harness. Treat a clean emulated pass as
   necessary, not sufficient.
 
+## Images and assets
+
+Imported images live **in the document**, as `project.assets: ImageAsset[]` holding
+base64 data URLs. That is the whole of asset management — there is nowhere else for an
+image to be, which is what keeps `JSON.stringify(project)` a complete save. A path to a
+file on disk would break the moment the project moved, and there is no server to hold the
+bytes instead.
+
+Consequences worth knowing before touching any of it:
+
+- **Import re-encodes everything** (`src/core/assets.ts`), through a canvas, to PNG or
+  JPEG only. That normalises the stored form to two mime types — which is what lets the
+  exporter and the validator stop sniffing — and rasterises SVG at import, so a sprite's
+  intrinsic size is always a real pixel count. JPEG is only used for a source that was
+  already JPEG: it has no alpha channel, so anything that might be transparent stays PNG.
+- **Decoding is async, the store sync is not.** Phaser needs an `HTMLImageElement` to
+  build a texture from. `assets.ts` caches decodes keyed by *data URL* (the content, so
+  the cache can't go stale), and `EditorScene.syncTextures` starts a decode for anything
+  missing and re-runs the sync when it lands. Opening a project always takes that path.
+- **A sprite with no usable image still has to be a real object** — selectable,
+  draggable, visible. That is what `PLACEHOLDER_TEXTURE` is for. The same placeholder
+  covers "no image chosen yet" and "the image is gone", so there is one state, not two.
+- **Textures outlive scenes.** They belong to the game, so `EditorScene` tracks the keys
+  it created in `assetTextures` and removes exactly those on SHUTDOWN. Removing by
+  guesswork would take out Phaser's own `__DEFAULT`/`__MISSING`.
+- **A sprite has no width/height props.** Its size is the asset's intrinsic size times the
+  shared transform scale, which is exactly what Phaser does — `setDisplaySize` is itself
+  just a scale. A separate display size would be two fields fighting over one number.
+- **`removeAsset` also clears every sprite pointing at the image**, in one undo step, so
+  the document can never hold a dangling reference by any action in the editor.
+  `parseProject` still tolerates one, because a hand-edited file can.
+- **The asset table is untrusted input on open.** `parseAssets` accepts only
+  `data:image/png|jpeg;base64,…` — an SVG data URL can carry script, and these strings go
+  into an `<img>` and into exported code. It drops bad entries rather than failing the
+  open: one unreadable image should not cost the user the rest of their work.
+- **localStorage autosave is ~5 MB**, which images blow past quickly. `scheduleDraftSave`
+  now reports the failure once and clears the stale draft, rather than swallowing it —
+  silently believing you have a draft is worse than knowing you don't.
+
 ## Interaction model
 
 Touch and mouse deliberately differ, keyed off `pointer.wasTouch`:
@@ -162,6 +208,16 @@ Both outputs share `buildCreateBody`, so the runnable page can never drift from 
 file you ship. Adding a node type means adding a `constructorFor` case; anything not
 handled there silently exports nothing, so check it alongside the `EditorScene` case.
 
+Images are emitted as an `ASSETS` object literal at the top of the output, and a
+`preload()` that loads from it (`this.load.image(key, ASSETS[key])` — Phaser's loader
+detects `data:` URLs itself, see `File.js`). Three things about that shape are deliberate:
+only assets the scene actually *uses* are emitted, so a deleted-from-the-scene image
+doesn't ship a megabyte; the table is a named const rather than inlined, so swapping
+embedded bytes for real paths is one object to edit; and a scene with no images emits no
+table and no `preload()` at all, so shape-only projects export exactly what they always
+did. A sprite with no image emits a comment saying so rather than nothing — an object
+silently missing from an export reads as an exporter bug.
+
 Generated code is built from free user text, and the escaping is not optional:
 
 - Object names become JS identifiers (`toIdentifier`) — they can be blank, start with
@@ -171,6 +227,13 @@ Generated code is built from free user text, and the escaping is not optional:
   project whose text contained one produced an export that would not run *and* could
   execute arbitrary markup in whoever opened it. `escapeForScriptTag` handles that plus
   `<!--` and U+2028/9.
+- **`generateRunnableHtml` composes the whole script and escapes it once, at the end.**
+  It used to escape fragment by fragment, and that is how the scene name and the
+  background colour shipped raw for a release: both are interpolated straight into the
+  script, and nothing about `str(...)` at a call site says whether the result is about to
+  be embedded in HTML. Composing first means a newly added interpolation cannot be
+  forgotten — there is only one place left to forget. Do not reintroduce per-fragment
+  escaping.
 - The document title, the CSS background colour and the CDN version all come from the
   project file, so they are escaped or validated rather than interpolated raw.
 
@@ -194,13 +257,23 @@ Two traps in that pixel approach, both of which produced confident wrong answers
 - Clip the screenshot, but compute pointer coordinates from the *full* canvas box, or the
   touches land in empty space and every assertion silently reads "nothing moved".
 
-Two things to know if you rebuild that harness:
+Things to know if you rebuild that harness:
 
 - Chromium is preinstalled at `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`; do not
-  run `playwright install`.
+  run `playwright install`. `playwright` itself is not a dependency — `npm i -D playwright
+  --no-save`.
 - **Headless Chromium exposes `showSaveFilePicker` but can never resolve it** (no UI), so a
   save test hangs. `delete window.showSaveFilePicker` in an `addInitScript` — which also
   makes the test exercise the real mobile path.
+- **Read the canvas with Playwright's element screenshot, never by drawing it into a 2D
+  context in the page.** Phaser runs WebGL without `preserveDrawingBuffer`, so a readback
+  after the frame is composited returns solid black — and a centroid of nothing looks
+  exactly like "the object isn't drawn". Set `deviceScaleFactor: 1` so screenshot pixels
+  map 1:1 to CSS pixels.
+- On mobile the panels are **modal sheets over the canvas**; close them before any canvas
+  interaction or the tap lands on the sheet. The tabs are Scene / Properties / File.
+- Importing an image is driven with `page.waitForEvent('filechooser')` — the editor's
+  `<input type="file">` path is the same one a phone takes.
 
 Export is verified by **running the exported page**: serve it to Chromium with the CDN
 request routed to `node_modules/phaser/dist/phaser.min.js`, then assert Phaser booted,
@@ -209,7 +282,10 @@ checked with `tsc --strict` against the real Phaser types, and the exported `.js
 bundled with Vite in a throwaway project and run, which is the actual "drop it into your
 Phaser project" path. Serve that bundle over HTTP — browsers refuse ES modules from
 `file://`, which looks like a broken export but is not. Both are also run against a
-project full of hostile names and content — that is what caught the `</script>` hole.
+project full of hostile names and content — that is what caught the `</script>` hole, and,
+once the hostile project's *scene name* was made hostile too, the unescaped `super(...)`
+above. Widen what the hostile project covers whenever a new field starts reaching the
+output; the fields nobody thought to make hostile are exactly where the holes were.
 
 Promoting these scripts into a committed Playwright suite is a good early task.
 
@@ -240,9 +316,11 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
-Sprites and asset management, animations, tilemaps, physics, particles, audio, cameras,
-multiple scenes, and prefabs. Multi-select is not built either — `selectedId: string |
-null` runs through the store, the scene and the move bar, so it is its own iteration.
+Animations and sprite sheets (the asset table holds whole images only, and `sprite` nodes
+render as Phaser `Image`s, not `Sprite`s — animation is the reason to change that),
+tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Multi-select
+is not built either — `selectedId: string | null` runs through the store, the scene and
+the move bar, so it is its own iteration.
 There is still no committed test suite; promoting the Playwright scripts described under
 Verification is the standing next-best task. The schema's `children` array and Phaser
 Containers are the intended path for nesting — `EditorScene` currently renders only

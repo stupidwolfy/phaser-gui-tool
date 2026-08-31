@@ -48,9 +48,9 @@ export default function App() {
   useEffect(
     () =>
       useEditorStore.subscribe((state, previous) => {
-        if (state.project !== previous.project) scheduleDraftSave(state.project);
+        if (state.project !== previous.project) scheduleDraftSave(state.project, notify);
       }),
-    [],
+    [notify],
   );
 
   // Browsers only honour this prompt when there is unsaved work and the user

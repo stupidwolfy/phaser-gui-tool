@@ -49,6 +49,16 @@ export function createNode(
         name: name ?? 'Ellipse',
         props: { width: 120, height: 120, fill: '#ffb84f', alpha: 1 },
       };
+    case 'sprite':
+      return {
+        ...base,
+        type: 'sprite',
+        name: name ?? 'Sprite',
+        // No asset yet: a new sprite is a placeholder you then point at an
+        // image, rather than an add button that opens a file dialog you might
+        // not have an image ready for.
+        props: { assetId: null, alpha: 1, tint: '#ffffff', flipX: false, flipY: false },
+      };
     case 'text':
       return {
         ...base,
@@ -105,6 +115,7 @@ export function newProject(name = 'Untitled Project'): Project {
     schemaVersion: SCHEMA_VERSION,
     name,
     phaserVersion: TARGET_PHASER_VERSION,
+    assets: [],
     scenes: [scene],
     activeSceneId: scene.id,
   };
