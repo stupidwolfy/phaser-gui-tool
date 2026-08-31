@@ -6,7 +6,8 @@ import { ProjectParseError, downloadFile, openProject, saveProject } from './io/
 import {
   exportFileName,
   generateRunnableHtml,
-  generateSceneTs,
+  generateScene,
+  type SceneLanguage,
 } from './io/exportPhaser';
 import { Viewport, fitView } from './editor/Viewport';
 import { Inspector } from './ui/Inspector';
@@ -124,12 +125,15 @@ export default function App() {
 
   // Export always downloads rather than using the file picker: there is no
   // existing handle to write back to, and generated files are throwaway output.
-  const handleExportScene = useCallback(() => {
-    const { project } = useEditorStore.getState();
-    const name = exportFileName(project, '.ts');
-    downloadFile(generateSceneTs(project), name, 'text/plain');
-    notify(`Exported ${name}`);
-  }, [notify]);
+  const handleExportScene = useCallback(
+    (language: SceneLanguage) => {
+      const { project } = useEditorStore.getState();
+      const name = exportFileName(project, `.${language}`);
+      downloadFile(generateScene(project, language), name, 'text/plain');
+      notify(`Exported ${name}`);
+    },
+    [notify],
+  );
 
   const handleExportHtml = useCallback(() => {
     const { project } = useEditorStore.getState();
@@ -140,7 +144,8 @@ export default function App() {
 
   const actions: ToolbarActions = {
     onNew: handleNew,
-    onExportScene: handleExportScene,
+    onExportSceneTs: () => handleExportScene('ts'),
+    onExportSceneJs: () => handleExportScene('js'),
     onExportHtml: handleExportHtml,
     onOpen: () => void handleOpen(),
     onSave: () => void handleSave(false),

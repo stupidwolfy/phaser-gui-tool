@@ -133,9 +133,15 @@ store takes in `select()`).
 
 ## Code export
 
-`src/io/exportPhaser.ts` turns the document into real Phaser code — a TypeScript
-Scene class, and a self-contained runnable HTML page. It is a pure function of the
-document, which is the payoff for keeping Phaser a renderer.
+`src/io/exportPhaser.ts` turns the document into real Phaser code: a Scene class in
+TypeScript or JavaScript, and a self-contained runnable HTML page. It is a pure function
+of the document, which is the payoff for keeping Phaser a renderer.
+
+The three outputs cover the three real cases without overlapping. `.ts` and `.js` are ES
+modules that import Phaser, for a bundler-based project; the runnable page is the
+script-tag flavour where Phaser is a global. TS and JS differ by exactly one token — the
+`: void` return annotation — because everything `buildCreateBody` emits is already plain
+JavaScript, which is the same property that lets the HTML embed the body verbatim.
 
 Both outputs share `buildCreateBody`, so the runnable page can never drift from the
 file you ship. Adding a node type means adding a `constructorFor` case; anything not
@@ -184,7 +190,10 @@ Two things to know if you rebuild that harness:
 Export is verified by **running the exported page**: serve it to Chromium with the CDN
 request routed to `node_modules/phaser/dist/phaser.min.js`, then assert Phaser booted,
 a canvas exists, and the expected fill colours are present. The exported `.ts` is
-checked with `tsc --strict` against the real Phaser types. Both are also run against a
+checked with `tsc --strict` against the real Phaser types, and the exported `.js` is
+bundled with Vite in a throwaway project and run, which is the actual "drop it into your
+Phaser project" path. Serve that bundle over HTTP — browsers refuse ES modules from
+`file://`, which looks like a broken export but is not. Both are also run against a
 project full of hostile names and content — that is what caught the `</script>` hole.
 
 Promoting these scripts into a committed Playwright suite is a good early task.
