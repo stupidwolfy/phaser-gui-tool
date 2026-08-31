@@ -131,6 +131,28 @@ value always matches and the two-step rule silently stops working.
 the move an explicit ending (✓ keep, ✗ put it back, using the `moveOrigin` snapshot the
 store takes in `select()`).
 
+## Code export
+
+`src/io/exportPhaser.ts` turns the document into real Phaser code — a TypeScript
+Scene class, and a self-contained runnable HTML page. It is a pure function of the
+document, which is the payoff for keeping Phaser a renderer.
+
+Both outputs share `buildCreateBody`, so the runnable page can never drift from the
+file you ship. Adding a node type means adding a `constructorFor` case; anything not
+handled there silently exports nothing, so check it alongside the `EditorScene` case.
+
+Generated code is built from free user text, and the escaping is not optional:
+
+- Object names become JS identifiers (`toIdentifier`) — they can be blank, start with
+  a digit, or repeat, so it strips, prefixes and de-duplicates.
+- **Embedding JS in HTML needs more than `JSON.stringify`.** An HTML parser ends the
+  script at the first literal `</script>`, inside a JS string literal included. A
+  project whose text contained one produced an export that would not run *and* could
+  execute arbitrary markup in whoever opened it. `escapeForScriptTag` handles that plus
+  `<!--` and U+2028/9.
+- The document title, the CSS background colour and the CDN version all come from the
+  project file, so they are escaped or validated rather than interpolated raw.
+
 ## Verification
 
 There is no automated suite. Changes to the canvas, layout or file I/O were verified by
@@ -159,7 +181,13 @@ Two things to know if you rebuild that harness:
   save test hangs. `delete window.showSaveFilePicker` in an `addInitScript` — which also
   makes the test exercise the real mobile path.
 
-Promoting that script into a committed Playwright suite is a good early task.
+Export is verified by **running the exported page**: serve it to Chromium with the CDN
+request routed to `node_modules/phaser/dist/phaser.min.js`, then assert Phaser booted,
+a canvas exists, and the expected fill colours are present. The exported `.ts` is
+checked with `tsc --strict` against the real Phaser types. Both are also run against a
+project full of hostile names and content — that is what caught the `</script>` hole.
+
+Promoting these scripts into a committed Playwright suite is a good early task.
 
 ## Deployment
 
