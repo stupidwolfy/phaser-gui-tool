@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type Phaser from 'phaser';
 import { useEditorStore } from './core/store';
 import { clearDraft, loadDraft, scheduleDraftSave } from './io/autosave';
-import { ProjectParseError, openProject, saveProject } from './io/fileIO';
+import { ProjectParseError, downloadFile, openProject, saveProject } from './io/fileIO';
+import {
+  exportFileName,
+  generateRunnableHtml,
+  generateSceneTs,
+} from './io/exportPhaser';
 import { Viewport, fitView } from './editor/Viewport';
 import { Inspector } from './ui/Inspector';
 import { Layout } from './ui/Layout';
@@ -117,8 +122,26 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [handleSave, handleOpen]);
 
+  // Export always downloads rather than using the file picker: there is no
+  // existing handle to write back to, and generated files are throwaway output.
+  const handleExportScene = useCallback(() => {
+    const { project } = useEditorStore.getState();
+    const name = exportFileName(project, '.ts');
+    downloadFile(generateSceneTs(project), name, 'text/plain');
+    notify(`Exported ${name}`);
+  }, [notify]);
+
+  const handleExportHtml = useCallback(() => {
+    const { project } = useEditorStore.getState();
+    const name = exportFileName(project, '.html');
+    downloadFile(generateRunnableHtml(project), name, 'text/html');
+    notify(`Exported ${name}`);
+  }, [notify]);
+
   const actions: ToolbarActions = {
     onNew: handleNew,
+    onExportScene: handleExportScene,
+    onExportHtml: handleExportHtml,
     onOpen: () => void handleOpen(),
     onSave: () => void handleSave(false),
     onSaveAs: () => void handleSave(true),

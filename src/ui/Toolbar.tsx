@@ -7,6 +7,8 @@ export interface ToolbarActions {
   onSave: () => void;
   onSaveAs: () => void;
   onFit: () => void;
+  onExportScene: () => void;
+  onExportHtml: () => void;
 }
 
 /**
@@ -84,6 +86,25 @@ export function Toolbar({
           </button>
         )}
       </div>
+
+      {!compact && (
+        <div className="toolbar__group">
+          <button
+            className="btn"
+            onClick={actions.onExportScene}
+            title="Export a TypeScript Phaser Scene class"
+          >
+            Export .ts
+          </button>
+          <button
+            className="btn"
+            onClick={actions.onExportHtml}
+            title="Export a self-contained page that runs this scene"
+          >
+            Export .html
+          </button>
+        </div>
+      )}
     </header>
   );
 }
@@ -138,6 +159,20 @@ export function FilePanel({ actions }: { actions: ToolbarActions }) {
           New project
         </button>
       </div>
+
+      <div className="panel__section">Export to Phaser</div>
+      <div className="stack">
+        <button className="btn btn--block" onClick={actions.onExportScene}>
+          Scene class (.ts)
+        </button>
+        <button className="btn btn--block" onClick={actions.onExportHtml}>
+          Runnable page (.html)
+        </button>
+      </div>
+      <p className="hint">
+        The .ts file drops into an existing Phaser project. The .html runs on its own —
+        open it in a browser to see the scene.
+      </p>
 
       <p className="hint">
         {fileName ? `Last file: ${fileName}. ` : ''}

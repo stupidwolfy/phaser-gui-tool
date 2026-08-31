@@ -75,8 +75,17 @@ export interface SaveResult {
   fileName?: string;
 }
 
-function downloadFile(contents: string, fileName: string): void {
-  const blob = new Blob([contents], { type: 'application/json' });
+/**
+ * Hands the browser a file to save. Exported because code export uses the same
+ * path: there is no picker to reuse for generated files, and this is the one
+ * mechanism that works on every browser including phones.
+ */
+export function downloadFile(
+  contents: string,
+  fileName: string,
+  mimeType = 'application/json',
+): void {
+  const blob = new Blob([contents], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
