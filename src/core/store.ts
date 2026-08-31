@@ -23,6 +23,11 @@ export interface EditorState {
   future: Project[];
   /** Depth of nested transactions; >0 means "don't record intermediate steps". */
   txDepth: number;
+  /**
+   * The selected node's transform as it was when it was selected, so the mobile
+   * move bar's cancel button can put it back where it started.
+   */
+  moveOrigin: { id: string; transform: Transform } | null;
 
   // -- document lifecycle ----------------------------------------------------
   loadProject: (project: Project, fileName: string | null) => void;
@@ -32,6 +37,10 @@ export interface EditorState {
 
   // -- selection -------------------------------------------------------------
   select: (id: string | null) => void;
+  /** Mobile move bar: put the node back where it was when selected. */
+  cancelMove: () => void;
+  /** Mobile move bar: accept the move and leave move mode. */
+  commitMove: () => void;
 
   // -- editing ---------------------------------------------------------------
   addNode: (type: NodeType) => void;
@@ -123,6 +132,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     past: [],
     future: [],
     txDepth: 0,
+    moveOrigin: null,
 
     loadProject: (project, fileName) =>
       set({
@@ -133,6 +143,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         past: [],
         future: [],
         txDepth: 0,
+        moveOrigin: null,
       }),
 
     resetProject: () =>
@@ -144,6 +155,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         past: [],
         future: [],
         txDepth: 0,
+        moveOrigin: null,
       }),
 
     markSaved: (fileName) => set({ fileName, dirty: false }),
@@ -151,7 +163,25 @@ export const useEditorStore = create<EditorState>((set, get) => {
     renameProject: (name) =>
       set((state) => ({ project: { ...state.project, name }, dirty: true })),
 
-    select: (id) => set({ selectedId: id }),
+    select: (id) =>
+      set((state) => {
+        const node = id ? findNode(activeScene(state.project).children, id) : null;
+        return {
+          selectedId: id,
+          moveOrigin: node ? { id: node.id, transform: { ...node.transform } } : null,
+        };
+      }),
+
+    cancelMove: () => {
+      const { moveOrigin } = get();
+      if (!moveOrigin) return;
+      // Applied as an ordinary edit rather than a history rewind, so cancelling
+      // is itself undoable and can't strand the user mid-stack.
+      get().updateTransform(moveOrigin.id, moveOrigin.transform);
+      set({ selectedId: null, moveOrigin: null });
+    },
+
+    commitMove: () => set({ selectedId: null, moveOrigin: null }),
 
     addNode: (type) => {
       const scene = activeScene(get().project);
@@ -159,12 +189,12 @@ export const useEditorStore = create<EditorState>((set, get) => {
       // top-left origin would put them half off-canvas.
       const node = createNode(type, Math.round(scene.width / 2), Math.round(scene.height / 2));
       editScene((s) => ({ ...s, children: [...s.children, node] }));
-      set({ selectedId: node.id });
+      get().select(node.id);
     },
 
     deleteNode: (id) => {
       editScene((scene) => ({ ...scene, children: removeNode(scene.children, id) }));
-      if (get().selectedId === id) set({ selectedId: null });
+      if (get().selectedId === id) set({ selectedId: null, moveOrigin: null });
     },
 
     renameNode: (id, name) =>

@@ -63,6 +63,18 @@ export class EditorScene extends Phaser.Scene {
   private pinchDistance = 0;
   /** Once the user has zoomed or panned, stop re-framing the view for them. */
   private cameraTouched = false;
+  /**
+   * A drag Phaser started that we are choosing not to honour — a touch landing
+   * on an object that wasn't selected yet. See DRAG_START.
+   */
+  private dragRejected = false;
+  /**
+   * What was selected when the current press began. DRAG_START has to compare
+   * against this, not the live selection: GAMEOBJECT_DOWN has already selected
+   * the object by then, so the live value would always match and the two-step
+   * touch rule would never trigger.
+   */
+  private selectionAtPress: string | null = null;
 
   constructor() {
     super(EditorScene.KEY);
@@ -117,11 +129,17 @@ export class EditorScene extends Phaser.Scene {
   private registerInput(): void {
     const store = useEditorStore;
 
+    // A finger never holds perfectly still. Without a threshold, a tap meant to
+    // select registers as a one-pixel drag and opens a pointless undo step.
+    this.input.dragDistanceThreshold = 8;
+
     this.input.on(
       Phaser.Input.Events.GAMEOBJECT_DOWN,
       (_pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.GameObject) => {
         const id = object.getData('nodeId') as string | undefined;
-        if (id) store.getState().select(id);
+        if (!id) return;
+        this.selectionAtPress = store.getState().selectedId;
+        store.getState().select(id);
       },
     );
 
@@ -130,6 +148,7 @@ export class EditorScene extends Phaser.Scene {
       Phaser.Input.Events.POINTER_DOWN,
       (_pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
         if (currentlyOver.length > 0) return;
+        this.selectionAtPress = null;
         store.getState().select(null);
         this.isPanning = true;
       },
@@ -159,8 +178,21 @@ export class EditorScene extends Phaser.Scene {
     // arrive already in world space, so camera zoom and pan are accounted for.
     this.input.on(
       Phaser.Input.Events.DRAG_START,
-      (_pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.GameObject) => {
-        this.draggingId = (object.getData('nodeId') as string | undefined) ?? null;
+      (pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.GameObject) => {
+        const id = (object.getData('nodeId') as string | undefined) ?? null;
+
+        // Touch is a two-step interaction: the first press only selects, and
+        // only the already-selected object can then be dragged. A fingertip
+        // covers far more than a cursor, so honouring the first touch as a drag
+        // moved whichever object it happened to graze. A mouse is precise
+        // enough that press-and-drag in one gesture is still the right feel.
+        if (pointer.wasTouch && id !== this.selectionAtPress) {
+          this.dragRejected = true;
+          return;
+        }
+
+        this.dragRejected = false;
+        this.draggingId = id;
         // One undo entry per drag, not one per pointer-move.
         store.getState().beginTransaction();
       },
@@ -175,7 +207,7 @@ export class EditorScene extends Phaser.Scene {
         dragY: number,
       ) => {
         const id = object.getData('nodeId') as string | undefined;
-        if (!id) return;
+        if (!id || this.dragRejected) return;
         store
           .getState()
           .updateTransform(id, { x: Math.round(dragX), y: Math.round(dragY) });
@@ -183,8 +215,30 @@ export class EditorScene extends Phaser.Scene {
     );
 
     this.input.on(Phaser.Input.Events.DRAG_END, () => {
+      if (this.dragRejected) {
+        this.dragRejected = false;
+        return;
+      }
       store.getState().endTransaction();
       this.draggingId = null;
+    });
+
+    // A gesture can end without DRAG_END: the browser reclaims the touch, or the
+    // finger leaves the canvas. Left unhandled that stranded draggingId, and the
+    // store sync then refused to reposition that object ever again.
+    const endGesture = () => {
+      this.isPanning = false;
+      this.pinchDistance = 0;
+      if (this.draggingId !== null) {
+        store.getState().endTransaction();
+        this.draggingId = null;
+      }
+      this.dragRejected = false;
+    };
+    this.input.on(Phaser.Input.Events.POINTER_UP_OUTSIDE, endGesture);
+    this.game.canvas.addEventListener('pointercancel', endGesture);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.canvas?.removeEventListener('pointercancel', endGesture);
     });
   }
 

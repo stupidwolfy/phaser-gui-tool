@@ -94,9 +94,35 @@ Each of these was a real bug found in browser testing. Don't re-derive them.
   ships official per-topic docs (`v3-to-v4-migration`, `scale-and-responsive`,
   `input-keyboard-mouse-touch`, `tilemaps`, …) — read those rather than relying on Phaser 3
   memory.
-- **CSS that looks cosmetic but isn't:** `touch-action: none` on `.viewport` (or the
-  browser steals pan/pinch from the camera), and `font-size: 16px` on inputs (or iOS
-  Safari zooms the page on focus).
+- **`touch-action: none` is needed on the canvas itself, not just `.viewport`.** Phaser
+  does not set it, and the property is not inherited, so the canvas computed `auto` and a
+  real phone could reclaim a drag as a scroll mid-gesture. The resulting `pointercancel`
+  fires no `DRAG_END`, which stranded `draggingId` and left that object permanently
+  unmovable. `EditorScene` now also listens for `pointercancel` and
+  `POINTER_UP_OUTSIDE` to end the gesture.
+- **`font-size: 16px` on inputs** is not cosmetic either — anything smaller makes iOS
+  Safari zoom the page on focus.
+- **Emulated touch is not real touch.** Playwright's CDP `Input.dispatchTouchEvent`
+  bypasses the browser's gesture-detection heuristics, so the drag bug above reproduced
+  perfectly on a phone and not at all in the harness. Treat a clean emulated pass as
+  necessary, not sufficient.
+
+## Interaction model
+
+Touch and mouse deliberately differ, keyed off `pointer.wasTouch`:
+
+- **Mouse:** press on an object selects it *and* starts the drag in one gesture.
+- **Touch:** the first press only selects; only the already-selected object can then be
+  dragged. A fingertip covers far more than a cursor, so honouring the first touch as a
+  drag moved whichever object it happened to graze.
+
+`DRAG_START` must compare against `EditorScene.selectionAtPress`, not the live
+`selectedId` — `GAMEOBJECT_DOWN` has already selected the object by then, so the live
+value always matches and the two-step rule silently stops working.
+
+`src/ui/MoveBar.tsx` makes that rule visible on mobile: it appears on selection and gives
+the move an explicit ending (✓ keep, ✗ put it back, using the `moveOrigin` snapshot the
+store takes in `select()`).
 
 ## Verification
 

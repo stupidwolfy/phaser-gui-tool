@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { MoveBar } from './MoveBar';
 import { Sheet } from './Sheet';
 
 export type MobileTab = 'scene' | 'inspect' | 'file' | null;
@@ -81,6 +82,10 @@ export function Layout({
       <Sheet open={tab === 'file'} title="File" onClose={() => setTab(null)}>
         {fileMenu}
       </Sheet>
+
+      {/* Hidden while a sheet is open: the sheet already occupies that space,
+          and the object being moved is up in the canvas band anyway. */}
+      {tab === null && <MoveBar />}
 
       <nav className="tabbar">
         <TabButton label="Scene" icon="☰" active={tab === 'scene'} onClick={() => toggle('scene')} />
