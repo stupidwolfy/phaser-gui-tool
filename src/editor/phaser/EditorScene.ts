@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { activeScene, useEditorStore, type EditorState } from '../../core/store';
-import type { GameObjectNode } from '../../core/schema';
+import { findNode, type GameObjectNode } from '../../core/schema';
 
 /**
  * The editing surface.
@@ -157,6 +157,9 @@ export class EditorScene extends Phaser.Scene {
     this.input.on(Phaser.Input.Events.POINTER_UP, () => {
       this.isPanning = false;
       this.pinchDistance = 0;
+      // Not just DRAG_END: if Phaser never emits one, an open transaction would
+      // silently swallow every later edit's undo entry.
+      this.finishDrag();
     });
 
     this.input.on(Phaser.Input.Events.POINTER_MOVE, (pointer: Phaser.Input.Pointer) => {
@@ -209,49 +212,59 @@ export class EditorScene extends Phaser.Scene {
         const id = object.getData('nodeId') as string | undefined;
         if (!id || this.dragRejected) return;
 
-        // Phaser's drag system reports the pointer but never moves anything
-        // itself, and the store sync deliberately skips the object under the
-        // pointer (below). So this is the only thing moving it — without it the
-        // object simply does not follow your finger.
-        (object as Renderable).setPosition(dragX, dragY);
-
-        store
-          .getState()
-          .updateTransform(id, { x: Math.round(dragX), y: Math.round(dragY) });
+        // Exact floats while the finger is down; finishDrag rounds once at the
+        // end. Rounding per-move would step in whole world units, which is
+        // visible as stutter when the camera is zoomed in.
+        store.getState().updateTransform(id, { x: dragX, y: dragY });
       },
     );
 
-    this.input.on(Phaser.Input.Events.DRAG_END, () => {
-      if (this.dragRejected) {
-        this.dragRejected = false;
-        return;
-      }
-      // Order matters: endTransaction publishes a store change, and the sync it
-      // triggers is what settles the object on its final rounded position.
-      // Clearing draggingId afterwards meant that sync was still skipped, and
-      // the object stayed visually stale until some later, unrelated store
-      // change happened to redraw it.
-      this.draggingId = null;
-      store.getState().endTransaction();
-    });
-
-    // A gesture can end without DRAG_END: the browser reclaims the touch, or the
-    // finger leaves the canvas. Left unhandled that stranded draggingId, and the
-    // store sync then refused to reposition that object ever again.
+    // Every way a gesture can end routes here, because on a real device several
+    // of them fire and some of them don't: DRAG_END, a normal pointer up, a
+    // pointer released off-canvas, or the browser cancelling the touch outright
+    // when it decides the gesture was a scroll.
     const endGesture = () => {
       this.isPanning = false;
       this.pinchDistance = 0;
-      if (this.draggingId !== null) {
-        this.draggingId = null;
-        store.getState().endTransaction();
-      }
-      this.dragRejected = false;
+      this.finishDrag();
     };
+
+    this.input.on(Phaser.Input.Events.DRAG_END, endGesture);
     this.input.on(Phaser.Input.Events.POINTER_UP_OUTSIDE, endGesture);
     this.game.canvas.addEventListener('pointercancel', endGesture);
+    this.game.canvas.addEventListener('touchcancel', endGesture);
+
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.canvas?.removeEventListener('pointercancel', endGesture);
+      this.game.canvas?.removeEventListener('touchcancel', endGesture);
     });
+  }
+
+  /**
+   * Closes an open drag, whatever ended it, and snaps the final position to
+   * whole pixels.
+   *
+   * Idempotent on purpose: on a real device more than one of DRAG_END,
+   * POINTER_UP, POINTER_UP_OUTSIDE and pointercancel can fire for the same
+   * gesture, and sometimes only one of them does. Calling this from all of them
+   * is what makes a drag end reliably rather than depending on which events the
+   * browser chose to send.
+   */
+  private finishDrag(): void {
+    this.dragRejected = false;
+    const id = this.draggingId;
+    if (id === null) return;
+    this.draggingId = null;
+
+    const store = useEditorStore;
+    const node = findNode(activeScene(store.getState().project).children, id);
+    if (node) {
+      store.getState().updateTransform(id, {
+        x: Math.round(node.transform.x),
+        y: Math.round(node.transform.y),
+      });
+    }
+    store.getState().endTransaction();
   }
 
   update(): void {
@@ -381,12 +394,14 @@ export class EditorScene extends Phaser.Scene {
   private applyNode(object: Renderable, node: GameObjectNode, index: number): void {
     const { transform } = node;
 
-    // Skip the position of the object under the pointer. The DRAG handler is
-    // already tracking it 1:1, and re-applying the rounded store value on every
-    // pointer-move would fight that with visible jitter.
-    if (this.draggingId !== node.id) {
-      object.setPosition(transform.x, transform.y);
-    }
+    // Always mirror the document, including mid-drag. An earlier version skipped
+    // the object under the pointer to stop the rounded store value fighting the
+    // gesture, but that made what you see depend on a delicate ordering of
+    // events — and any gesture the browser cut short (pointercancel) left the
+    // object stranded at a stale position. The drag now stores exact floats and
+    // rounds once on release, so there is nothing to fight and the invariant is
+    // simply: drawn position == stored position, always.
+    object.setPosition(transform.x, transform.y);
     object.setRotation(Phaser.Math.DegToRad(transform.rotation));
     object.setScale(transform.scaleX, transform.scaleY);
     object.setVisible(node.visible);
