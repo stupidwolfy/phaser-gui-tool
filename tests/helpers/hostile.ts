@@ -69,6 +69,29 @@ export function hostileProject(): Project {
             children: [],
           },
           {
+            id: 'e',
+            // A group carries its own hostile name into an identifier, and its
+            // children reach the export through a second path — the nested
+            // emit and the `add([...])` list — that the flat cases never take.
+            name: `${breakout} group`,
+            type: 'container',
+            visible: true,
+            transform: { x: 700, y: 400, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { alpha: 1 },
+            children: [
+              {
+                id: 'e1',
+                name: breakout,
+                type: 'rectangle',
+                visible: true,
+                // Local coordinates: the group puts it at 700,400.
+                transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+                props: { width: 120, height: 80, fill: '#22d3ee', alpha: 1 },
+                children: [],
+              },
+            ],
+          },
+          {
             id: 'd',
             name: 'name123',
             type: 'text',

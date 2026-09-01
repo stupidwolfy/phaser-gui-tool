@@ -1,7 +1,11 @@
 import { create } from 'zustand';
 import { cloneWithNewIds, createNode, newProject } from './defaults';
 import {
+  containsNode,
   findNode,
+  findParent,
+  localTransformIn,
+  worldTransformOf,
   type GameObjectNode,
   type ImageAsset,
   type NodeType,
@@ -75,16 +79,35 @@ export interface EditorState {
   removeAsset: (id: string) => void;
 
   // -- editing ---------------------------------------------------------------
+  /**
+   * Adds a node. It lands in the group you are working in — the selection when
+   * that is a group, otherwise the group the selection sits in — and at the top
+   * level of the scene when neither applies.
+   */
   addNode: (type: NodeType) => void;
+  /**
+   * Reparents a node, keeping it exactly where it is on the canvas: the stored
+   * transform is recomputed against the new parent's. `parentId` must name a
+   * container, and may not be the node itself or anything inside it — a cycle
+   * would make the tree unrenderable and unsaveable.
+   */
+  moveNode: (id: string, parentId: string | null, index?: number) => void;
+  /**
+   * Wraps a node in a new container, in its place in the draw order. The
+   * container takes the node's position, so nothing moves, and the node keeps
+   * its own rotation and scale.
+   */
+  groupNode: (id: string) => void;
   deleteNode: (id: string) => void;
   /** Copies the node, its style and its subtree, one step above the original. */
   duplicateNode: (id: string) => void;
   copyNode: (id: string) => void;
   pasteNode: () => void;
   /**
-   * Moves a top-level node to `toIndex`, clamped. Array order *is* draw order —
-   * the Phaser sync sets each object's depth from its index — so this is the
-   * whole of raise, lower, bring to front and send to back.
+   * Moves a node to `toIndex` among its own siblings, clamped. Array order *is*
+   * draw order — the Phaser sync sets each object's depth from its index — so
+   * this is the whole of raise, lower, bring to front and send to back, within
+   * whichever list the node lives in.
    */
   reorderNode: (id: string, toIndex: number) => void;
   renameNode: (id: string, name: string) => void;
@@ -117,6 +140,50 @@ function mapNode(
     const children = mapNode(node.children, id, fn);
     return children === node.children ? node : { ...node, children };
   });
+}
+
+/**
+ * Rebuilds the tree with `fn` applied to the *list* `id` belongs to — its
+ * parent's children, or the scene's own array.
+ *
+ * Draw order is array order at every level of the tree, so raise, lower,
+ * duplicate and drag-to-reorder are all "splice this list" and differ only in
+ * how. Doing that through one traversal is what stops each of them growing its
+ * own idea of where a node lives.
+ */
+function editSiblings(
+  nodes: GameObjectNode[],
+  id: string,
+  fn: (list: GameObjectNode[], index: number) => GameObjectNode[],
+): GameObjectNode[] {
+  const index = nodes.findIndex((node) => node.id === id);
+  if (index !== -1) return fn(nodes, index);
+
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.children.length === 0) return node;
+    const children = editSiblings(node.children, id, fn);
+    if (children === node.children) return node;
+    changed = true;
+    return { ...node, children };
+  });
+  // Identity is how editProject hears "nothing happened".
+  return changed ? next : nodes;
+}
+
+/** Inserts `node` into a container's children, or into the scene's own list. */
+function insertNode(
+  nodes: GameObjectNode[],
+  parentId: string | null,
+  node: GameObjectNode,
+  index?: number,
+): GameObjectNode[] {
+  const into = (list: GameObjectNode[]) => {
+    const at = Math.max(0, Math.min(list.length, index ?? list.length));
+    return [...list.slice(0, at), node, ...list.slice(at)];
+  };
+  if (parentId === null) return into(nodes);
+  return mapNode(nodes, parentId, (parent) => ({ ...parent, children: into(parent.children) }));
 }
 
 function removeNode(nodes: GameObjectNode[], id: string): GameObjectNode[] {
@@ -173,6 +240,41 @@ function offsetCopy(node: GameObjectNode): GameObjectNode {
       y: copy.transform.y + COPY_OFFSET,
     },
   } as GameObjectNode;
+}
+
+/**
+ * Settles a computed transform on numbers a person would type. Reparenting
+ * divides and rotates, so without this a node dropped into a group and back out
+ * again drifts to 479.99999999999994.
+ */
+function tidyTransform(transform: Transform): Transform {
+  const round = (value: number, places: number) => Number(value.toFixed(places));
+  return {
+    x: Math.round(transform.x),
+    y: Math.round(transform.y),
+    rotation: round(transform.rotation, 3),
+    scaleX: round(transform.scaleX, 3),
+    scaleY: round(transform.scaleY, 3),
+  };
+}
+
+/**
+ * The container a new or pasted object should land in: the selection when it is
+ * a group, the group the selection sits in otherwise, and the scene itself when
+ * neither applies.
+ *
+ * The second case matters as much as the first. Filling a group means selecting
+ * a group, adding, then having something *else* selected — the object just
+ * added — and the next add belongs beside it, not back out at the top level.
+ */
+function openContainerId(state: EditorState): string | null {
+  const { selectedId } = state;
+  if (!selectedId) return null;
+  const children = activeScene(state.project).children;
+  const node = findNode(children, selectedId);
+  if (!node) return null;
+  if (node.type === 'container') return node.id;
+  return findParent(children, node.id)?.id ?? null;
 }
 
 export function activeScene(project: Project): SceneDoc {
@@ -319,12 +421,84 @@ export const useEditorStore = create<EditorState>((set, get) => {
       })),
 
     addNode: (type) => {
-      const scene = activeScene(get().project);
-      // Drop new objects at the scene centre rather than 0,0, which on a
-      // top-left origin would put them half off-canvas.
-      const node = createNode(type, Math.round(scene.width / 2), Math.round(scene.height / 2));
-      editScene((s) => ({ ...s, children: [...s.children, node] }));
+      const state = get();
+      const scene = activeScene(state.project);
+      const parentId = openContainerId(state);
+      // At the top level, drop new objects at the scene centre rather than 0,0,
+      // which on a top-left origin would put them half off-canvas. Inside a
+      // container there is no centre to speak of, so a new child starts on the
+      // container's own origin, which is where the user can see it.
+      const node = parentId
+        ? createNode(type, 0, 0)
+        : createNode(type, Math.round(scene.width / 2), Math.round(scene.height / 2));
+      editScene((s) => ({ ...s, children: insertNode(s.children, parentId, node) }));
       get().select(node.id);
+    },
+
+    moveNode: (id, parentId, index) =>
+      editScene((scene) => {
+        const node = findNode(scene.children, id);
+        if (!node) return scene;
+        if (parentId !== null) {
+          const parent = findNode(scene.children, parentId);
+          // Only a container can hold children, and a node cannot be dropped
+          // into its own subtree: that would detach the branch from the scene
+          // and leave a cycle nothing could render or serialise.
+          if (!parent || parent.type !== 'container' || containsNode(node, parentId)) {
+            return scene;
+          }
+        }
+        if ((findParent(scene.children, id)?.id ?? null) === parentId && index === undefined) {
+          return scene;
+        }
+
+        // Recomputed against the new parent so the object does not jump: what
+        // reparenting changes is who it moves with, not where it is.
+        const local = tidyTransform(
+          localTransformIn(
+            worldTransformOf(scene.children, parentId),
+            worldTransformOf(scene.children, id),
+          ),
+        );
+        const moved = { ...node, transform: local } as GameObjectNode;
+        return {
+          ...scene,
+          children: insertNode(removeNode(scene.children, id), parentId, moved, index),
+        };
+      }),
+
+    groupNode: (id) => {
+      const scene = activeScene(get().project);
+      const node = findNode(scene.children, id);
+      if (!node) return;
+
+      // The container takes the node's position and the node moves to the
+      // container's origin: an exact swap, with no rotation or scale to
+      // decompose, so nothing on the canvas moves by a pixel.
+      const group = createNode(
+        'container',
+        Math.round(node.transform.x),
+        Math.round(node.transform.y),
+        `${node.name} group`,
+      );
+      const child = {
+        ...node,
+        transform: {
+          ...node.transform,
+          x: node.transform.x - Math.round(node.transform.x),
+          y: node.transform.y - Math.round(node.transform.y),
+        },
+      } as GameObjectNode;
+
+      editScene((s) => ({
+        ...s,
+        children: editSiblings(s.children, id, (list, index) => [
+          ...list.slice(0, index),
+          { ...group, children: [child] },
+          ...list.slice(index + 1),
+        ]),
+      }));
+      get().select(group.id);
     },
 
     deleteNode: (id) => {
@@ -333,19 +507,19 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
 
     duplicateNode: (id) => {
-      const children = activeScene(get().project).children;
-      const index = children.findIndex((node) => node.id === id);
-      if (index === -1) return;
-      const copy = offsetCopy(children[index]);
+      const node = findNode(activeScene(get().project).children, id);
+      if (!node) return;
+      const copy = offsetCopy(node);
       editScene((scene) => ({
         ...scene,
-        // Directly after the original, so the copy sits one step in front of
-        // what it was copied from rather than jumping to the top of the scene.
-        children: [
-          ...scene.children.slice(0, index + 1),
+        // Directly after the original, among its own siblings: the copy sits
+        // one step in front of what it was copied from, in the same container,
+        // rather than jumping to the top of the scene.
+        children: editSiblings(scene.children, id, (list, index) => [
+          ...list.slice(0, index + 1),
           copy,
-          ...scene.children.slice(index + 1),
-        ],
+          ...list.slice(index + 1),
+        ]),
       }));
       get().select(copy.id);
     },
@@ -356,26 +530,32 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
 
     pasteNode: () => {
-      const { clipboard } = get();
+      const state = get();
+      const { clipboard } = state;
       if (!clipboard) return;
       const copy = offsetCopy(clipboard);
-      editScene((scene) => ({ ...scene, children: [...scene.children, copy] }));
+      const parentId = openContainerId(state);
+      editScene((scene) => ({
+        ...scene,
+        children: insertNode(scene.children, parentId, copy),
+      }));
       // Cascade: the next paste offsets from where this one landed.
       set({ clipboard: copy });
       get().select(copy.id);
     },
 
     reorderNode: (id, toIndex) =>
-      editScene((scene) => {
-        const from = scene.children.findIndex((node) => node.id === id);
-        if (from === -1) return scene;
-        const to = Math.max(0, Math.min(scene.children.length - 1, toIndex));
-        if (to === from) return scene;
-        const children = scene.children.slice();
-        const [node] = children.splice(from, 1);
-        children.splice(to, 0, node);
-        return { ...scene, children };
-      }),
+      editScene((scene) => ({
+        ...scene,
+        children: editSiblings(scene.children, id, (list, from) => {
+          const to = Math.max(0, Math.min(list.length - 1, toIndex));
+          if (to === from) return list;
+          const next = list.slice();
+          const [node] = next.splice(from, 1);
+          next.splice(to, 0, node);
+          return next;
+        }),
+      })),
 
     renameNode: (id, name) =>
       editScene((scene) => ({

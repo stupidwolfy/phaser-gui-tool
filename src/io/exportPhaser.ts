@@ -183,6 +183,8 @@ function constructorFor(node: GameObjectNode, used: Map<string, UsedAsset>): str
       if (!entry) return null;
       return `this.add.image(${num(x)}, ${num(y)}, ${str(entry.key)})`;
     }
+    case 'container':
+      return `this.add.container(${num(x)}, ${num(y)})`;
     case 'text':
       return (
         `this.add.text(${num(x)}, ${num(y)}, ${str(node.props.text)}, {\n` +
@@ -223,6 +225,54 @@ function modifiersFor(node: GameObjectNode): string[] {
   return out;
 }
 
+/**
+ * Emits the statements for one node and, when it is a container, for everything
+ * inside it. Returns the identifier it bound the object to, or null when the
+ * node produced no code at all.
+ *
+ * A group is emitted as its own `const`, then its children, then one
+ * `group.add([...])` — the same shape the Phaser docs use, and flat rather than
+ * nested so that every object in the scene stays a top-level binding the reader
+ * can reach.
+ */
+function emitNode(
+  node: GameObjectNode,
+  assets: Map<string, UsedAsset>,
+  used: Set<string>,
+  lines: string[],
+): string | null {
+  const constructor = constructorFor(node, assets);
+  if (constructor === null) {
+    // Say so rather than skipping silently: an object missing from the export
+    // with no explanation reads as an exporter bug.
+    lines.push(`// ${node.name}: no image chosen in the editor, so nothing to add.`);
+    lines.push('');
+    return null;
+  }
+
+  const id = toIdentifier(node.name, used);
+  const modifiers = modifiersFor(node);
+  const chain = modifiers.length > 0 ? `\n      ${modifiers.join('\n      ')}` : '';
+  lines.push(`const ${id} = ${constructor}${chain};`);
+  // Carries the editor name through, so objects stay findable at runtime.
+  lines.push(`${id}.setName(${str(node.name)});`);
+  lines.push('');
+
+  if (node.type === 'container' && node.children.length > 0) {
+    const childIds = node.children
+      .map((child) => emitNode(child, assets, used, lines))
+      .filter((childId): childId is string => childId !== null);
+    // Added after the children are built, and in document order: a container's
+    // list order is its draw order, exactly as the scene's array is.
+    if (childIds.length > 0) {
+      lines.push(`${id}.add([${childIds.join(', ')}]);`);
+      lines.push('');
+    }
+  }
+
+  return id;
+}
+
 /** The body of `create()`, shared verbatim by both outputs. */
 function buildCreateBody(scene: SceneDoc, assets: Map<string, UsedAsset>): string {
   const used = new Set<string>(['this']);
@@ -231,25 +281,7 @@ function buildCreateBody(scene: SceneDoc, assets: Map<string, UsedAsset>): strin
   ];
 
   if (scene.children.length > 0) lines.push('');
-
-  for (const node of scene.children) {
-    const constructor = constructorFor(node, assets);
-    if (constructor === null) {
-      // Say so rather than skipping silently: an object missing from the export
-      // with no explanation reads as an exporter bug.
-      lines.push(`// ${node.name}: no image chosen in the editor, so nothing to add.`);
-      lines.push('');
-      continue;
-    }
-
-    const id = toIdentifier(node.name, used);
-    const modifiers = modifiersFor(node);
-    const chain = modifiers.length > 0 ? `\n      ${modifiers.join('\n      ')}` : '';
-    lines.push(`const ${id} = ${constructor}${chain};`);
-    // Carries the editor name through, so objects stay findable at runtime.
-    lines.push(`${id}.setName(${str(node.name)});`);
-    lines.push('');
-  }
+  for (const node of scene.children) emitNode(node, assets, used, lines);
 
   while (lines.at(-1) === '') lines.pop();
   return lines.map((line) => (line ? `    ${line}` : '')).join('\n');

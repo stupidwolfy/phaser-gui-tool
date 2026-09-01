@@ -15,6 +15,8 @@ import { hostileProject } from './helpers/hostile';
 const PHASER_DIST = 'node_modules/phaser/dist/phaser.min.js';
 const RECT_FILL = '#4f8cff';
 const ELLIPSE_FILL = '#ffb84f';
+/** The fill of the rectangle nested in the hostile project's group. */
+const NESTED_FILL = '#22d3ee';
 
 interface Run {
   page: Page;
@@ -118,9 +120,29 @@ test('an export of a hostile project runs, and injects nothing', async ({
   // not allowed to cost the export its meaning.
   const shot = await run.page.locator('canvas').screenshot();
   expect((await findColor(run.page, shot, RECT_FILL)).count).toBeGreaterThan(100);
+  // Including the one inside a group, which reaches the canvas only if the
+  // nested emit and its `add([...])` both came out right.
+  expect((await findColor(run.page, shot, NESTED_FILL)).count).toBeGreaterThan(100);
   expect(run.errors).toEqual([]);
 
   await run.close();
+});
+
+test('a group exports as a container its children are added to', async ({ editor }) => {
+  await editor.addObject('Rectangle');
+  // Not one of the starter project's names: the exporter de-duplicates
+  // identifiers, and a collision would rename the very thing being asserted.
+  await editor.setField('Name', 'Widget');
+  await editor.openPanel('inspect');
+  await editor.panel('inspect').getByRole('button', { name: 'Wrap in a new group' }).click();
+  await editor.settle();
+
+  const exported = await editor.exportCode('ts');
+  expect(exported.contents).toContain('this.add.container(');
+  // The group is built before its children and they are added to it after, so
+  // the reader gets one binding per object rather than a nested literal.
+  expect(exported.contents).toMatch(/const widgetGroup = this\.add\.container\(/);
+  expect(exported.contents).toMatch(/widgetGroup\.add\(\[widget\]\);/);
 });
 
 test('a sprite with no image is called out rather than dropped', async ({ editor }) => {

@@ -44,7 +44,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
   color: inherit;
 }
@@ -306,6 +307,12 @@ input {
   padding: 0;
 }
 
+/* The row and its nested list together. The row itself is the drag target and
+   the drop bands are measured against it, so the two cannot be one element. */
+.tree__group {
+  display: block;
+}
+
 .tree__item {
   display: flex;
   align-items: center;
@@ -351,6 +358,23 @@ input {
   white-space: nowrap;
 }
 
+/* Nested rows are indented by depth, and the chevron that collapses a group
+   sits in the same column as the chip so the two never fight for space. */
+.tree__indent {
+  flex-shrink: 0;
+}
+
+.tree__twisty {
+  width: 22px;
+  min-height: var(--touch);
+  flex-shrink: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
 /* A colour chip per node type — quicker to scan than a text label. */
 .tree__type {
   width: 10px;
@@ -375,6 +399,20 @@ input {
 
 .tree__type[data-type='sprite'] {
   background: #ff6bd6;
+}
+
+/* Hollow, because a group is a frame around other objects rather than a thing
+   with a colour of its own. */
+.tree__type[data-type='container'] {
+  background: none;
+  border: 2px solid var(--text-dim);
+}
+
+/* The whole row of a container the pointer is about to drop into. Distinct
+   from the before/after edge lines, which mean "reorder" rather than "put it
+   in here" — telling those two apart is the whole of drag-to-nest. */
+.tree__item.is-drop-into {
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 /* ---------------------------------------------------------------- assets -- */
