@@ -24,12 +24,14 @@ a thumb on a 390px-wide screen.
 npm run dev        # http://localhost:5173/phaser-gui-tool/  (note the base path)
 npm run build      # tsc -b && vite build  — typecheck is part of the build
 npm run preview    # serve dist/ at the same base path
-npm run typecheck  # tsc -b alone
+npm run typecheck  # tsc -b alone, tests included
+npm test           # Playwright: builds, previews dist/, drives it in Chromium
 ```
 
-There is no test runner or linter configured yet. `npm run build` is the gate — it fails
-on type errors, and `noUnusedLocals`/`noUnusedParameters` are on, so dead bindings break
-the build.
+There is no linter configured. `npm run build` and `npm test` are the two gates, and CI
+runs both on every pull request. The build fails on type errors, and
+`noUnusedLocals`/`noUnusedParameters` are on, so dead bindings break it;
+`tsconfig.tests.json` puts the suite under the same rules.
 
 ## The one architectural rule
 
@@ -72,6 +74,10 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
 6. `src/io/exportPhaser.ts` — a `constructorFor` case. This one fails silently rather
    than at compile time: an unhandled type exports nothing at all, so check it in the
    same pass as the `EditorScene` case.
+7. `tests/` — the two silent steps are exactly the two the suite covers: add the type to
+   `tests/editing.spec.ts` (it draws where the document says, and survives a save and an
+   open) and give it a hostile instance in `tests/helpers/hostile.ts`, which puts its
+   strings through both export toolchains.
 
 Bump `SCHEMA_VERSION` when a *deployed older build* would break on the new file, not only
 when this build can't read an old one — those are different directions and the second is
@@ -260,55 +266,84 @@ Generated code is built from free user text, and the escaping is not optional:
 
 ## Verification
 
-There is no automated suite. Changes to the canvas, layout or file I/O were verified by
-driving the production build in Chromium via Playwright, at **1440×900 and 390×844**,
-checking: add → select → drag → inspector edit → undo → save → reload → reopen, with a
-console-error assertion.
+`npm test` runs a committed Playwright suite against the **production build** (its
+`webServer` builds and previews `dist/`, so the base path and the real bundle are part of
+what is under test). CI runs it on every pull request via
+`.github/workflows/ci.yml`. Two projects, always both: **desktop 1440×900** and
+**mobile 390×844**, because the layout, the file dialogs and the whole touch interaction
+model differ between them.
 
-**Assert what is drawn, not just what is stored.** The bug above passed every
-store-level assertion — the document held the right coordinates the whole time while the
-canvas showed something else. The harness now scans the canvas screenshot for the
-rectangle's fill colour and compares centroids across each step.
+```
+tests/
+  editing.spec.ts           add → select → drag → inspector → undo → save → reopen
+  assets.spec.ts            image import, decode-on-open, removal
+  export.spec.ts            the runnable page, actually run
+  export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
+  helpers/editor.ts         the page object: panels, fields, gestures, downloads
+  helpers/pixels.ts         canvas readback and colour centroids
+  helpers/hostile.ts        the project made of everything a project should not contain
+  helpers/png.ts            a solid-colour PNG, so image fixtures are readable in a diff
+```
 
-Two traps in that pixel approach, both of which produced confident wrong answers:
+Adding a node type means adding to `editing.spec.ts` (it draws, it drags, it survives a
+save) and to `helpers/hostile.ts` (any new string that reaches the exporter).
 
-- The move bar floats *over* the canvas and its confirm button is `--accent`, the same
-  colour as the default rectangle fill, so it was counted as part of the object. Clip the
-  bottom band off the screenshot.
-- Clip the screenshot, but compute pointer coordinates from the *full* canvas box, or the
-  touches land in empty space and every assertion silently reads "nothing moved".
+**Assert what is drawn, not just what is stored.** The drag bug that prompted all this
+passed every store-level assertion — the document held the right coordinates the whole
+time while the canvas showed something else. Every canvas check goes through
+`EditorPage.findDrawn`, which screenshots the canvas and returns the centroid of a colour.
 
-Things to know if you rebuild that harness:
+Traps, each of which produced a confident wrong answer at some point:
 
-- Chromium is preinstalled at `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`; do not
-  run `playwright install`. `playwright` itself is not a dependency — `npm i -D playwright
-  --no-save`.
-- **Headless Chromium exposes `showSaveFilePicker` but can never resolve it** (no UI), so a
-  save test hangs. `delete window.showSaveFilePicker` in an `addInitScript` — which also
-  makes the test exercise the real mobile path.
-- **Read the canvas with Playwright's element screenshot, never by drawing it into a 2D
-  context in the page.** Phaser runs WebGL without `preserveDrawingBuffer`, so a readback
-  after the frame is composited returns solid black — and a centroid of nothing looks
-  exactly like "the object isn't drawn". Set `deviceScaleFactor: 1` so screenshot pixels
-  map 1:1 to CSS pixels.
-- On mobile the panels are **modal sheets over the canvas**; close them before any canvas
-  interaction or the tap lands on the sheet. The tabs are Scene / Properties / File.
-- Importing an image is driven with `page.waitForEvent('filechooser')` — the editor's
-  `<input type="file">` path is the same one a phone takes.
+- The move bar and the toast float *over* the canvas, and the move bar's confirm button is
+  `--accent` — the same colour as the default rectangle fill, so it was counted as part of
+  the object. `EditorPage.shot` clips that bottom band off. Clip the screenshot, but
+  compute pointer coordinates from the *full* canvas box, or the touches land in empty
+  space and every assertion silently reads "nothing moved".
+- **Read the canvas with Playwright's element or page screenshot, never by drawing it into
+  a 2D context in the page.** Phaser runs WebGL without `preserveDrawingBuffer`, so a
+  readback after the frame is composited returns solid black — and the centroid of nothing
+  looks exactly like "the object isn't drawn". `deviceScaleFactor: 1` keeps screenshot
+  pixels 1:1 with CSS pixels, which is what lets a centroid be compared with a box.
+- **Headless Chromium exposes `showSaveFilePicker` but can never resolve it** (there is no
+  UI), so a save test hangs forever. `EditorPage.open` deletes it in an `addInitScript`,
+  which also makes both projects exercise the download/`<input>` path a phone takes.
+- **Phaser starts a drag only after 8px of movement, and captures the pointer-to-object
+  offset at that moment** — so every drag leaves the object behind by however far the
+  pointer had travelled when the drag began. That is editor behaviour, not a harness
+  artefact. `EditorPage.drag` sends one deliberate priming move and waits a frame, so the
+  distance is a known constant instead of whatever the machine's frame timing made it, and
+  returns the displacement the object should actually take.
+- **Emulated touch is not real touch.** The touch gestures go through CDP
+  `Input.dispatchTouchEvent` (Playwright's mouse would take the desktop branch and never
+  exercise the two-step rule), and CDP bypasses the browser's own gesture heuristics. The
+  `pointercancel` bug reproduced perfectly on a phone and not at all in the harness. Treat
+  a clean run as necessary, not sufficient.
+- On mobile the panels are **modal sheets over the canvas**, closed ones translated
+  off-screen rather than hidden — so they still match locators, and a tap aimed at the
+  canvas lands on them. `openPanel`/`closePanels` handle it; call `closePanels` before any
+  canvas interaction. A sheet also resizes the viewport, which re-fits the camera.
+- The export toolchain specs shell out to `tsc` and `vite`, so that file runs its tests
+  sequentially (`describe.configure({ mode: 'default' })`) even though the rest of the
+  suite is fully parallel. Two compilers competing with the browsers is how it went from
+  ten seconds to a four-minute timeout.
+- `@playwright/test` is pinned to `~1.56` because that is the release whose bundled
+  Chromium (1194) is the one preinstalled in the container this repo is developed in — do
+  not run `playwright install` there. `CHROMIUM_PATH` overrides the executable if a
+  machine's browser is somewhere else. CI installs the matching browser itself.
 
-Export is verified by **running the exported page**: serve it to Chromium with the CDN
-request routed to `node_modules/phaser/dist/phaser.min.js`, then assert Phaser booted,
-a canvas exists, and the expected fill colours are present. The exported `.ts` is
+Export is verified by **running the exported page**: it is served over HTTP with the CDN
+request routed to `node_modules/phaser/dist/phaser.min.js`, then asserted to have booted
+Phaser, drawn a canvas and produced the expected fill colours. The exported `.ts` is
 checked with `tsc --strict` against the real Phaser types, and the exported `.js` is
 bundled with Vite in a throwaway project and run, which is the actual "drop it into your
 Phaser project" path. Serve that bundle over HTTP — browsers refuse ES modules from
-`file://`, which looks like a broken export but is not. Both are also run against a
-project full of hostile names and content — that is what caught the `</script>` hole, and,
-once the hostile project's *scene name* was made hostile too, the unescaped `super(...)`
-above. Widen what the hostile project covers whenever a new field starts reaching the
-output; the fields nobody thought to make hostile are exactly where the holes were.
-
-Promoting these scripts into a committed Playwright suite is a good early task.
+`file://`, which looks like a broken export but is not. All of it also runs against
+`hostileProject()`, a project full of hostile names and content — that is what caught the
+`</script>` hole, and, once the hostile project's *scene name* was made hostile too, the
+unescaped `super(...)` above. Widen what that fixture covers whenever a new field starts
+reaching the output; the fields nobody thought to make hostile are exactly where the holes
+were.
 
 ## Writing commits and pull requests
 
@@ -341,9 +376,7 @@ Animations and sprite sheets (the asset table holds whole images only, and `spri
 render as Phaser `Image`s, not `Sprite`s — animation is the reason to change that),
 tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Multi-select
 is not built either — `selectedId: string | null` runs through the store, the scene and
-the move bar, so it is its own iteration.
-There is still no committed test suite; promoting the Playwright scripts described under
-Verification is the standing next-best task. The schema's `children` array and Phaser
+the move bar, so it is its own iteration. The schema's `children` array and Phaser
 Containers are the intended path for nesting — `EditorScene` currently renders only
 top-level nodes on purpose, since nested ones would be positioned wrong without
 Containers.
