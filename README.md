@@ -15,6 +15,8 @@ on a desktop.
 - Select several objects at once — turn on **Multi** in the scene tree and tap them, or
   Shift/Ctrl-click on a desktop — then move, group, duplicate, hide or delete all of them
   in one go
+- Line several objects up: align their left, right, top or bottom edges or their
+  centres, or spread three or more evenly across or down
 - Resize by dragging the corner handle, keeping the aspect ratio unless you unlink it
 - Import your own images and use them as sprites, with tint, flip and alpha
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
@@ -83,7 +85,7 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; five iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; six iterations in, it is a
 working editor but a small one.
 
 **Not built yet** — animations and sprite sheets, tilemaps, physics, particles, audio,
@@ -115,6 +117,7 @@ from the last run.
 src/
   core/schema.ts      the project document types (the file format)
   core/store.ts       zustand store: document, selection, undo/redo
+  core/bounds.ts      the boxes the renderer last drew, and the align maths
   io/fileIO.ts        save/open, File System Access API + download fallback
   io/exportPhaser.ts  the document turned into runnable Phaser code
   editor/phaser/      the Phaser scene that renders the document
@@ -122,6 +125,7 @@ src/
 tests/
   editing.spec.ts     add, drag, inspect, group, undo, save, reopen — on both viewports
   multi-select.spec.ts  building a selection, and moving/grouping it as one
+  align.spec.ts       aligning and distributing a selection by its drawn edges
   assets.spec.ts      image import, drawing, save/reopen, removal
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite

@@ -2,6 +2,15 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { cloneWithNewIds, createNode, newProject } from './defaults';
 import {
+  alignDeltas,
+  boundsOf,
+  distributeDeltas,
+  type AlignEdge,
+  type Axis,
+  type Deltas,
+  type Rect,
+} from './bounds';
+import {
   composeTransform,
   containsNode,
   findNode,
@@ -164,6 +173,18 @@ export interface EditorState {
    * way on screen, not each along its own group's axes.
    */
   nudgeSelection: (dx: number, dy: number) => void;
+  /**
+   * Lines the selection up on one edge or centre line of its own bounding box,
+   * in one undo step.
+   *
+   * Works on measured bounds (`src/core/bounds.ts`) rather than on stored
+   * positions: a node's `x`/`y` is its origin, and lining origins up is not
+   * lining objects up as soon as two of them are different sizes — which they
+   * almost always are.
+   */
+  alignSelection: (edge: AlignEdge) => void;
+  /** Spaces the selection evenly along one axis, by centres. Needs three. */
+  distributeSelection: (axis: Axis) => void;
   updateTransform: (id: string, patch: Partial<Transform>) => void;
   updateProps: (id: string, patch: Record<string, unknown>) => void;
   updateScene: (patch: Partial<Omit<SceneDoc, 'children' | 'id'>>) => void;
@@ -376,6 +397,37 @@ function tidyTransform(transform: Transform): Transform {
 }
 
 /**
+ * The `x`/`y` a node needs to travel `dx`/`dy` in *world* pixels.
+ *
+ * The delta is converted into the space the node's own x/y live in, so a node
+ * inside a rotated or scaled group still travels the way the screen says. It is
+ * applied as a *difference* against the stored value rather than as the
+ * recomputed local position: the world round trip is not numerically exact, and
+ * a node moved back and forth should land on the number it started on. For a
+ * top-level node the parent is the identity and the whole thing is `x + dx`,
+ * integers included.
+ *
+ * Every world-space move goes through here — the arrow keys, align and
+ * distribute — because getting this wrong is invisible until someone nests
+ * something in a rotated group.
+ */
+function worldMovePatch(
+  children: GameObjectNode[],
+  node: GameObjectNode,
+  dx: number,
+  dy: number,
+): { x: number; y: number } {
+  const parent = worldTransformOf(children, findParent(children, node.id)?.id ?? null);
+  const world = worldTransformOf(children, node.id);
+  const moved = localTransformIn(parent, { ...world, x: world.x + dx, y: world.y + dy });
+  const local = localTransformIn(parent, world);
+  return {
+    x: settle(node.transform.x + moved.x - local.x),
+    y: settle(node.transform.y + moved.y - local.y),
+  };
+}
+
+/**
  * The container a new or pasted object should land in: the selection when it is
  * a group, the group the selection sits in otherwise, and the scene itself when
  * neither applies.
@@ -445,6 +497,44 @@ export const useEditorStore = create<EditorState>((set, get) => {
         scenes: project.scenes.map((scene) => (scene.id === current.id ? next : scene)),
       };
     });
+
+  /**
+   * Moves the selection by a world-space delta per node, worked out from what
+   * the renderer last drew.
+   *
+   * Shared by align and distribute because everything except the arithmetic is
+   * the same: take the selection's roots, look up each one's measured box, and
+   * apply the result as one undo step. A root with no box yet — nothing drawn,
+   * or a sync not caught up — drops out of the set entirely rather than being
+   * treated as a point at the origin, which would fling it across the scene.
+   */
+  const applyWorldDeltas = (
+    state: EditorState,
+    deltasFor: (boxes: ReadonlyMap<string, Rect>) => Deltas,
+  ) => {
+    const children = activeScene(state.project).children;
+    const boxes = new Map<string, Rect>();
+    for (const id of selectionRoots(children, state.selectedIds)) {
+      const box = boundsOf(id);
+      if (box) boxes.set(id, box);
+    }
+
+    // Everything that actually moves, worked out before the transaction opens:
+    // `beginTransaction` snapshots the document whether or not an edit follows,
+    // so an alignment that has nothing left to do would otherwise leave an undo
+    // step that undoes nothing. Pressing Left twice is the normal case, not an
+    // edge one — the second press is how you check the first.
+    const moves = [...deltasFor(boxes)].flatMap(([id, { dx, dy }]) => {
+      if (dx === 0 && dy === 0) return [];
+      const node = findNode(children, id);
+      return node ? [{ id, patch: worldMovePatch(children, node, dx, dy) }] : [];
+    });
+    if (moves.length === 0) return;
+
+    state.beginTransaction();
+    for (const move of moves) state.updateTransform(move.id, move.patch);
+    state.endTransaction();
+  };
 
   return {
     project: newProject(),
@@ -782,6 +872,19 @@ export const useEditorStore = create<EditorState>((set, get) => {
       }));
     },
 
+    alignSelection: (edge) => {
+      const state = get();
+      // Two objects is the smallest set that can be out of line with each
+      // other; one object has nothing to align to but itself.
+      applyWorldDeltas(state, (boxes) =>
+        boxes.size < 2 ? new Map() : alignDeltas(boxes, edge),
+      );
+    },
+
+    distributeSelection: (axis) => {
+      applyWorldDeltas(get(), (boxes) => distributeDeltas(boxes, axis));
+    },
+
     nudgeSelection: (dx, dy) => {
       const state = get();
       const children = activeScene(state.project).children;
@@ -794,21 +897,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       for (const id of ids) {
         const node = findNode(children, id);
         if (!node) continue;
-        // The delta is converted into the space the node's own x/y live in, so
-        // a node inside a rotated or scaled group still travels the way the
-        // screen says. Applied as a *difference* against the stored value
-        // rather than as the recomputed local position: the world round trip
-        // is not numerically exact, and a node nudged back and forth should
-        // land on the number it started on. For a top-level node the parent is
-        // the identity and the whole thing is `x + dx`, integers included.
-        const parent = worldTransformOf(children, findParent(children, id)?.id ?? null);
-        const world = worldTransformOf(children, id);
-        const moved = localTransformIn(parent, { ...world, x: world.x + dx, y: world.y + dy });
-        const local = localTransformIn(parent, world);
-        state.updateTransform(id, {
-          x: settle(node.transform.x + moved.x - local.x),
-          y: settle(node.transform.y + moved.y - local.y),
-        });
+        state.updateTransform(id, worldMovePatch(children, node, dx, dy));
       }
       state.endTransaction();
     },

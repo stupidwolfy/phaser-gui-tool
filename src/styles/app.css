@@ -322,6 +322,16 @@ select {
   gap: 4px;
 }
 
+/* Six buttons, three across, two rows. A grid rather than two flex rows so the
+   columns line up with each other: Left over Top reads as a pair of axes, and
+   two independently sized rows would not. */
+.align-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
 .tree {
   list-style: none;
   margin: 0;
