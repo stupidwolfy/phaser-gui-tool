@@ -62,6 +62,8 @@ function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
         </button>
       </div>
 
+      <AlignSection count={nodes.length} />
+
       <div className="panel__section">Objects</div>
       <ul className="tree">
         {nodes.map((node) => (
@@ -79,6 +81,93 @@ function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * Align and distribute.
+ *
+ * Both act on the objects' *drawn* boxes, which the renderer publishes to
+ * `core/bounds` — lining up the stored x/y would line up origins, and two
+ * objects of different sizes with the same origin do not look aligned.
+ *
+ * Alignment is relative to the selection's own bounding box, so it never moves
+ * anything outside what is selected and pressing the same button twice does
+ * nothing the second time. Distribute needs three objects: with two, the outer
+ * pair is the whole selection and there is nothing in between to space.
+ */
+function AlignSection({ count }: { count: number }) {
+  const alignSelection = useEditorStore((s) => s.alignSelection);
+  const distributeSelection = useEditorStore((s) => s.distributeSelection);
+  const canDistribute = count >= 3;
+
+  return (
+    <>
+      <div className="panel__section">Align</div>
+      <div className="align-grid">
+        <button
+          className="btn btn--add"
+          title="Align left edges"
+          onClick={() => alignSelection('left')}
+        >
+          Left
+        </button>
+        <button
+          className="btn btn--add"
+          title="Align centres horizontally"
+          onClick={() => alignSelection('centerX')}
+        >
+          Centre
+        </button>
+        <button
+          className="btn btn--add"
+          title="Align right edges"
+          onClick={() => alignSelection('right')}
+        >
+          Right
+        </button>
+        <button
+          className="btn btn--add"
+          title="Align top edges"
+          onClick={() => alignSelection('top')}
+        >
+          Top
+        </button>
+        <button
+          className="btn btn--add"
+          title="Align centres vertically"
+          onClick={() => alignSelection('middleY')}
+        >
+          Middle
+        </button>
+        <button
+          className="btn btn--add"
+          title="Align bottom edges"
+          onClick={() => alignSelection('bottom')}
+        >
+          Bottom
+        </button>
+      </div>
+
+      <div className="arrange-row">
+        <button
+          className="btn btn--add"
+          title="Space evenly across — needs three objects"
+          disabled={!canDistribute}
+          onClick={() => distributeSelection('x')}
+        >
+          Spread ↔
+        </button>
+        <button
+          className="btn btn--add"
+          title="Space evenly down — needs three objects"
+          disabled={!canDistribute}
+          onClick={() => distributeSelection('y')}
+        >
+          Spread ↕
+        </button>
+      </div>
+    </>
   );
 }
 

@@ -8,6 +8,7 @@ import {
 } from '../../core/store';
 import { containsNode, findNode, type GameObjectNode, type Project } from '../../core/schema';
 import { decodeImage, decodedImage } from '../../core/assets';
+import { publishBounds, type Rect } from '../../core/bounds';
 
 /**
  * The editing surface.
@@ -834,6 +835,35 @@ export class EditorScene extends Phaser.Scene {
       this.displayObjects.delete(id);
       this.containerBounds.delete(id);
     }
+
+    this.publishMeasuredBounds();
+  }
+
+  /**
+   * Hands every object's drawn box to `core/bounds`, where align and distribute
+   * read it.
+   *
+   * Published from here rather than measured in the store because this is the
+   * only place that knows: a text object's size is whatever the font measured
+   * to, and a group's is the union of its contents. The same `worldBoundsOf`
+   * the selection outline and the scale handle use, so the box an alignment
+   * moves is exactly the box the user can see around the object.
+   *
+   * Straight into a module, not back into the store: this scene syncs on every
+   * store change, so a write into the store here would schedule the next sync.
+   */
+  private publishMeasuredBounds(): void {
+    const boxes = new Map<string, Rect>();
+    for (const [id, object] of this.displayObjects) {
+      const bounds = this.worldBoundsOf(object);
+      boxes.set(id, {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      });
+    }
+    publishBounds(boxes);
   }
 
   /**

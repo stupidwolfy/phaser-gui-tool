@@ -16,7 +16,8 @@ copy/paste, draw-order control and a keyboard layer. Iteration 3 (shipped) added
 and image assets. Iteration 4 (shipped) made the tree a real tree: a `container` node
 type, Phaser Containers, reparenting, and nested export. Iteration 5 (shipped) made the
 selection a set: several objects moved, grouped, duplicated, hidden and deleted as one.
-See the README for the user-facing feature list.
+Iteration 6 (shipped) added align and distribute, and with them the first thing the store
+knows about *drawn* geometry. See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -277,9 +278,48 @@ holding the same answer is how they come to disagree.
   single number to show, and a field displaying one object's value while writing to all of
   them is the kind of control that loses work. Moving several objects is the drag and the
   arrow keys, both of which apply a *delta*.
+- **Align and distribute work on measured bounds, not on stored positions.** A node's
+  `x`/`y` is its origin, so lining up `x` lines up origins — which is not lining up
+  objects the moment two of them are different sizes, and never is for text or a group,
+  whose origins are nowhere near their centres. See "Measured bounds" below.
+- **Alignment targets the selection's own bounding box.** Nothing outside the selection
+  moves, the object already furthest left stays exactly where it is, and pressing the
+  same button twice does nothing the second time — which matters because the second press
+  is how someone checks the first. Distribute keeps the outermost pair still and spreads
+  the rest by centres, so it cannot walk a layout off the screen; with two objects there
+  is nothing in between and the buttons are disabled rather than silently inert.
 - **Multi-object scaling is deliberately not built.** Scaling a set about a shared centre
   is a different gesture from dragging one object's own corner, so the handle is hidden
   when more than one object is selected rather than made to mean two things.
+
+## Measured bounds
+
+`src/core/bounds.ts` holds each node's axis-aligned box in scene coordinates, as the
+renderer last drew it, plus the align and distribute arithmetic over those boxes. It is
+the one thing the store reads that is not the document.
+
+- **The renderer publishes; nothing computes it twice.** `EditorScene.syncFromStore` ends
+  by handing `publishBounds` a box per display object, taken from the same
+  `worldBoundsOf` the selection outline, the hit area and the scale handle use — so the
+  box an alignment moves is exactly the box drawn around the object. Deriving it from the
+  document instead would mean re-measuring text against the font and re-deriving a
+  group's union from its children, which is most of what the scene already did.
+- **It lives outside the store on purpose.** The scene subscribes to every store change,
+  so writing measurements back into the store would have each sync schedule the next one.
+  It is a cache of the last frame, never serialised, and no React render reads it.
+- **A missing box means "do nothing".** Before the first frame, or for a node the sync has
+  not caught up with, `boundsOf` returns undefined and that node drops out of the set —
+  treating it as a point at the origin would fling it across the scene.
+- **Every world-space move goes through `worldMovePatch`** in the store: the arrow keys,
+  align and distribute. It converts a world delta into the node's own parent space and
+  applies it as a *difference* against the stored value, so a node in a rotated group
+  travels the way the screen says and one moved back and forth lands on the number it
+  started on.
+- **Compute the moves before opening the transaction.** `beginTransaction` snapshots the
+  document whether or not an edit follows, so an alignment with nothing left to do would
+  otherwise leave an undo step that undoes nothing.
+- Aligning a *single* object against the scene rectangle ("centre this in the scene") is
+  the obvious next use of this, and needs no new machinery.
 
 ## Interaction model
 
@@ -393,6 +433,7 @@ model differ between them.
 tests/
   editing.spec.ts           add → select → drag → inspector → undo → save → reopen
   multi-select.spec.ts      building a selection, then moving, grouping, duplicating it
+  align.spec.ts             aligning and distributing it, by edges rather than origins
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
@@ -501,5 +542,6 @@ render as Phaser `Image`s, not `Sprite`s — animation is the reason to change t
 tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Prefabs are the
 natural next thing built on containers, and a group is what a prefab instance would be —
 now that a selection is a set, "make a prefab of these" has something to start from.
-Alignment and distribution are the obvious next multi-object tools, and would need object
-bounds, which today only `EditorScene` knows (`containerBounds`, `worldBoundsOf`).
+Alignment and distribution shipped in iteration 6; the bounds they needed are now in
+`src/core/bounds.ts`, which any future geometry tool — snapping, smart guides, "centre in
+the scene" — can read.
