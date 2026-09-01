@@ -209,6 +209,22 @@ select {
   font-size: 13px;
 }
 
+/* A sticky mode, not an action: it stays lit while it is on, because the rows
+   under it mean something different for as long as it is. Sized to the touch
+   target like every other button — it is pressed with a thumb, mid-selection. */
+.btn--toggle {
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: none;
+}
+
+.btn--toggle.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .btn--block {
   width: 100%;
   min-height: 44px;
@@ -257,8 +273,13 @@ select {
 }
 
 .panel__count {
+  /* Pushed left of anything that follows it, so a header ending in a control
+     still reads name — count — control rather than spreading all three. */
+  margin-left: auto;
   color: var(--text-dim);
   font-weight: 400;
+  /* The header capitalizes each word, which turned "3 of 5" into "3 Of 5". */
+  text-transform: none;
 }
 
 .panel__section {

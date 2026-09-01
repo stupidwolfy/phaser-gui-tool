@@ -12,6 +12,9 @@ on a desktop.
 
 - Place rectangles, ellipses, text and images in a scene
 - Select and drag objects on the canvas; pan and pinch-zoom the camera
+- Select several objects at once — turn on **Multi** in the scene tree and tap them, or
+  Shift/Ctrl-click on a desktop — then move, group, duplicate, hide or delete all of them
+  in one go
 - Resize by dragging the corner handle, keeping the aspect ratio unless you unlink it
 - Import your own images and use them as sprites, with tint, flip and alpha
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
@@ -36,8 +39,10 @@ on a desktop.
 | Keys | Does |
 | --- | --- |
 | Arrow keys | Nudge 1px — hold Shift for 10px |
-| Delete / Backspace | Delete the selected object |
+| Delete / Backspace | Delete the selection |
 | Escape | Deselect |
+| Ctrl/Cmd + A | Select every top-level object |
+| Ctrl/Cmd + G | Wrap the selection in a group |
 | Ctrl/Cmd + D, C, V | Duplicate, copy, paste |
 | Ctrl/Cmd + Z, Shift+Z | Undo, redo |
 | Ctrl/Cmd + S, O | Save, open |
@@ -45,6 +50,10 @@ on a desktop.
 On a phone, tapping an object selects it and only a second drag moves it — a fingertip
 covers enough of the screen that honouring the first touch as a drag moved whichever
 object it happened to graze.
+
+While **Multi** is on, a press adds an object to the selection or takes it out again, and
+never moves anything; turn it off to drag what you have picked. Dragging any one of
+several selected objects moves all of them together, wherever in the tree they sit.
 
 Groups are selected from the scene tree: on the canvas a press picks the object you
 actually touched. Once a group *is* selected, dragging anywhere on its contents moves the
@@ -74,11 +83,11 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; four iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; five iterations in, it is a
 working editor but a small one.
 
 **Not built yet** — animations and sprite sheets, tilemaps, physics, particles, audio,
-cameras, multiple scenes, prefabs, and multi-select.
+cameras, multiple scenes, and prefabs.
 
 **Verified by** a Playwright suite that drives the production build in Chromium at both
 1440×900 and 390×844, and by CI on every pull request. It checks the editing round trip
@@ -112,6 +121,7 @@ src/
   ui/                 toolbar, scene tree, inspector, responsive shell
 tests/
   editing.spec.ts     add, drag, inspect, group, undo, save, reopen — on both viewports
+  multi-select.spec.ts  building a selection, and moving/grouping it as one
   assets.spec.ts      image import, drawing, save/reopen, removal
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite

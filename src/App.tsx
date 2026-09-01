@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type Phaser from 'phaser';
-import { activeScene, useEditorStore } from './core/store';
-import { findNode } from './core/schema';
+import { useEditorStore } from './core/store';
 import { clearDraft, loadDraft, scheduleDraftSave } from './io/autosave';
 import { ProjectParseError, downloadFile, openProject, saveProject } from './io/fileIO';
 import {
@@ -134,16 +133,11 @@ export default function App() {
     };
 
     const nudge = (step: { dx: number; dy: number }, coarse: boolean) => {
-      const { selectedId, updateTransform, project } = useEditorStore.getState();
-      if (!selectedId) return;
-      const node = findNode(activeScene(project).children, selectedId);
-      if (!node) return;
+      const store = useEditorStore.getState();
+      if (store.selectedIds.length === 0) return;
       const distance = coarse ? COARSE_NUDGE : 1;
       beginNudge();
-      updateTransform(selectedId, {
-        x: node.transform.x + step.dx * distance,
-        y: node.transform.y + step.dy * distance,
-      });
+      store.nudgeSelection(step.dx * distance, step.dy * distance);
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -168,15 +162,23 @@ export default function App() {
           event.preventDefault();
           if (event.shiftKey) store.redo();
           else store.undo();
-        } else if (key === 'd' && store.selectedId) {
+        } else if (key === 'd') {
           event.preventDefault();
-          store.duplicateNode(store.selectedId);
-        } else if (key === 'c' && store.selectedId) {
+          store.duplicateSelection();
+        } else if (key === 'c') {
           event.preventDefault();
-          store.copyNode(store.selectedId);
+          store.copySelection();
         } else if (key === 'v') {
           event.preventDefault();
           store.pasteNode();
+        } else if (key === 'a') {
+          // Top-level objects only: anything nested is already covered by the
+          // group holding it. See `selectAll`.
+          event.preventDefault();
+          store.selectAll();
+        } else if (key === 'g') {
+          event.preventDefault();
+          store.groupSelection();
         }
         return;
       }
@@ -189,14 +191,17 @@ export default function App() {
         return;
       }
 
-      if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedId) {
+      if (
+        (event.key === 'Delete' || event.key === 'Backspace') &&
+        store.selectedIds.length > 0
+      ) {
         event.preventDefault(); // Backspace still means "go back" in some browsers.
-        store.deleteNode(store.selectedId);
+        store.deleteSelection();
         return;
       }
 
       const step = NUDGE_STEPS[event.key];
-      if (step && store.selectedId) {
+      if (step && store.selectedIds.length > 0) {
         event.preventDefault();
         nudge(step, event.shiftKey);
       }

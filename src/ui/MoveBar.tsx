@@ -1,4 +1,4 @@
-import { useEditorStore, useSelectedNode } from '../core/store';
+import { useEditorStore, useSelectionNodes } from '../core/store';
 
 /**
  * The mobile move bar.
@@ -9,25 +9,34 @@ import { useEditorStore, useSelectedNode } from '../core/store';
  * explicit ending — keep it, or put it back where it started.
  */
 export function MoveBar() {
-  const node = useSelectedNode();
-  const moveOrigin = useEditorStore((s) => s.moveOrigin);
+  const nodes = useSelectionNodes();
+  const moveOrigins = useEditorStore((s) => s.moveOrigins);
   const cancelMove = useEditorStore((s) => s.cancelMove);
   const commitMove = useEditorStore((s) => s.commitMove);
 
-  if (!node) return null;
+  if (nodes.length === 0) return null;
+  const node = nodes[0];
 
-  const moved =
-    moveOrigin !== null &&
-    (moveOrigin.transform.x !== node.transform.x ||
-      moveOrigin.transform.y !== node.transform.y);
+  // Moved if *any* of them has: one drag moves the whole selection, so cancel
+  // has to stay available while any part of that move is still standing.
+  const moved = moveOrigins.some((origin) => {
+    const current = nodes.find((candidate) => candidate.id === origin.id);
+    return (
+      current !== undefined &&
+      (origin.transform.x !== current.transform.x ||
+        origin.transform.y !== current.transform.y)
+    );
+  });
 
   return (
     <div className="movebar" role="toolbar" aria-label="Move object">
       <span className="movebar__label">
         <span className="tree__type" data-type={node.type} aria-hidden="true" />
-        <span className="movebar__name">{node.name}</span>
+        <span className="movebar__name">
+          {nodes.length === 1 ? node.name : `${nodes.length} objects`}
+        </span>
         <span className="movebar__hint">
-          {moved
+          {moved && nodes.length === 1
             ? `${Math.round(node.transform.x)}, ${Math.round(node.transform.y)}`
             : 'drag to move'}
         </span>
