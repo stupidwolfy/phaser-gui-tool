@@ -59,6 +59,15 @@ export function createNode(
         // not have an image ready for.
         props: { assetId: null, alpha: 1, tint: '#ffffff', flipX: false, flipY: false },
       };
+    case 'container':
+      return {
+        ...base,
+        type: 'container',
+        name: name ?? 'Group',
+        // Empty: a container is a place to drop objects into, and one created
+        // with contents would have to invent what those contents are.
+        props: { alpha: 1 },
+      };
     case 'text':
       return {
         ...base,

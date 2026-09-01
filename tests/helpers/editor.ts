@@ -145,7 +145,7 @@ export class EditorPage {
     return this.panel('scene').locator('.tree__item');
   }
 
-  async addObject(label: 'Rectangle' | 'Ellipse' | 'Text' | 'Image'): Promise<void> {
+  async addObject(label: 'Rectangle' | 'Ellipse' | 'Text' | 'Image' | 'Group'): Promise<void> {
     await this.openPanel('scene');
     await this.panel('scene').getByRole('button', { name: `+ ${label}` }).click();
     await this.settle();

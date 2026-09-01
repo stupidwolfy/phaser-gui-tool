@@ -13,7 +13,9 @@ The long-term goal is to cover the whole Phaser surface. Iteration 1 (shipped) b
 foundation: rectangles, ellipses and text; select/drag/zoom; inspector; save and open.
 Iteration 2 (shipped) added code export, and the editing operations around it: duplicate,
 copy/paste, draw-order control and a keyboard layer. Iteration 3 (shipped) added sprites
-and image assets. See the README for the user-facing feature list.
+and image assets. Iteration 4 (shipped) made the tree a real tree: a `container` node
+type, Phaser Containers, reparenting, and nested export. See the README for the
+user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -78,6 +80,10 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
    `tests/editing.spec.ts` (it draws where the document says, and survives a save and an
    open) and give it a hostile instance in `tests/helpers/hostile.ts`, which puts its
    strings through both export toolchains.
+
+A `container` is the one type that is not purely additive: its children render, so
+`EditorScene.syncNodes` recurses into it and the exporter emits an `add([...])` for it.
+See "Nesting" below.
 
 Bump `SCHEMA_VERSION` when a *deployed older build* would break on the new file, not only
 when this build can't read an old one — those are different directions and the second is
@@ -187,6 +193,55 @@ Consequences worth knowing before touching any of it:
   now reports the failure once and clears the stale draft, rather than swallowing it —
   silently believing you have a draft is worse than knowing you don't.
 
+## Nesting
+
+The schema always had `children`; iteration 4 made it load-bearing. A `container` node
+renders as a Phaser Container, and **every node's transform is relative to its parent** —
+for a top-level node the parent is the scene, so those still read as scene coordinates.
+
+- **Reparenting keeps the object where it is on the canvas.** `moveNode` recomputes the
+  stored transform against the new parent (`worldTransformOf` composes down the chain,
+  `localTransformIn` inverts it) and rounds the result, so a node dragged into a group and
+  back out again lands on the numbers it started with rather than 479.99999999999994. A
+  parent that is both rotated and unevenly scaled composes a skew that no single transform
+  can represent; the position stays exact and only the proportions shift.
+- **Cycles are refused in the store, not in the UI.** `moveNode` rejects a parent that is
+  the node itself or inside it — a cycle detaches a branch from the scene and cannot be
+  rendered or serialised, and the tree drag, the inspector's Parent field and any future
+  caller all go through that one guard.
+- **A container has no size of its own, and its origin is not its centre.** Phaser gives
+  it `width`/`height` only so it can have a hit area. `EditorScene.containerBounds` holds
+  each group's box in its own local space, recomputed from its children every sync — which
+  is why `syncNodes` is depth-first and applies children before their parent. The
+  selection outline, the hit area and the scale handle all read that box through
+  `localRectOf`, so they cannot disagree about where a group is.
+- **The container hit area is offset, not centred.** Phaser measures a custom hit area from
+  `-displayOrigin`, so `applyContainerBounds` shifts the rect by half the size; without
+  that a group whose children sit to one side of its origin is grabbable everywhere except
+  where it is drawn.
+- **An empty group still gets a box** (`EMPTY_GROUP_SIZE`). A container with no children
+  has no bounds at all, which would make the group you have just added invisible,
+  unselectable and undraggable — exactly when you most need to grab it.
+- **A group is selected from the scene tree, and dragged by its contents.** A press on the
+  canvas selects the object actually touched, because a group's box is covered by the very
+  children that give it one. Once the group *is* selected, `EditorScene.dragProxy` turns a
+  press on any descendant into a move of the group: Phaser's `dragX/dragY` describe where
+  the *child* would go, so the group instead follows the pointer's own displacement,
+  measured in the space its position lives in. Without it a group could be selected but
+  never moved on the canvas, which on a phone is most of what a group is for.
+- **Gesture maths runs in the object's parent space.** `toParentSpace` inverts the parent
+  container's world matrix; for a top-level object that is the identity, so the corner-scale
+  code is the same at every depth. Phaser already reports drag positions in container-local
+  space (see `InputPlugin`), which is why the plain drag handler needed no change.
+- **Draw order is still array order — at every level.** `editSiblings` in the store is the
+  one traversal that finds the list a node lives in, and raise/lower/duplicate/drag-drop
+  all splice through it. Inside a container the list order is what renders, not `depth`
+  (a child's depth only sorts it within its container), so the sync calls `moveTo`.
+- **Adding lands in the group you are working in** — the selection when it is a group,
+  otherwise whatever group the selection is inside. The second half is what makes filling
+  a group work at all: adding selects the new object, so without it every add after the
+  first would jump back out to the top level. Paste follows the same rule.
+
 ## Interaction model
 
 Touch and mouse deliberately differ, keyed off `pointer.wasTouch`:
@@ -234,6 +289,11 @@ JavaScript, which is the same property that lets the HTML embed the body verbati
 Both outputs share `buildCreateBody`, so the runnable page can never drift from the
 file you ship. Adding a node type means adding a `constructorFor` case; anything not
 handled there silently exports nothing, so check it alongside the `EditorScene` case.
+
+Groups are emitted flat: the container's `const`, then its children's, then one
+`group.add([child, …])`. Nesting the children inside a literal would read worse and would
+cost the reader a binding per object — every object in the scene stays reachable by name,
+which is the point of emitting names at all.
 
 Images are emitted as an `ASSETS` object literal at the top of the output, and a
 `preload()` that loads from it (`this.load.image(key, ASSETS[key])` — Phaser's loader
@@ -286,7 +346,9 @@ tests/
 ```
 
 Adding a node type means adding to `editing.spec.ts` (it draws, it drags, it survives a
-save) and to `helpers/hostile.ts` (any new string that reaches the exporter).
+save) and to `helpers/hostile.ts` (any new string that reaches the exporter). The hostile
+project now nests a rectangle inside a hostilely-named group, so both export paths run the
+nested emit and the `add([...])` list, not only the flat one.
 
 **Assert what is drawn, not just what is stored.** The drag bug that prompted all this
 passed every store-level assertion — the document held the right coordinates the whole
@@ -376,7 +438,6 @@ Animations and sprite sheets (the asset table holds whole images only, and `spri
 render as Phaser `Image`s, not `Sprite`s — animation is the reason to change that),
 tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Multi-select
 is not built either — `selectedId: string | null` runs through the store, the scene and
-the move bar, so it is its own iteration. The schema's `children` array and Phaser
-Containers are the intended path for nesting — `EditorScene` currently renders only
-top-level nodes on purpose, since nested ones would be positioned wrong without
-Containers.
+the move bar, so it is its own iteration; nesting was done first so that it lands on the
+final shape of the document rather than being retrofitted into it. Prefabs are the
+natural next thing built on containers, and a group is what a prefab instance would be.

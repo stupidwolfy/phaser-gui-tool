@@ -115,6 +115,36 @@ export function ColorField({ label, value, onChange }: FieldProps<string>) {
 }
 
 /**
+ * A picker over a fixed set of options — the parent container, so far.
+ *
+ * No transaction wrapper, for the same reason as the checkbox: choosing an
+ * option is one edit, and so already one undo step.
+ */
+export function SelectField({
+  label,
+  value,
+  options,
+  onChange,
+}: FieldProps<string> & { options: { value: string; label: string }[] }) {
+  return (
+    <label className="field">
+      <span className="field__label">{label}</span>
+      <select
+        className="field__input"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/**
  * A boolean toggle. No transaction wrapper: a checkbox produces exactly one
  * edit per press, so it is already one undo step.
  */

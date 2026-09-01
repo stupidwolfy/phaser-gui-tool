@@ -139,7 +139,7 @@ test('saves a file, starts over, and reopens it', async ({ editor, page }, testI
   expect(saved.name).toMatch(/\.phaser\.json$/);
 
   const parsed = JSON.parse(saved.contents);
-  expect(parsed.schemaVersion).toBe(2);
+  expect(parsed.schemaVersion).toBe(3);
   const names = parsed.scenes[0].children.map((node: { name: string }) => node.name);
   expect(names).toContain('Marker');
 
@@ -157,6 +157,149 @@ test('saves a file, starts over, and reopens it', async ({ editor, page }, testI
   await editor.closePanels();
   await expect(editor.treeItems()).toHaveCount(4);
   expect((await editor.findDrawn(MARKER)).count).toBeGreaterThan(100);
+});
+
+test('a group moves what is inside it, and survives a save', async ({
+  editor,
+  page,
+}, testInfo) => {
+  await editor.addObject('Rectangle');
+  await editor.setField('Fill', MARKER);
+  await editor.setField('Name', 'Marker');
+
+  // Wrapping puts the group where the object was, with the object on its
+  // origin, so nothing moves at the moment of grouping.
+  await editor.openPanel('inspect');
+  await editor.panel('inspect').getByRole('button', { name: 'Wrap in a new group' }).click();
+  await editor.settle();
+  expect(await editor.numberValue('X')).toBe(SCENE.width / 2);
+
+  await editor.closePanels();
+  const grouped = await editor.findDrawn(MARKER);
+  const centre = await editor.sceneToScreen({ x: SCENE.width / 2, y: SCENE.height / 2 });
+  expect(grouped.count).toBeGreaterThan(100);
+  expect(Math.abs(grouped.x - centre.x)).toBeLessThan(NEAR);
+
+  // Moving the group moves the object with it: the child's own coordinates
+  // never change, which is the whole point of the container.
+  await editor.setField('X', 700);
+  await editor.setField('Y', 400);
+  await editor.closePanels();
+  const moved = await editor.findDrawn(MARKER);
+  const expected = await editor.sceneToScreen({ x: 700, y: 400 });
+  expect(Math.abs(moved.x - expected.x)).toBeLessThan(NEAR);
+  expect(Math.abs(moved.y - expected.y)).toBeLessThan(NEAR);
+
+  await editor.selectInTree('Marker');
+  expect(await editor.numberValue('X')).toBe(0);
+  expect(await editor.numberValue('Y')).toBe(0);
+
+  // Dragging a nested object is the case Phaser reports in container space
+  // rather than world space, so the stored number and the pixels have to be
+  // checked against each other, not just against the gesture.
+  await editor.closePanels();
+  const delta = { x: 50, y: -60 };
+  const drag = await editor.drag(expected, {
+    x: expected.x + delta.x,
+    y: expected.y + delta.y,
+  });
+  const zoom = await editor.zoom();
+  expect(Math.abs((await editor.numberValue('X')) - Math.round(drag.x / zoom))).toBeLessThanOrEqual(2);
+
+  await editor.closePanels();
+  const dragged = await editor.findDrawn(MARKER);
+  expect(Math.abs(dragged.x - (moved.x + drag.x))).toBeLessThan(NEAR);
+  expect(Math.abs(dragged.y - (moved.y + drag.y))).toBeLessThan(NEAR);
+
+  // The nesting is in the document, and comes back out of a file.
+  const saved = await editor.saveToFile();
+  const parsed = JSON.parse(saved.contents);
+  const group = parsed.scenes[0].children.find(
+    (node: { type: string }) => node.type === 'container',
+  );
+  expect(group.children.map((child: { name: string }) => child.name)).toEqual(['Marker']);
+
+  const path = testInfo.outputPath('grouped.phaser.json');
+  await fs.writeFile(path, saved.contents, 'utf8');
+  page.on('dialog', (dialog) => void dialog.accept());
+  await editor.newProject();
+  await editor.openFile(path);
+  await editor.closePanels();
+
+  const reopened = await editor.findDrawn(MARKER);
+  expect(reopened.count).toBeGreaterThan(100);
+  expect(Math.abs(reopened.x - dragged.x)).toBeLessThan(NEAR);
+  expect(Math.abs(reopened.y - dragged.y)).toBeLessThan(NEAR);
+});
+
+test('a selected group is dragged by its contents', async ({ editor }) => {
+  await editor.addObject('Rectangle');
+  await editor.setField('Fill', MARKER);
+  await editor.setField('Name', 'Marker');
+  await editor.openPanel('inspect');
+  await editor.panel('inspect').getByRole('button', { name: 'Wrap in a new group' }).click();
+  await editor.settle();
+  await editor.closePanels();
+
+  // Wrapping leaves the group selected, so this press lands on the child and
+  // moves the group — a group's own box is covered by the children that give
+  // it one, so there is nothing else to press.
+  const start = await editor.sceneToScreen({ x: SCENE.width / 2, y: SCENE.height / 2 });
+  const before = await editor.findDrawn(MARKER);
+  const moved = await editor.drag(start, { x: start.x + 60, y: start.y - 70 });
+
+  const zoom = await editor.zoom();
+  expect(
+    Math.abs((await editor.numberValue('X')) - Math.round(SCENE.width / 2 + moved.x / zoom)),
+  ).toBeLessThanOrEqual(2);
+
+  await editor.closePanels();
+  const after = await editor.findDrawn(MARKER);
+  expect(Math.abs(after.x - (before.x + moved.x))).toBeLessThan(NEAR);
+  expect(Math.abs(after.y - (before.y + moved.y))).toBeLessThan(NEAR);
+
+  // The group moved, not the object inside it.
+  await editor.selectInTree('Marker');
+  expect(await editor.numberValue('X')).toBe(0);
+  expect(await editor.numberValue('Y')).toBe(0);
+});
+
+test('an object dragged into a group in the tree stays where it was', async ({
+  editor,
+  isMobile,
+}) => {
+  test.skip(isMobile, 'HTML5 drag and drop is the desktop path; a phone uses the Parent field');
+
+  await editor.addObject('Rectangle');
+  await editor.setField('Fill', MARKER);
+  await editor.setField('Name', 'Marker');
+
+  // The group second: adding an object while a group is selected puts it
+  // inside, and this test needs one that starts outside.
+  await editor.addObject('Group');
+  await editor.setField('Name', 'Box');
+  await editor.setField('X', 200);
+  await editor.setField('Y', 150);
+  await editor.closePanels();
+
+  const before = await editor.findDrawn(MARKER);
+
+  const source = editor.panel('scene').locator('.tree__item', { hasText: 'Marker' });
+  const group = editor.panel('scene').locator('.tree__item', { hasText: 'Box' });
+  await source.dragTo(group);
+  await editor.settle();
+
+  // Nested now, and its stored position is relative to the group...
+  await editor.selectInTree('Marker');
+  expect(await editor.numberValue('X')).toBe(SCENE.width / 2 - 200);
+  expect(await editor.numberValue('Y')).toBe(SCENE.height / 2 - 150);
+
+  // ...while the pixels have not moved at all, which is what reparenting is
+  // supposed to feel like.
+  await editor.closePanels();
+  const after = await editor.findDrawn(MARKER);
+  expect(Math.abs(after.x - before.x)).toBeLessThan(NEAR);
+  expect(Math.abs(after.y - before.y)).toBeLessThan(NEAR);
 });
 
 test('restores the autosaved draft after a reload', async ({ editor, page }) => {

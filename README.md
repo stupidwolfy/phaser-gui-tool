@@ -15,9 +15,13 @@ on a desktop.
 - Resize by dragging the corner handle, keeping the aspect ratio unless you unlink it
 - Import your own images and use them as sprites, with tint, flip and alpha
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
+- Group objects: a group moves, rotates, scales and fades everything inside it as one,
+  and groups can hold groups. Drag a row onto a group in the scene tree, or set an
+  object's Parent in the inspector — either way it stays exactly where it was on screen
 - Duplicate, copy and paste objects, keeping their styling
 - Change draw order with the inspector's Arrange buttons, or by dragging rows in the
-  scene tree (the first row is the object furthest back)
+  scene tree (the first row is the object furthest back; inside a group, the same applies
+  to the group's own contents)
 - Undo/redo, grouped by gesture — one drag, one field edit or one held arrow key is one
   step
 - Save and open `.phaser.json` project files from your device, with an autosaved draft in
@@ -42,6 +46,11 @@ On a phone, tapping an object selects it and only a second drag moves it — a f
 covers enough of the screen that honouring the first touch as a drag moved whichever
 object it happened to graze.
 
+Groups are selected from the scene tree: on the canvas a press picks the object you
+actually touched. Once a group *is* selected, dragging anywhere on its contents moves the
+whole group, which is otherwise impossible — the children cover the only box the group
+has.
+
 ### Images
 
 Imported images are stored **inside the project file**, as data URLs. One `.phaser.json`
@@ -65,11 +74,11 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; three iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; four iterations in, it is a
 working editor but a small one.
 
 **Not built yet** — animations and sprite sheets, tilemaps, physics, particles, audio,
-cameras, multiple scenes, prefabs, nesting/containers, and multi-select.
+cameras, multiple scenes, prefabs, and multi-select.
 
 **Verified by** a Playwright suite that drives the production build in Chromium at both
 1440×900 and 390×844, and by CI on every pull request. It checks the editing round trip
@@ -102,7 +111,7 @@ src/
   editor/phaser/      the Phaser scene that renders the document
   ui/                 toolbar, scene tree, inspector, responsive shell
 tests/
-  editing.spec.ts     add, drag, inspect, undo, save, reopen — on both viewports
+  editing.spec.ts     add, drag, inspect, group, undo, save, reopen — on both viewports
   assets.spec.ts      image import, drawing, save/reopen, removal
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite

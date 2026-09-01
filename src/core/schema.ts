@@ -14,19 +14,24 @@
 /**
  * Bumped whenever a change to these types is not backwards compatible.
  *
- * v2 added `sprite` and the project-level `assets` table. Files written by v1
- * still read fine here — `parseProject` fills in an empty asset table — but the
- * bump is about the other direction: a v1 build has no `sprite` case anywhere,
- * and an unhandled node type crashes its renderer rather than degrading. The
- * version check turns that crash into the "made with a newer version" message.
+ * v2 added `sprite` and the project-level `assets` table. v3 made `children`
+ * load-bearing: a `container` node nests other nodes, and every node's position
+ * is now relative to its parent rather than to the scene.
+ *
+ * Files written by an older version still read fine here — a v2 file simply has
+ * no containers and an all-empty `children` — but the bump is about the other
+ * direction. A v2 build has no `container` case anywhere: its
+ * `createDisplayObject` leaves the object undefined and its renderer crashes,
+ * and its scene tree would silently drop every nested node. The version check
+ * turns both into the "made with a newer version" message.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
 
 /** Object kinds the editor can currently place. Grows one entry at a time. */
-export type NodeType = 'rectangle' | 'ellipse' | 'text' | 'sprite';
+export type NodeType = 'rectangle' | 'ellipse' | 'text' | 'sprite' | 'container';
 
 /**
  * An imported image, held in the document as a data URL.
@@ -50,6 +55,11 @@ export interface ImageAsset {
   height: number;
 }
 
+/**
+ * A node's transform is relative to its parent, exactly as Phaser treats a
+ * Container's children — the scene itself is the parent of a top-level node, so
+ * for those it still reads as scene coordinates.
+ */
 export interface Transform {
   x: number;
   y: number;
@@ -88,6 +98,19 @@ export interface SpriteProps {
   flipY: boolean;
 }
 
+/**
+ * A container groups other nodes: moving, rotating or scaling it moves its whole
+ * subtree, and `children` is its content.
+ *
+ * It has no size of its own — a Phaser Container is a transform with a display
+ * list, and its bounds are whatever its children occupy. Alpha is the one thing
+ * worth setting on the group as a whole, and it multiplies down the tree the
+ * way Phaser's does.
+ */
+export interface ContainerProps {
+  alpha: number;
+}
+
 export interface TextProps {
   text: string;
   fontSize: number;
@@ -101,6 +124,7 @@ export interface NodePropsByType {
   ellipse: EllipseProps;
   text: TextProps;
   sprite: SpriteProps;
+  container: ContainerProps;
 }
 
 /**
@@ -116,7 +140,11 @@ export type GameObjectNode = {
     visible: boolean;
     transform: Transform;
     props: NodePropsByType[K];
-    /** Reserved for containers. Always present so traversal never branches. */
+    /**
+     * Nested nodes, positioned relative to this one. Only a `container`
+     * renders them, but the array is present on every node so that traversal,
+     * cloning and the parser never have to branch on the type.
+     */
     children: GameObjectNode[];
   };
 }[NodeType];
@@ -168,4 +196,98 @@ export function findNode(
     if (hit) return hit;
   }
   return undefined;
+}
+
+/**
+ * The node holding `id`, or null when it sits at the top level of the scene.
+ *
+ * Null therefore also covers "no such node", which every caller here wants:
+ * both cases mean "no parent to compose against".
+ */
+export function findParent(
+  nodes: GameObjectNode[],
+  id: string,
+  parent: GameObjectNode | null = null,
+): GameObjectNode | null {
+  for (const node of nodes) {
+    if (node.id === id) return parent;
+    const hit = findParent(node.children, id, node);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * The array `id` lives in — its parent's children, or the scene's own list.
+ *
+ * Draw order is array order at every level, so this is what raise, lower and
+ * the tree's drag-to-reorder all work against.
+ */
+export function siblingsOf(root: GameObjectNode[], id: string): GameObjectNode[] {
+  const parent = findParent(root, id);
+  return parent ? parent.children : root;
+}
+
+/** True when `id` is `node` itself or anywhere beneath it. */
+export function containsNode(node: GameObjectNode, id: string): boolean {
+  return node.id === id || node.children.some((child) => containsNode(child, id));
+}
+
+/**
+ * The transform a child of `parent` is composed against: position, rotation and
+ * scale accumulated from the scene down.
+ *
+ * Phaser composes a Container's transform onto its children the same way, so
+ * this is what lets the editor convert between a node's local coordinates and
+ * where it actually is on the canvas.
+ */
+export function worldTransformOf(
+  nodes: GameObjectNode[],
+  id: string | null,
+): Transform {
+  if (!id) return { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+  const parent = findParent(nodes, id);
+  const node = findNode(nodes, id);
+  if (!node) return { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+  return composeTransform(worldTransformOf(nodes, parent?.id ?? null), node.transform);
+}
+
+/** Applies a parent transform to a local one, giving the world transform. */
+export function composeTransform(parent: Transform, local: Transform): Transform {
+  const angle = (parent.rotation * Math.PI) / 180;
+  const x = local.x * parent.scaleX;
+  const y = local.y * parent.scaleY;
+  return {
+    x: parent.x + x * Math.cos(angle) - y * Math.sin(angle),
+    y: parent.y + x * Math.sin(angle) + y * Math.cos(angle),
+    rotation: parent.rotation + local.rotation,
+    scaleX: parent.scaleX * local.scaleX,
+    scaleY: parent.scaleY * local.scaleY,
+  };
+}
+
+/**
+ * The inverse: the local transform a node needs under `parent` to stay exactly
+ * where it is now. This is what keeps an object still on the canvas when it is
+ * dragged into or out of a container.
+ *
+ * A parent that is both rotated and scaled unevenly composes a skew, which
+ * neither this nor Phaser's own transform can represent; the position is still
+ * exact and only the child's apparent proportions shift.
+ */
+export function localTransformIn(parent: Transform, world: Transform): Transform {
+  const angle = (-parent.rotation * Math.PI) / 180;
+  const dx = world.x - parent.x;
+  const dy = world.y - parent.y;
+  // A zero-scaled parent has collapsed its children to a point; there is no
+  // local position that undoes that, so fall back to the parent's origin.
+  const scaleX = parent.scaleX || 1;
+  const scaleY = parent.scaleY || 1;
+  return {
+    x: (dx * Math.cos(angle) - dy * Math.sin(angle)) / scaleX,
+    y: (dx * Math.sin(angle) + dy * Math.cos(angle)) / scaleY,
+    rotation: world.rotation - parent.rotation,
+    scaleX: world.scaleX / scaleX,
+    scaleY: world.scaleY / scaleY,
+  };
 }

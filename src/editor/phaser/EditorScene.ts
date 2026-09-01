@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { activeScene, useEditorStore, type EditorState } from '../../core/store';
-import { findNode, type GameObjectNode, type Project } from '../../core/schema';
+import { containsNode, findNode, type GameObjectNode, type Project } from '../../core/schema';
 import { decodeImage, decodedImage } from '../../core/assets';
 
 /**
@@ -58,7 +58,18 @@ type Renderable =
   | Phaser.GameObjects.Rectangle
   | Phaser.GameObjects.Ellipse
   | Phaser.GameObjects.Text
-  | Phaser.GameObjects.Image;
+  | Phaser.GameObjects.Image
+  | Phaser.GameObjects.Container;
+
+/**
+ * The box an empty group gets, in world units.
+ *
+ * A container's bounds are its children's, so an empty one has none at all —
+ * and an object with no bounds cannot be selected on the canvas, dragged, or
+ * even seen. A group you have just added and not yet filled is exactly when you
+ * most need to be able to grab it.
+ */
+const EMPTY_GROUP_SIZE = 24;
 
 /**
  * Hit areas are expressed in the object's local space with (0,0) at its
@@ -72,6 +83,25 @@ function hitAreaFor(object: Renderable, node: GameObjectNode) {
     : new Phaser.Geom.Rectangle(0, 0, width, height);
 }
 
+/** The axis-aligned box covering a rectangle transformed by a matrix. */
+function transformedBounds(
+  rect: Phaser.Geom.Rectangle,
+  matrix: Phaser.GameObjects.Components.TransformMatrix,
+): Phaser.Geom.Rectangle {
+  const corners = [
+    matrix.transformPoint(rect.x, rect.y),
+    matrix.transformPoint(rect.right, rect.y),
+    matrix.transformPoint(rect.x, rect.bottom),
+    matrix.transformPoint(rect.right, rect.bottom),
+  ].map((point) => ({ x: point.x, y: point.y }));
+
+  const xs = corners.map((point) => point.x);
+  const ys = corners.map((point) => point.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return new Phaser.Geom.Rectangle(left, top, Math.max(...xs) - left, Math.max(...ys) - top);
+}
+
 function hitTestFor(node: GameObjectNode) {
   return node.type === 'ellipse'
     ? Phaser.Geom.Ellipse.Contains
@@ -82,6 +112,17 @@ export class EditorScene extends Phaser.Scene {
   static readonly KEY = 'editor';
 
   private displayObjects = new Map<string, Renderable>();
+  /**
+   * Each container's bounds in its own local space, keyed by node id.
+   *
+   * A Phaser Container has no size of its own, and its origin is not the centre
+   * of its contents, so nothing downstream — the selection outline, the hit
+   * area, the scale handle — can be derived from `width`/`height` the way it is
+   * for every other object. Recomputed from the children each sync, which is
+   * also why the sync walks depth-first: a group's box is only knowable once
+   * everything inside it has been laid out.
+   */
+  private containerBounds = new Map<string, Phaser.Geom.Rectangle>();
   /** Texture keys this scene created, so shutdown and pruning only touch ours. */
   private assetTextures = new Set<string>();
   /** Data URLs currently being decoded, so a slow image is only decoded once. */
@@ -100,7 +141,7 @@ export class EditorScene extends Phaser.Scene {
    */
   private scaling: {
     id: string;
-    /** Unscaled half-size of the object, in world units. */
+    /** The object's unscaled bottom-right corner, in its own local space. */
     halfWidth: number;
     halfHeight: number;
     scaleX: number;
@@ -112,6 +153,23 @@ export class EditorScene extends Phaser.Scene {
 
   /** Set between dragstart/dragend so the store sync can't fight the pointer. */
   private draggingId: string | null = null;
+  /**
+   * A drag on a group's contents that moves the group instead.
+   *
+   * Phaser drags whatever the pointer landed on, and a group's own box is
+   * covered by the very children that give it one — so without this a group
+   * could be selected but never moved on the canvas, which on a phone is most
+   * of what a group is for. Recorded rather than derived per move because the
+   * gesture has to resolve against where the group and the pointer started, the
+   * same way corner scaling does.
+   */
+  private dragProxy: {
+    id: string;
+    startX: number;
+    startY: number;
+    pointerX: number;
+    pointerY: number;
+  } | null = null;
   private isPanning = false;
   private pinchDistance = 0;
   /** Once the user has zoomed or panned, stop re-framing the view for them. */
@@ -298,6 +356,11 @@ export class EditorScene extends Phaser.Scene {
         const id = object.getData('nodeId') as string | undefined;
         if (!id) return;
         this.selectionAtPress = store.getState().selectedId;
+        // Pressing inside a selected group keeps the group selected, so the
+        // press can go on to move it. Selecting one of its children takes a
+        // press with the group not selected — or the scene tree, which is
+        // where a group is selected in the first place.
+        if (this.proxyTargetFor(id)) return;
         store.getState().select(id);
       },
     );
@@ -349,7 +412,10 @@ export class EditorScene extends Phaser.Scene {
           return;
         }
 
-        const id = (object.getData('nodeId') as string | undefined) ?? null;
+        const pressed = (object.getData('nodeId') as string | undefined) ?? null;
+        // A press inside the selected group moves the group, not the child.
+        const proxyId = this.proxyTargetFor(pressed);
+        const id = proxyId ?? pressed;
 
         // Touch is a two-step interaction: the first press only selects, and
         // only the already-selected object can then be dragged. A fingertip
@@ -363,6 +429,19 @@ export class EditorScene extends Phaser.Scene {
 
         this.dragRejected = false;
         this.draggingId = id;
+        this.dragProxy = null;
+        if (proxyId) {
+          const node = findNode(activeScene(store.getState().project).children, proxyId);
+          if (node) {
+            this.dragProxy = {
+              id: proxyId,
+              startX: node.transform.x,
+              startY: node.transform.y,
+              pointerX: pointer.worldX,
+              pointerY: pointer.worldY,
+            };
+          }
+        }
         // One undo entry per drag, not one per pointer-move.
         store.getState().beginTransaction();
       },
@@ -384,8 +463,26 @@ export class EditorScene extends Phaser.Scene {
           return;
         }
 
+        if (this.dragRejected) return;
+
+        // Moving a group by one of its children: Phaser's dragX/dragY describe
+        // where the *child* would go, so the group follows the pointer's own
+        // displacement instead, measured in the space its position lives in.
+        const proxy = this.dragProxy;
+        if (proxy) {
+          const group = this.displayObjects.get(proxy.id);
+          if (!group) return;
+          const from = this.toParentSpace(group, { x: proxy.pointerX, y: proxy.pointerY });
+          const to = this.toParentSpace(group, { x: pointer.worldX, y: pointer.worldY });
+          store.getState().updateTransform(proxy.id, {
+            x: proxy.startX + to.x - from.x,
+            y: proxy.startY + to.y - from.y,
+          });
+          return;
+        }
+
         const id = object.getData('nodeId') as string | undefined;
-        if (!id || this.dragRejected) return;
+        if (!id) return;
 
         // Exact floats while the finger is down; finishDrag rounds once at the
         // end. Rounding per-move would step in whole world units, which is
@@ -427,6 +524,7 @@ export class EditorScene extends Phaser.Scene {
    */
   private finishDrag(): void {
     this.dragRejected = false;
+    this.dragProxy = null;
 
     // A scale gesture ends through exactly the same paths as a move, for the
     // same reason: on a real device several of them fire and some of them
@@ -481,20 +579,30 @@ export class EditorScene extends Phaser.Scene {
     const object = id ? this.displayObjects.get(id) : undefined;
     if (!id || !object) return;
 
-    const halfWidth = object.width / 2;
-    const halfHeight = object.height / 2;
-    // A zero-sized object has no corner to drag and no ratio to scale by.
-    if (halfWidth <= 0 || halfHeight <= 0) return;
+    // The bottom-right of the object's own box, in its unscaled local space.
+    // For everything but a container that is half its size; a container's box
+    // is its children's, which need not be centred on it at all.
+    const rect = this.localRectOf(object);
+    const cornerX = rect.right;
+    const cornerY = rect.bottom;
+    // A corner on the origin gives the gesture nothing to scale against —
+    // every pointer position would divide by zero.
+    if (Math.abs(cornerX) < 1e-6 || Math.abs(cornerY) < 1e-6) return;
 
-    const corner = this.cornerOf(object);
+    // Everything is resolved in the object's *parent* space, which for a
+    // top-level object is world space and for a nested one is the container's.
+    // That is the space its own x/y/rotation/scale are expressed in, so the
+    // maths below is the same at every depth.
+    const corner = this.toParentSpace(object, this.cornerOf(object));
+    const grab = this.toParentSpace(object, { x: pointer.worldX, y: pointer.worldY });
     this.scaling = {
       id,
-      halfWidth,
-      halfHeight,
+      halfWidth: cornerX,
+      halfHeight: cornerY,
       scaleX: object.scaleX,
       scaleY: object.scaleY,
-      grabOffsetX: corner.x - pointer.worldX,
-      grabOffsetY: corner.y - pointer.worldY,
+      grabOffsetX: corner.x - grab.x,
+      grabOffsetY: corner.y - grab.y,
     };
     // One undo entry for the whole gesture, exactly as a move drag does.
     store.beginTransaction();
@@ -512,9 +620,10 @@ export class EditorScene extends Phaser.Scene {
     const object = gesture ? this.displayObjects.get(gesture.id) : undefined;
     if (!gesture || !object) return;
 
+    const point = this.toParentSpace(object, { x: pointer.worldX, y: pointer.worldY });
     const angle = -object.rotation;
-    const dx = pointer.worldX + gesture.grabOffsetX - object.x;
-    const dy = pointer.worldY + gesture.grabOffsetY - object.y;
+    const dx = point.x + gesture.grabOffsetX - object.x;
+    const dy = point.y + gesture.grabOffsetY - object.y;
     const localX = dx * Math.cos(angle) - dy * Math.sin(angle);
     const localY = dx * Math.sin(angle) + dy * Math.cos(angle);
 
@@ -548,16 +657,42 @@ export class EditorScene extends Phaser.Scene {
     });
   }
 
-  /** The object's own bottom-right corner in world space, rotation included. */
+  /**
+   * The object's own bottom-right corner in world space, rotation, scale and
+   * every enclosing container included — the world matrix does all of it.
+   */
   private cornerOf(object: Renderable): { x: number; y: number } {
-    const offsetX = (object.width / 2) * object.scaleX;
-    const offsetY = (object.height / 2) * object.scaleY;
-    const cos = Math.cos(object.rotation);
-    const sin = Math.sin(object.rotation);
-    return {
-      x: object.x + offsetX * cos - offsetY * sin,
-      y: object.y + offsetX * sin + offsetY * cos,
-    };
+    const rect = this.localRectOf(object);
+    const point = object.getWorldTransformMatrix().transformPoint(rect.right, rect.bottom);
+    return { x: point.x, y: point.y };
+  }
+
+  /**
+   * The selected group a press on `id` should move instead of `id` itself, or
+   * null when the press is its own business.
+   */
+  private proxyTargetFor(id: string | null): string | null {
+    if (!id) return null;
+    const state = useEditorStore.getState();
+    const selected = state.selectedId;
+    if (!selected || selected === id) return null;
+    const node = findNode(activeScene(state.project).children, selected);
+    if (!node || node.type !== 'container') return null;
+    return containsNode(node, id) ? selected : null;
+  }
+
+  /**
+   * A world point in the space the object's own transform is expressed in: the
+   * enclosing container's, or world space for a top-level object.
+   */
+  private toParentSpace(
+    object: Renderable,
+    point: { x: number; y: number },
+  ): { x: number; y: number } {
+    const parent = object.parentContainer;
+    if (!parent) return point;
+    const local = parent.getWorldTransformMatrix().applyInverse(point.x, point.y);
+    return { x: local.x, y: local.y };
   }
 
   update(): void {
@@ -631,15 +766,33 @@ export class EditorScene extends Phaser.Scene {
     // exist, or Phaser falls back to its own missing-texture green square.
     this.syncTextures(state.project);
 
-    // Only top-level nodes render for now. Nested children exist in the schema
-    // but need Phaser Containers to position correctly, which arrives with the
-    // container node type — drawing them flat here would just place them wrong.
-    this.syncNodes(scene.children);
+    const seen = new Set<string>();
+    this.syncNodes(scene.children, null, seen);
+
+    for (const [id, object] of this.displayObjects) {
+      if (seen.has(id)) continue;
+      // Destroying a container destroys its children with it, so an object
+      // pruned here may already be gone. Phaser's destroy() is a no-op the
+      // second time, which is what makes that safe rather than lucky.
+      object.destroy();
+      this.displayObjects.delete(id);
+      this.containerBounds.delete(id);
+    }
   }
 
-  private syncNodes(nodes: GameObjectNode[]): void {
-    const seen = new Set<string>();
-
+  /**
+   * Diffs one level of the document against the display list, then recurses
+   * into containers.
+   *
+   * Depth-first and children-before-parent: a container's size, hit area and
+   * selection box are all derived from what is inside it, so it can only be
+   * laid out once its contents have been.
+   */
+  private syncNodes(
+    nodes: GameObjectNode[],
+    parent: Phaser.GameObjects.Container | null,
+    seen: Set<string>,
+  ): void {
     nodes.forEach((node, index) => {
       seen.add(node.id);
       let object = this.displayObjects.get(node.id);
@@ -656,14 +809,37 @@ export class EditorScene extends Phaser.Scene {
         this.displayObjects.set(node.id, object);
       }
 
+      this.reparent(object, parent, index);
+
+      if (node.type === 'container') {
+        this.syncNodes(node.children, object as Phaser.GameObjects.Container, seen);
+      }
+
       this.applyNode(object, node, index);
     });
+  }
 
-    for (const [id, object] of this.displayObjects) {
-      if (seen.has(id)) continue;
-      object.destroy();
-      this.displayObjects.delete(id);
+  /**
+   * Puts a display object under the right parent, in the right place in its
+   * list.
+   *
+   * Order inside a container is the list order, not depth: a child's `depth`
+   * only sorts it within its container, and the container's own list is what
+   * actually renders. `moveTo` is therefore the nested equivalent of the
+   * `setDepth(index)` the scene's top level uses.
+   */
+  private reparent(
+    object: Renderable,
+    parent: Phaser.GameObjects.Container | null,
+    index: number,
+  ): void {
+    const current = object.parentContainer ?? null;
+    if (current !== parent) {
+      current?.remove(object);
+      if (parent) parent.add(object);
+      else this.add.existing(object);
     }
+    if (parent && parent.getIndex(object) !== index) parent.moveTo(object, index);
   }
 
   private createDisplayObject(node: GameObjectNode): Renderable {
@@ -681,6 +857,11 @@ export class EditorScene extends Phaser.Scene {
         break;
       case 'sprite':
         object = this.add.image(0, 0, this.textureKeyFor(node.props.assetId));
+        break;
+      case 'container':
+        // Sized in applyNode from whatever ends up inside it; a container needs
+        // a size at all only because that is how Phaser gives it a hit area.
+        object = this.add.container(0, 0).setSize(EMPTY_GROUP_SIZE, EMPTY_GROUP_SIZE);
         break;
     }
 
@@ -729,6 +910,14 @@ export class EditorScene extends Phaser.Scene {
         image.setFlip(node.props.flipX, node.props.flipY);
         break;
       }
+      case 'container': {
+        const group = object as Phaser.GameObjects.Container;
+        // Alpha on a Container multiplies down onto its children, which is
+        // exactly what "fade the whole group" should mean.
+        group.setAlpha(node.props.alpha);
+        this.applyContainerBounds(group, node.id);
+        break;
+      }
       case 'text': {
         const text = object as Phaser.GameObjects.Text;
         if (text.text !== node.props.text) text.setText(node.props.text);
@@ -746,11 +935,89 @@ export class EditorScene extends Phaser.Scene {
   }
 
   /**
+   * Recomputes a container's local bounds from its children and hands them to
+   * Phaser as the container's size and hit area.
+   *
+   * The hit area is offset rather than centred: a container's origin is its
+   * transform point, not the middle of its contents, so a group whose children
+   * all sit to one side of it would otherwise be grabbable everywhere except
+   * where it is drawn. Phaser measures a custom hit area from
+   * (-displayOrigin), which is what the half-size shift below undoes.
+   */
+  private applyContainerBounds(
+    group: Phaser.GameObjects.Container,
+    id: string,
+  ): void {
+    const bounds = this.measureContainer(group);
+    this.containerBounds.set(id, bounds);
+    group.setSize(bounds.width, bounds.height);
+
+    const area = group.input?.hitArea;
+    if (area instanceof Phaser.Geom.Rectangle) {
+      area.setTo(
+        bounds.x + bounds.width / 2,
+        bounds.y + bounds.height / 2,
+        bounds.width,
+        bounds.height,
+      );
+    }
+  }
+
+  /** The union of the container's children, in the container's own space. */
+  private measureContainer(
+    group: Phaser.GameObjects.Container,
+  ): Phaser.Geom.Rectangle {
+    let bounds: Phaser.Geom.Rectangle | null = null;
+
+    for (const child of group.list as Renderable[]) {
+      const box = transformedBounds(this.localRectOf(child), child.getLocalTransformMatrix());
+      bounds = bounds ? Phaser.Geom.Rectangle.Union(bounds, box) : box;
+    }
+
+    return (
+      bounds ??
+      new Phaser.Geom.Rectangle(
+        -EMPTY_GROUP_SIZE / 2,
+        -EMPTY_GROUP_SIZE / 2,
+        EMPTY_GROUP_SIZE,
+        EMPTY_GROUP_SIZE,
+      )
+    );
+  }
+
+  /**
+   * The object's extent in its own unscaled local space.
+   *
+   * Everything but a container is drawn from its centre, so its box is simply
+   * its size around the origin. A container's box is whatever its children
+   * happen to occupy, which `measureContainer` worked out in the same pass that
+   * drew them.
+   */
+  private localRectOf(object: Renderable): Phaser.Geom.Rectangle {
+    if (object instanceof Phaser.GameObjects.Container) {
+      const id = object.getData('nodeId') as string | undefined;
+      const bounds = id ? this.containerBounds.get(id) : undefined;
+      if (bounds) return bounds;
+    }
+    const { width, height } = object;
+    return new Phaser.Geom.Rectangle(-width / 2, -height / 2, width, height);
+  }
+
+  /** The object's axis-aligned box in world space, containers included. */
+  private worldBoundsOf(object: Renderable): Phaser.Geom.Rectangle {
+    return transformedBounds(this.localRectOf(object), object.getWorldTransformMatrix());
+  }
+
+  /**
    * Keeps the input hit area in step with the object's size. Without this, a
    * resized object stays clickable only at its original dimensions — and a text
    * object, whose size follows its content, drifts out of step as you type.
    */
   private applyHitArea(object: Renderable): void {
+    // A container's hit area is its children's box, which applyContainerBounds
+    // has already set — its own width/height mean nothing here.
+    if (object instanceof Phaser.GameObjects.Container) return;
+
     const area = object.input?.hitArea;
     if (!area) return;
 
@@ -774,9 +1041,11 @@ export class EditorScene extends Phaser.Scene {
       return;
     }
 
-    // getBounds() is already axis-aligned and accounts for rotation and scale,
-    // so the outline stays correct without duplicating the transform maths.
-    const bounds = target.getBounds();
+    // The same box the scale handle and the hit area are built from, rather
+    // than Phaser's getBounds(): a Container's getBounds() collapses to a point
+    // when it is empty, and an empty group is exactly the one you most need to
+    // see the outline of.
+    const bounds = this.worldBoundsOf(target);
     this.selectionOutline
       .setVisible(true)
       .setPosition(bounds.x, bounds.y)
