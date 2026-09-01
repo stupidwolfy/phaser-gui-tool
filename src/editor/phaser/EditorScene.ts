@@ -1,5 +1,11 @@
 import Phaser from 'phaser';
-import { activeScene, useEditorStore, type EditorState } from '../../core/store';
+import {
+  activeScene,
+  primaryId,
+  selectionRoots,
+  useEditorStore,
+  type EditorState,
+} from '../../core/store';
 import { containsNode, findNode, type GameObjectNode, type Project } from '../../core/schema';
 import { decodeImage, decodedImage } from '../../core/assets';
 
@@ -130,7 +136,14 @@ export class EditorScene extends Phaser.Scene {
   /** False after SHUTDOWN, so an in-flight decode can't touch a dead scene. */
   private alive = true;
   private sceneFrame!: Phaser.GameObjects.Rectangle;
-  private selectionOutline!: Phaser.GameObjects.Rectangle;
+  /**
+   * One outline per selected object, created on demand and reused.
+   *
+   * A pool rather than one outline per display object: outlines are drawn every
+   * frame against the camera zoom, and a selection is a handful of objects in a
+   * scene that may hold hundreds. Unused ones are simply hidden.
+   */
+  private selectionOutlines: Phaser.GameObjects.Rectangle[] = [];
   private scaleHandle!: Phaser.GameObjects.Rectangle;
   private unsubscribe?: () => void;
 
@@ -151,22 +164,25 @@ export class EditorScene extends Phaser.Scene {
     grabOffsetY: number;
   } | null = null;
 
-  /** Set between dragstart/dragend so the store sync can't fight the pointer. */
-  private draggingId: string | null = null;
   /**
-   * A drag on a group's contents that moves the group instead.
+   * The move gesture in progress: which nodes it moves, where each of them
+   * started, and where the pointer was when it began.
    *
-   * Phaser drags whatever the pointer landed on, and a group's own box is
-   * covered by the very children that give it one — so without this a group
-   * could be selected but never moved on the canvas, which on a phone is most
-   * of what a group is for. Recorded rather than derived per move because the
-   * gesture has to resolve against where the group and the pointer started, the
-   * same way corner scaling does.
+   * Everything a press can move goes through this one shape — the object under
+   * the finger, the group it belongs to, or the whole selection — because all
+   * three are the same gesture: every node in the set follows the pointer's own
+   * displacement from where it started.
+   *
+   * That displacement is computed here rather than taken from Phaser's
+   * `dragX`/`dragY`, which describe only the object actually under the pointer.
+   * For a press on a group's child that is the child, not the group — and a
+   * group's own box is covered by the very children that give it one, so
+   * without this a group could be selected but never moved on the canvas, which
+   * on a phone is most of what a group is for. The two agree exactly for a
+   * plain single-object drag, priming distance included.
    */
-  private dragProxy: {
-    id: string;
-    startX: number;
-    startY: number;
+  private dragging: {
+    nodes: { id: string; startX: number; startY: number }[];
     pointerX: number;
     pointerY: number;
   } | null = null;
@@ -185,7 +201,14 @@ export class EditorScene extends Phaser.Scene {
    * the object by then, so the live value would always match and the two-step
    * touch rule would never trigger.
    */
-  private selectionAtPress: string | null = null;
+  private selectionAtPress: readonly string[] = [];
+  /**
+   * Whether the press that is running was additive, decided once when it
+   * landed. DRAG_START cannot ask again: by then the pointer's event is a move,
+   * and a Shift released after the press but before the drag would turn a
+   * gesture that had just *deselected* an object into a drag of it.
+   */
+  private additivePress = false;
 
   constructor() {
     super(EditorScene.KEY);
@@ -206,14 +229,6 @@ export class EditorScene extends Phaser.Scene {
       .setStrokeStyle(1, FRAME_COLOR)
       .setFillStyle()
       .setDepth(-1000);
-
-    this.selectionOutline = this.add
-      .rectangle(0, 0, 10, 10)
-      .setOrigin(0)
-      .setStrokeStyle(2, SELECTION_COLOR)
-      .setFillStyle()
-      .setDepth(1000)
-      .setVisible(false);
 
     // Sits above the outline so it is never the outline that takes the press.
     this.scaleHandle = this.add
@@ -352,14 +367,29 @@ export class EditorScene extends Phaser.Scene {
 
     this.input.on(
       Phaser.Input.Events.GAMEOBJECT_DOWN,
-      (_pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.GameObject) => {
+      (pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.GameObject) => {
         const id = object.getData('nodeId') as string | undefined;
         if (!id) return;
-        this.selectionAtPress = store.getState().selectedId;
-        // Pressing inside a selected group keeps the group selected, so the
-        // press can go on to move it. Selecting one of its children takes a
-        // press with the group not selected — or the scene tree, which is
-        // where a group is selected in the first place.
+        const state = store.getState();
+        this.selectionAtPress = state.selectedIds;
+        this.additivePress = this.isAdditive(pointer);
+
+        // Additive: the press adds this object to the selection or takes it out
+        // again, and never starts a move. Separating the two is what makes
+        // building a selection on a phone possible at all — a press that both
+        // extended the selection and began dragging it would move everything
+        // already picked every time another object was added.
+        if (this.additivePress) {
+          state.toggleSelect(id);
+          return;
+        }
+
+        // Pressing something already selected leaves the selection alone, so
+        // the press can go on to move it — that is what makes a multi-object
+        // drag possible, and it is the same rule that lets a press inside a
+        // selected group move the group. Selecting one of a group's children
+        // takes a press with the group not selected, or the scene tree.
+        if (state.selectedIds.length > 1 && state.selectedIds.includes(id)) return;
         if (this.proxyTargetFor(id)) return;
         store.getState().select(id);
       },
@@ -370,7 +400,8 @@ export class EditorScene extends Phaser.Scene {
       Phaser.Input.Events.POINTER_DOWN,
       (_pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
         if (currentlyOver.length > 0) return;
-        this.selectionAtPress = null;
+        this.selectionAtPress = [];
+        this.additivePress = false;
         store.getState().select(null);
         this.isPanning = true;
       },
@@ -399,8 +430,9 @@ export class EditorScene extends Phaser.Scene {
       },
     );
 
-    // Phaser's own drag system handles the pointer bookkeeping; dragX/dragY
-    // arrive already in world space, so camera zoom and pan are accounted for.
+    // Phaser's own drag system handles the pointer bookkeeping and the 8px
+    // threshold; the positions it reports are ignored in favour of the pointer's
+    // world coordinates, which are the same for every node the gesture moves.
     this.input.on(
       Phaser.Input.Events.DRAG_START,
       (pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.GameObject) => {
@@ -412,36 +444,50 @@ export class EditorScene extends Phaser.Scene {
           return;
         }
 
+        // An additive press is a selection change and nothing else; letting
+        // Phaser turn it into a drag would move the object you were only trying
+        // to add to the selection.
+        if (this.additivePress) {
+          this.dragRejected = true;
+          return;
+        }
+
         const pressed = (object.getData('nodeId') as string | undefined) ?? null;
-        // A press inside the selected group moves the group, not the child.
-        const proxyId = this.proxyTargetFor(pressed);
-        const id = proxyId ?? pressed;
+        // A press inside a selected group moves the group, not the child.
+        const id = this.proxyTargetFor(pressed) ?? pressed;
 
         // Touch is a two-step interaction: the first press only selects, and
-        // only the already-selected object can then be dragged. A fingertip
+        // only an already-selected object can then be dragged. A fingertip
         // covers far more than a cursor, so honouring the first touch as a drag
         // moved whichever object it happened to graze. A mouse is precise
         // enough that press-and-drag in one gesture is still the right feel.
-        if (pointer.wasTouch && id !== this.selectionAtPress) {
+        if (pointer.wasTouch && (!id || !this.selectionAtPress.includes(id))) {
+          this.dragRejected = true;
+          return;
+        }
+
+        const state = store.getState();
+        const children = activeScene(state.project).children;
+        const selected = selectionRoots(children, state.selectedIds);
+        // Pressing one of several selected objects moves all of them; pressing
+        // anything else moves only what was pressed, which is also what makes a
+        // mouse press-and-drag on an unselected object still work.
+        const movesSelection = id !== null && selected.length > 1 && selected.includes(id);
+        const ids = movesSelection ? selected : id ? [id] : [];
+
+        const nodes = ids.flatMap((nodeId) => {
+          const node = findNode(children, nodeId);
+          return node
+            ? [{ id: nodeId, startX: node.transform.x, startY: node.transform.y }]
+            : [];
+        });
+        if (nodes.length === 0) {
           this.dragRejected = true;
           return;
         }
 
         this.dragRejected = false;
-        this.draggingId = id;
-        this.dragProxy = null;
-        if (proxyId) {
-          const node = findNode(activeScene(store.getState().project).children, proxyId);
-          if (node) {
-            this.dragProxy = {
-              id: proxyId,
-              startX: node.transform.x,
-              startY: node.transform.y,
-              pointerX: pointer.worldX,
-              pointerY: pointer.worldY,
-            };
-          }
-        }
+        this.dragging = { nodes, pointerX: pointer.worldX, pointerY: pointer.worldY };
         // One undo entry per drag, not one per pointer-move.
         store.getState().beginTransaction();
       },
@@ -449,45 +495,35 @@ export class EditorScene extends Phaser.Scene {
 
     this.input.on(
       Phaser.Input.Events.DRAG,
-      (
-        pointer: Phaser.Input.Pointer,
-        object: Phaser.GameObjects.GameObject,
-        dragX: number,
-        dragY: number,
-      ) => {
+      (pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.GameObject) => {
         if (object.getData('handle') === 'scale') {
-          // dragX/dragY describe where the handle would go; the scale is a
-          // function of where the pointer is relative to the object, so this
-          // gesture reads the pointer directly instead.
+          // The scale is a function of where the pointer is relative to the
+          // object, so this gesture reads the pointer directly.
           this.applyScale(pointer);
           return;
         }
 
-        if (this.dragRejected) return;
+        const drag = this.dragging;
+        if (this.dragRejected || !drag) return;
 
-        // Moving a group by one of its children: Phaser's dragX/dragY describe
-        // where the *child* would go, so the group follows the pointer's own
-        // displacement instead, measured in the space its position lives in.
-        const proxy = this.dragProxy;
-        if (proxy) {
-          const group = this.displayObjects.get(proxy.id);
-          if (!group) return;
-          const from = this.toParentSpace(group, { x: proxy.pointerX, y: proxy.pointerY });
-          const to = this.toParentSpace(group, { x: pointer.worldX, y: pointer.worldY });
-          store.getState().updateTransform(proxy.id, {
-            x: proxy.startX + to.x - from.x,
-            y: proxy.startY + to.y - from.y,
-          });
-          return;
-        }
-
-        const id = object.getData('nodeId') as string | undefined;
-        if (!id) return;
-
+        // Every node in the set moves by the same pointer displacement, each
+        // measured in the space its own position lives in, so objects sitting
+        // in differently transformed groups still travel together. The
+        // transaction DRAG_START opened covers all of it.
+        //
         // Exact floats while the finger is down; finishDrag rounds once at the
         // end. Rounding per-move would step in whole world units, which is
         // visible as stutter when the camera is zoomed in.
-        store.getState().updateTransform(id, { x: dragX, y: dragY });
+        for (const item of drag.nodes) {
+          const moving = this.displayObjects.get(item.id);
+          if (!moving) continue;
+          const from = this.toParentSpace(moving, { x: drag.pointerX, y: drag.pointerY });
+          const to = this.toParentSpace(moving, { x: pointer.worldX, y: pointer.worldY });
+          store.getState().updateTransform(item.id, {
+            x: item.startX + to.x - from.x,
+            y: item.startY + to.y - from.y,
+          });
+        }
       },
     );
 
@@ -524,7 +560,6 @@ export class EditorScene extends Phaser.Scene {
    */
   private finishDrag(): void {
     this.dragRejected = false;
-    this.dragProxy = null;
 
     // A scale gesture ends through exactly the same paths as a move, for the
     // same reason: on a real device several of them fire and some of them
@@ -546,19 +581,34 @@ export class EditorScene extends Phaser.Scene {
       store.endTransaction();
     }
 
-    const id = this.draggingId;
-    if (id === null) return;
-    this.draggingId = null;
+    const drag = this.dragging;
+    if (!drag) return;
+    this.dragging = null;
 
     const store = useEditorStore;
-    const node = findNode(activeScene(store.getState().project).children, id);
-    if (node) {
-      store.getState().updateTransform(id, {
+    for (const item of drag.nodes) {
+      const node = findNode(activeScene(store.getState().project).children, item.id);
+      if (!node) continue;
+      store.getState().updateTransform(item.id, {
         x: Math.round(node.transform.x),
         y: Math.round(node.transform.y),
       });
     }
     store.getState().endTransaction();
+  }
+
+  /**
+   * Whether this press adds to the selection instead of replacing it.
+   *
+   * Shift, Ctrl or Cmd where there is a keyboard, and the scene tree's own
+   * toggle everywhere — a phone has no modifier key, and multi-select that only
+   * worked on a desktop would not be multi-select in this editor.
+   */
+  private isAdditive(pointer: Phaser.Input.Pointer): boolean {
+    if (useEditorStore.getState().multiSelect) return true;
+    const event = pointer.event as MouseEvent | TouchEvent | undefined;
+    if (!event || !('shiftKey' in event)) return false;
+    return event.shiftKey || event.ctrlKey || event.metaKey;
   }
 
   // ---------------------------------------------------------------------------
@@ -575,7 +625,11 @@ export class EditorScene extends Phaser.Scene {
    */
   private beginScale(pointer: Phaser.Input.Pointer): void {
     const store = useEditorStore.getState();
-    const id = store.selectedId;
+    // Single selection only. Scaling several objects at once means scaling them
+    // about a shared centre, which is a different gesture from "drag this
+    // object's own corner" — the handle is hidden rather than made to mean two
+    // things, and the inspector's Scale fields still reach one object.
+    const id = store.selectedIds.length === 1 ? primaryId(store) : null;
     const object = id ? this.displayObjects.get(id) : undefined;
     if (!id || !object) return;
 
@@ -674,11 +728,13 @@ export class EditorScene extends Phaser.Scene {
   private proxyTargetFor(id: string | null): string | null {
     if (!id) return null;
     const state = useEditorStore.getState();
-    const selected = state.selectedId;
-    if (!selected || selected === id) return null;
-    const node = findNode(activeScene(state.project).children, selected);
-    if (!node || node.type !== 'container') return null;
-    return containsNode(node, id) ? selected : null;
+    const children = activeScene(state.project).children;
+    for (const selected of state.selectedIds) {
+      if (selected === id) continue;
+      const node = findNode(children, selected);
+      if (node?.type === 'container' && containsNode(node, id)) return selected;
+    }
+    return null;
   }
 
   /**
@@ -1032,28 +1088,52 @@ export class EditorScene extends Phaser.Scene {
   }
 
   private updateSelectionOutline(): void {
-    const { selectedId } = useEditorStore.getState();
-    const target = selectedId ? this.displayObjects.get(selectedId) : undefined;
+    const state = useEditorStore.getState();
+    const targets = state.selectedIds
+      .map((id) => this.displayObjects.get(id))
+      .filter((object): object is Renderable => object !== undefined && object.visible);
 
-    if (!target || !target.visible) {
-      this.selectionOutline.setVisible(false);
-      this.scaleHandle.setVisible(false);
-      return;
+    targets.forEach((target, index) => {
+      // The same box the scale handle and the hit area are built from, rather
+      // than Phaser's getBounds(): a Container's getBounds() collapses to a
+      // point when it is empty, and an empty group is exactly the one you most
+      // need to see the outline of.
+      const bounds = this.worldBoundsOf(target);
+      this.outlineAt(index)
+        .setVisible(true)
+        .setPosition(bounds.x, bounds.y)
+        .setSize(bounds.width, bounds.height)
+        // Constant on-screen thickness however far the camera is zoomed.
+        .setStrokeStyle(2 / this.cameras.main.zoom, SELECTION_COLOR);
+    });
+
+    for (let index = targets.length; index < this.selectionOutlines.length; index += 1) {
+      this.selectionOutlines[index].setVisible(false);
     }
 
-    // The same box the scale handle and the hit area are built from, rather
-    // than Phaser's getBounds(): a Container's getBounds() collapses to a point
-    // when it is empty, and an empty group is exactly the one you most need to
-    // see the outline of.
-    const bounds = this.worldBoundsOf(target);
-    this.selectionOutline
-      .setVisible(true)
-      .setPosition(bounds.x, bounds.y)
-      .setSize(bounds.width, bounds.height)
-      // Constant on-screen thickness regardless of how far the camera is zoomed.
-      .setStrokeStyle(2 / this.cameras.main.zoom, SELECTION_COLOR);
+    // The handle belongs to a single object's own corner; with several selected
+    // there is no one corner for it to sit on. See `beginScale`.
+    const primary = primaryId(state);
+    const handleTarget =
+      state.selectedIds.length === 1 && primary ? this.displayObjects.get(primary) : undefined;
+    if (handleTarget && handleTarget.visible) this.updateScaleHandle(handleTarget);
+    else this.scaleHandle.setVisible(false);
+  }
 
-    this.updateScaleHandle(target);
+  /** The pooled outline for the nth selected object, created on first use. */
+  private outlineAt(index: number): Phaser.GameObjects.Rectangle {
+    let outline = this.selectionOutlines[index];
+    if (!outline) {
+      outline = this.add
+        .rectangle(0, 0, 10, 10)
+        .setOrigin(0)
+        .setStrokeStyle(2, SELECTION_COLOR)
+        .setFillStyle()
+        .setDepth(1000)
+        .setVisible(false);
+      this.selectionOutlines[index] = outline;
+    }
+    return outline;
   }
 
   /**

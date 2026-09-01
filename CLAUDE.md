@@ -14,8 +14,9 @@ foundation: rectangles, ellipses and text; select/drag/zoom; inspector; save and
 Iteration 2 (shipped) added code export, and the editing operations around it: duplicate,
 copy/paste, draw-order control and a keyboard layer. Iteration 3 (shipped) added sprites
 and image assets. Iteration 4 (shipped) made the tree a real tree: a `container` node
-type, Phaser Containers, reparenting, and nested export. See the README for the
-user-facing feature list.
+type, Phaser Containers, reparenting, and nested export. Iteration 5 (shipped) made the
+selection a set: several objects moved, grouped, duplicated, hidden and deleted as one.
+See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -242,6 +243,44 @@ for a top-level node the parent is the scene, so those still read as scene coord
   a group work at all: adding selects the new object, so without it every add after the
   first would jump back out to the top level. Paste follows the same rule.
 
+## Selection
+
+`selectedIds: string[]` is the selection, in the order it was picked; the **last** entry
+is the primary one — what the inspector edits, where the scale handle sits, and which
+group `addNode` and paste drop into. There is no separate "active id" field: two places
+holding the same answer is how they come to disagree.
+
+- **`selectionRoots` is what an edit acts on, never `selectedIds` directly.** It returns
+  the selection in *document* order with anything already covered by another selected node
+  dropped. Selecting a group and something inside it is easy to do and means one thing —
+  the group — so without it a delete would remove the child twice, a duplicate would copy
+  it twice, and a drag would move it at double speed because both its own move and its
+  group's would apply.
+- **The selection is pruned in `editProject`, once, for every edit.** "Every id in the
+  selection names a live node" is therefore an invariant rather than something each action
+  has to remember; `undo`/`redo` prune against the project they restore. That is what let
+  `deleteNode` stop clearing the selection by hand, and it is why nothing downstream
+  checks whether a selected node still exists.
+- **Canvas, tree and keyboard all reach the same actions.** `deleteSelection`,
+  `duplicateSelection`, `copySelection`, `groupSelection`, `setSelectionVisible` and
+  `nudgeSelection` are the whole multi-object surface, and the single-object case is
+  simply a set of one — there are no parallel single-node versions to keep in step.
+  `deleteNode` is the one exception, because the tree's row button is about the row it
+  sits on and not about what is selected.
+- **`groupSelection` anchors on the frontmost selected object**: the group takes that
+  object's parent, its place in the draw order and its position, and every selected node
+  is recomputed against it, so nothing moves. The originals have to be removed *before*
+  the group is inserted — the nodes inside it carry the same ids, and `removeNode`
+  recurses, so a group inserted first has its own contents pulled out from under it.
+- **The inspector shows a different panel for a set**, with only the operations that mean
+  one unambiguous thing for several objects. No position or size fields: there is no
+  single number to show, and a field displaying one object's value while writing to all of
+  them is the kind of control that loses work. Moving several objects is the drag and the
+  arrow keys, both of which apply a *delta*.
+- **Multi-object scaling is deliberately not built.** Scaling a set about a shared centre
+  is a different gesture from dragging one object's own corner, so the handle is hidden
+  when more than one object is selected rather than made to mean two things.
+
 ## Interaction model
 
 Touch and mouse deliberately differ, keyed off `pointer.wasTouch`:
@@ -269,6 +308,23 @@ than copying one axis onto the other — copying makes the object lurch whenever
 is more vertical than horizontal. `store.lockAspect` is editor state, not document state,
 and both the handle and the inspector's Scale fields go through `scaleNode` so the lock
 cannot mean two different things.
+
+Building a selection and moving one are separated on purpose: while an additive press is
+in force — the scene tree's **Multi** toggle, or Shift/Ctrl/Cmd on a desktop —
+`GAMEOBJECT_DOWN` toggles membership and `DRAG_START` refuses outright. A press that both
+extended the selection and began dragging it would move everything already picked every
+time another object was added. The cost is that `multiSelect` has to be switched off again
+before the selection can be dragged, which is the trade a phone with no modifier key
+forces; the toggle sits in the tree header, with the rows whose meaning it changes.
+
+`EditorScene.dragging` is now the whole of moving things: a list of nodes, each with the
+position it started at, plus where the pointer was when the gesture began. Every node in
+it follows the pointer's own displacement, converted into that node's own parent space, so
+objects in differently transformed groups still travel together. That replaced both the
+plain `dragX`/`dragY` path and the group-proxy path — Phaser's `dragX`/`dragY` describe
+only the object actually under the pointer, which is the wrong object for a group and for
+every object in a selection but one. The two agree exactly for a single-object drag,
+priming distance included, which is why the existing drag tests did not move.
 
 `src/ui/MoveBar.tsx` makes that rule visible on mobile: it appears on selection and gives
 the move an explicit ending (✓ keep, ✗ put it back, using the `moveOrigin` snapshot the
@@ -336,6 +392,7 @@ model differ between them.
 ```
 tests/
   editing.spec.ts           add → select → drag → inspector → undo → save → reopen
+  multi-select.spec.ts      building a selection, then moving, grouping, duplicating it
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
@@ -349,6 +406,11 @@ Adding a node type means adding to `editing.spec.ts` (it draws, it drags, it sur
 save) and to `helpers/hostile.ts` (any new string that reaches the exporter). The hostile
 project now nests a rectangle inside a hostilely-named group, so both export paths run the
 nested emit and the `add([...])` list, not only the flat one.
+
+One trap the multi-select suite hit immediately: **adding an object selects it**, so a
+freshly added object is already in the selection and an additive tap on it takes it back
+*out*. A test building a selection from scratch has to clear it first — a press on empty
+canvas — or it silently ends up with one fewer object than it thinks.
 
 **Assert what is drawn, not just what is stored.** The drag bug that prompted all this
 passed every store-level assertion — the document held the right coordinates the whole
@@ -436,8 +498,8 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 Animations and sprite sheets (the asset table holds whole images only, and `sprite` nodes
 render as Phaser `Image`s, not `Sprite`s — animation is the reason to change that),
-tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Multi-select
-is not built either — `selectedId: string | null` runs through the store, the scene and
-the move bar, so it is its own iteration; nesting was done first so that it lands on the
-final shape of the document rather than being retrofitted into it. Prefabs are the
-natural next thing built on containers, and a group is what a prefab instance would be.
+tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Prefabs are the
+natural next thing built on containers, and a group is what a prefab instance would be —
+now that a selection is a set, "make a prefab of these" has something to start from.
+Alignment and distribution are the obvious next multi-object tools, and would need object
+bounds, which today only `EditorScene` knows (`containerBounds`, `worldBoundsOf`).

@@ -1,12 +1,85 @@
-import { useActiveScene, useEditorStore, useSelectedNode } from '../core/store';
+import { useActiveScene, useEditorStore, useSelectionNodes } from '../core/store';
 import { containsNode, findParent, siblingsOf, type GameObjectNode } from '../core/schema';
 import { AssetPicker, AssetSummary } from './AssetPicker';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
 
-/** Edits the selected object, or the scene itself when nothing is selected. */
+/**
+ * Edits the selection: one object in full, several at once through the actions
+ * that make sense for a set, or the scene itself when nothing is selected.
+ */
 export function Inspector() {
-  const node = useSelectedNode();
-  return node ? <NodeInspector node={node} /> : <SceneInspector />;
+  // The selection's roots, so picking a group and something inside it edits the
+  // group rather than showing two panels' worth of the same objects.
+  const nodes = useSelectionNodes();
+  if (nodes.length > 1) return <SelectionInspector nodes={nodes} />;
+  return nodes.length === 1 ? <NodeInspector node={nodes[0]} /> : <SceneInspector />;
+}
+
+/**
+ * The multi-object panel.
+ *
+ * Deliberately only the operations that mean one unambiguous thing for a set —
+ * group, duplicate, show/hide, delete. Position and size fields are not among
+ * them: with several objects selected there is no single number to show, and a
+ * field that displayed one object's value while writing to all of them is the
+ * kind of control that loses work. Moving several objects is the canvas drag
+ * and the arrow keys, both of which apply a delta rather than a value.
+ */
+function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
+  const select = useEditorStore((s) => s.select);
+  const groupSelection = useEditorStore((s) => s.groupSelection);
+  const duplicateSelection = useEditorStore((s) => s.duplicateSelection);
+  const deleteSelection = useEditorStore((s) => s.deleteSelection);
+  const setSelectionVisible = useEditorStore((s) => s.setSelectionVisible);
+
+  const anyVisible = nodes.some((node) => node.visible);
+
+  return (
+    <div className="panel">
+      <div className="panel__header">
+        <span>{nodes.length} objects</span>
+        <button
+          className="icon-btn icon-btn--danger"
+          onClick={deleteSelection}
+          title="Delete these objects"
+        >
+          ✕
+        </button>
+      </div>
+
+      <p className="hint">Drag any one of them on the canvas to move them together.</p>
+
+      <div className="panel__section">Selection</div>
+      <div className="arrange-row">
+        <button className="btn btn--add" onClick={groupSelection}>
+          Group
+        </button>
+        <button className="btn btn--add" onClick={duplicateSelection}>
+          Duplicate
+        </button>
+        <button className="btn btn--add" onClick={() => setSelectionVisible(!anyVisible)}>
+          {anyVisible ? 'Hide' : 'Show'}
+        </button>
+      </div>
+
+      <div className="panel__section">Objects</div>
+      <ul className="tree">
+        {nodes.map((node) => (
+          <li key={node.id} className="tree__group">
+            <div className="tree__item">
+              {/* Tapping one drops back to editing just that object, which is
+                  the only way out of the multi panel that does not also mean
+                  losing the selection you have just built. */}
+              <button className="tree__label" onClick={() => select(node.id)}>
+                <span className="tree__type" data-type={node.type} />
+                <span className="tree__name">{node.name}</span>
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function SceneInspector() {
@@ -89,7 +162,7 @@ function parentOptions(
 function ParentRow({ node }: { node: GameObjectNode }) {
   const scene = useActiveScene();
   const moveNode = useEditorStore((s) => s.moveNode);
-  const groupNode = useEditorStore((s) => s.groupNode);
+  const groupSelection = useEditorStore((s) => s.groupSelection);
 
   const parent = findParent(scene.children, node.id);
   const options = [
@@ -106,7 +179,7 @@ function ParentRow({ node }: { node: GameObjectNode }) {
         options={options}
         onChange={(value) => moveNode(node.id, value === SCENE_PARENT ? null : value)}
       />
-      <button className="btn btn--add" onClick={() => groupNode(node.id)}>
+      <button className="btn btn--add" onClick={groupSelection}>
         Wrap in a new group
       </button>
     </>
@@ -121,7 +194,7 @@ function ParentRow({ node }: { node: GameObjectNode }) {
 function ArrangeRow({ node }: { node: GameObjectNode }) {
   const scene = useActiveScene();
   const reorderNode = useEditorStore((s) => s.reorderNode);
-  const duplicateNode = useEditorStore((s) => s.duplicateNode);
+  const duplicateSelection = useEditorStore((s) => s.duplicateSelection);
 
   // Among its own siblings, not the scene's top level: draw order is array
   // order at every depth, and inside a group "to front" means the front of
@@ -170,7 +243,7 @@ function ArrangeRow({ node }: { node: GameObjectNode }) {
         <button
           className="btn btn--add"
           title="Duplicate"
-          onClick={() => duplicateNode(node.id)}
+          onClick={duplicateSelection}
         >
           Duplicate
         </button>
@@ -183,7 +256,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
   const renameNode = useEditorStore((s) => s.renameNode);
   const updateTransform = useEditorStore((s) => s.updateTransform);
   const updateProps = useEditorStore((s) => s.updateProps);
-  const deleteNode = useEditorStore((s) => s.deleteNode);
+  const deleteSelection = useEditorStore((s) => s.deleteSelection);
   const scaleNode = useEditorStore((s) => s.scaleNode);
   const lockAspect = useEditorStore((s) => s.lockAspect);
   const setLockAspect = useEditorStore((s) => s.setLockAspect);
@@ -196,7 +269,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
         <span>{node.type}</span>
         <button
           className="icon-btn icon-btn--danger"
-          onClick={() => deleteNode(node.id)}
+          onClick={deleteSelection}
           title="Delete object"
         >
           ✕

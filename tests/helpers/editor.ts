@@ -157,6 +157,23 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * The scene tree's sticky additive-selection toggle. While it is on, a press
+   * on a row or on the canvas adds to the selection instead of replacing it —
+   * and never starts a move, so a drag test has to turn it off again.
+   */
+  async setMultiSelect(on: boolean): Promise<void> {
+    await this.openPanel('scene');
+    const button = this.panel('scene').getByRole('button', { name: 'Multi', exact: true });
+    if (((await button.getAttribute('aria-pressed')) === 'true') !== on) await button.click();
+    await this.settle();
+  }
+
+  /** The tree header's object count, which reads "n of m" while several are selected. */
+  selectionCount(): Locator {
+    return this.panel('scene').locator('.panel__count');
+  }
+
   // -- inspector -------------------------------------------------------------
 
   /**

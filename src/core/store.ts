@@ -1,6 +1,8 @@
 import { create } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
 import { cloneWithNewIds, createNode, newProject } from './defaults';
 import {
+  composeTransform,
   containsNode,
   findNode,
   findParent,
@@ -18,7 +20,18 @@ const HISTORY_LIMIT = 100;
 
 export interface EditorState {
   project: Project;
-  selectedId: string | null;
+  /**
+   * The selected objects, in the order they were picked. The last entry is the
+   * *primary* selection: what the inspector edits, where the scale handle sits,
+   * and which group a new object lands in.
+   *
+   * An array rather than a single id because nearly every editing action is
+   * worth applying to several objects at once, and doing that by hand — select,
+   * act, select, act — is most of what makes a phone painful. Selection order
+   * is not document order; `selectionRoots` is what turns this into the
+   * document-ordered set an edit should actually act on.
+   */
+  selectedIds: string[];
   /** Name of the file on disk, once saved or opened. Drives the title bar. */
   fileName: string | null;
   /** True when there are changes not yet written to a file. */
@@ -29,26 +42,41 @@ export interface EditorState {
   /** Depth of nested transactions; >0 means "don't record intermediate steps". */
   txDepth: number;
   /**
-   * The selected node's transform as it was when it was selected, so the mobile
-   * move bar's cancel button can put it back where it started.
+   * Each selected node's transform as it was when it was selected, so the
+   * mobile move bar's cancel button can put the whole selection back where it
+   * started. One entry per selected node: a move bar that could only undo part
+   * of the move it had just confirmed would be worse than none.
    */
-  moveOrigin: { id: string; transform: Transform } | null;
+  moveOrigins: { id: string; transform: Transform }[];
   /**
-   * Copied node, kept outside the document so it survives undo, redo and
-   * opening another file. Paste offsets from it and writes the result back, so
-   * pasting repeatedly cascades instead of stacking copies on one spot.
+   * Copied nodes, kept outside the document so they survive undo, redo and
+   * opening another file. Paste offsets from them and writes the result back,
+   * so pasting repeatedly cascades instead of stacking copies on one spot.
    */
-  clipboard: GameObjectNode | null;
+  clipboard: GameObjectNode[];
   /**
    * Whether scaling keeps the object's aspect ratio. Editor state, not document
-   * state: it is a preference about the tool, like `selectedId`, and two people
-   * opening the same file should not disagree about the shape of its objects.
+   * state: it is a preference about the tool, like the selection itself, and
+   * two people opening the same file should not disagree about the shape of
+   * its objects.
    *
    * On by default — a non-uniform scale is almost always a slip rather than an
    * intent, and it is the corner handle's normal behaviour everywhere else.
    */
   lockAspect: boolean;
   setLockAspect: (lockAspect: boolean) => void;
+  /**
+   * Sticky additive selection: while it is on, a press adds to the selection
+   * instead of replacing it.
+   *
+   * Editor state, like `lockAspect`. Desktop has Shift and Ctrl for this, and a
+   * phone has neither — a modifier that only exists on a keyboard would make
+   * multi-select a desktop feature, which is exactly the split this project
+   * does not accept. The toggle sits in the scene tree's header, where the rows
+   * it changes the meaning of are.
+   */
+  multiSelect: boolean;
+  setMultiSelect: (multiSelect: boolean) => void;
   /**
    * Scales a node, honouring `lockAspect`. Both the inspector's Scale fields
    * and the canvas corner handle go through here so the lock cannot mean one
@@ -63,8 +91,19 @@ export interface EditorState {
   renameProject: (name: string) => void;
 
   // -- selection -------------------------------------------------------------
+  /** Replaces the selection with one node, or clears it. */
   select: (id: string | null) => void;
-  /** Mobile move bar: put the node back where it was when selected. */
+  /** Adds a node to the selection, or takes it out if it is already in. */
+  toggleSelect: (id: string) => void;
+  /** Replaces the selection outright, in the order given. */
+  selectMany: (ids: string[]) => void;
+  /**
+   * Everything at the top level of the scene. Nested objects are deliberately
+   * left out: they are already covered by the group they are in, and an edit
+   * applied to a group *and* its children would apply twice.
+   */
+  selectAll: () => void;
+  /** Mobile move bar: put the selection back where it was when selected. */
   cancelMove: () => void;
   /** Mobile move bar: accept the move and leave move mode. */
   commitMove: () => void;
@@ -93,15 +132,18 @@ export interface EditorState {
    */
   moveNode: (id: string, parentId: string | null, index?: number) => void;
   /**
-   * Wraps a node in a new container, in its place in the draw order. The
-   * container takes the node's position, so nothing moves, and the node keeps
-   * its own rotation and scale.
+   * Wraps the selection in a new container, in the frontmost selected object's
+   * place in the draw order. The container takes that object's position and
+   * every selected object is recomputed against it, so nothing moves on the
+   * canvas — grouping changes what things move *with*, not where they are.
    */
-  groupNode: (id: string) => void;
+  groupSelection: () => void;
+  /** Deletes one node, whichever is selected — the scene tree's row button. */
   deleteNode: (id: string) => void;
-  /** Copies the node, its style and its subtree, one step above the original. */
-  duplicateNode: (id: string) => void;
-  copyNode: (id: string) => void;
+  deleteSelection: () => void;
+  /** Copies each selected object, its style and its subtree, one step above it. */
+  duplicateSelection: () => void;
+  copySelection: () => void;
   pasteNode: () => void;
   /**
    * Moves a node to `toIndex` among its own siblings, clamped. Array order *is*
@@ -112,6 +154,16 @@ export interface EditorState {
   reorderNode: (id: string, toIndex: number) => void;
   renameNode: (id: string, name: string) => void;
   setNodeVisible: (id: string, visible: boolean) => void;
+  /** Shows or hides every selected object, in one undo step. */
+  setSelectionVisible: (visible: boolean) => void;
+  /**
+   * Moves the whole selection by a delta in *world* pixels — the arrow keys.
+   *
+   * World rather than local because that is what the user sees: two objects in
+   * differently rotated groups nudged by the same key should travel the same
+   * way on screen, not each along its own group's axes.
+   */
+  nudgeSelection: (dx: number, dy: number) => void;
   updateTransform: (id: string, patch: Partial<Transform>) => void;
   updateProps: (id: string, patch: Record<string, unknown>) => void;
   updateScene: (patch: Partial<Omit<SceneDoc, 'children' | 'id'>>) => void;
@@ -215,6 +267,69 @@ function clearAssetReferences(nodes: GameObjectNode[], assetId: string): GameObj
   return changed ? next : nodes;
 }
 
+/**
+ * The selected nodes that an edit should act on, in document order, with
+ * anything already covered by another selected node left out.
+ *
+ * Selecting a group *and* something inside it is easy to do and means one
+ * thing, not two: the group. Without this, deleting that selection would remove
+ * the child twice over, duplicating it would copy it twice, and dragging it
+ * would move it at double speed because both its own move and its group's would
+ * apply. Every multi-object action goes through here for that reason.
+ *
+ * Document order, not selection order, so that duplicate, group and paste keep
+ * the draw order the objects already had rather than the order they happened to
+ * be tapped in.
+ */
+export function selectionRoots(
+  nodes: GameObjectNode[],
+  ids: readonly string[],
+): string[] {
+  if (ids.length === 0) return [];
+  const wanted = new Set(ids);
+  const roots: string[] = [];
+  const walk = (list: GameObjectNode[]) => {
+    for (const node of list) {
+      // Selected: take it and stop — everything below it comes with it.
+      if (wanted.has(node.id)) roots.push(node.id);
+      else walk(node.children);
+    }
+  };
+  walk(nodes);
+  return roots;
+}
+
+/** The last-picked selection: what the inspector edits. Null when nothing is. */
+export function primaryId(state: EditorState): string | null {
+  return state.selectedIds.at(-1) ?? null;
+}
+
+/**
+ * Drops entries naming a node that is no longer in the scene — see
+ * `editProject`. Returns the array it was given when nothing was dropped, so a
+ * sync that changed nothing costs no re-render.
+ */
+function pruneIds<T>(
+  children: GameObjectNode[],
+  entries: T[],
+  idOf: (entry: T) => string,
+): T[] {
+  if (entries.length === 0) return entries;
+  const kept = entries.filter((entry) => findNode(children, idOf(entry)));
+  return kept.length === entries.length ? entries : kept;
+}
+
+/** The move bar's undo snapshot for a set of nodes. */
+function originsFor(
+  children: GameObjectNode[],
+  ids: readonly string[],
+): { id: string; transform: Transform }[] {
+  return ids.flatMap((id) => {
+    const node = findNode(children, id);
+    return node ? [{ id, transform: { ...node.transform } }] : [];
+  });
+}
+
 /** How far a duplicate or a paste lands from its source, in scene pixels. */
 const COPY_OFFSET = 16;
 
@@ -242,19 +357,21 @@ function offsetCopy(node: GameObjectNode): GameObjectNode {
   } as GameObjectNode;
 }
 
+/** Three decimals: finer than the eye, and readable in an inspector field. */
+const settle = (value: number): number => Number(value.toFixed(3));
+
 /**
  * Settles a computed transform on numbers a person would type. Reparenting
  * divides and rotates, so without this a node dropped into a group and back out
  * again drifts to 479.99999999999994.
  */
 function tidyTransform(transform: Transform): Transform {
-  const round = (value: number, places: number) => Number(value.toFixed(places));
   return {
     x: Math.round(transform.x),
     y: Math.round(transform.y),
-    rotation: round(transform.rotation, 3),
-    scaleX: round(transform.scaleX, 3),
-    scaleY: round(transform.scaleY, 3),
+    rotation: settle(transform.rotation),
+    scaleX: settle(transform.scaleX),
+    scaleY: settle(transform.scaleY),
   };
 }
 
@@ -268,7 +385,7 @@ function tidyTransform(transform: Transform): Transform {
  * added — and the next add belongs beside it, not back out at the top level.
  */
 function openContainerId(state: EditorState): string | null {
-  const { selectedId } = state;
+  const selectedId = primaryId(state);
   if (!selectedId) return null;
   const children = activeScene(state.project).children;
   const node = findNode(children, selectedId);
@@ -298,10 +415,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
     const project = fn(state.project);
     if (project === state.project) return;
 
+    // Every edit that can remove a node passes through here, so pruning once in
+    // this one place is what makes "the selection always names live nodes" an
+    // invariant rather than something each action has to remember. Identity is
+    // preserved when nothing was dropped, so this costs no re-render.
+    const children = activeScene(project).children;
+
     const recordHistory = state.txDepth === 0;
     set({
       project,
       dirty: true,
+      selectedIds: pruneIds(children, state.selectedIds, (id) => id),
+      moveOrigins: pruneIds(children, state.moveOrigins, (origin) => origin.id),
       past: recordHistory
         ? [...state.past, state.project].slice(-HISTORY_LIMIT)
         : state.past,
@@ -323,17 +448,19 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
   return {
     project: newProject(),
-    selectedId: null,
+    selectedIds: [],
     fileName: null,
     dirty: false,
     past: [],
     future: [],
     txDepth: 0,
-    moveOrigin: null,
-    clipboard: null,
+    moveOrigins: [],
+    clipboard: [],
     lockAspect: true,
+    multiSelect: false,
 
     setLockAspect: (lockAspect) => set({ lockAspect }),
+    setMultiSelect: (multiSelect) => set({ multiSelect }),
 
     scaleNode: (id, axis, value) => {
       const state = get();
@@ -362,24 +489,24 @@ export const useEditorStore = create<EditorState>((set, get) => {
       set({
         project,
         fileName,
-        selectedId: null,
+        selectedIds: [],
         dirty: false,
         past: [],
         future: [],
         txDepth: 0,
-        moveOrigin: null,
+        moveOrigins: [],
       }),
 
     resetProject: () =>
       set({
         project: newProject(),
         fileName: null,
-        selectedId: null,
+        selectedIds: [],
         dirty: false,
         past: [],
         future: [],
         txDepth: 0,
-        moveOrigin: null,
+        moveOrigins: [],
       }),
 
     markSaved: (fileName) => set({ fileName, dirty: false }),
@@ -387,25 +514,44 @@ export const useEditorStore = create<EditorState>((set, get) => {
     renameProject: (name) =>
       set((state) => ({ project: { ...state.project, name }, dirty: true })),
 
-    select: (id) =>
-      set((state) => {
-        const node = id ? findNode(activeScene(state.project).children, id) : null;
-        return {
-          selectedId: id,
-          moveOrigin: node ? { id: node.id, transform: { ...node.transform } } : null,
-        };
-      }),
+    select: (id) => get().selectMany(id ? [id] : []),
 
-    cancelMove: () => {
-      const { moveOrigin } = get();
-      if (!moveOrigin) return;
-      // Applied as an ordinary edit rather than a history rewind, so cancelling
-      // is itself undoable and can't strand the user mid-stack.
-      get().updateTransform(moveOrigin.id, moveOrigin.transform);
-      set({ selectedId: null, moveOrigin: null });
+    toggleSelect: (id) => {
+      const { selectedIds } = get();
+      get().selectMany(
+        selectedIds.includes(id)
+          ? selectedIds.filter((current) => current !== id)
+          : [...selectedIds, id],
+      );
     },
 
-    commitMove: () => set({ selectedId: null, moveOrigin: null }),
+    selectMany: (ids) =>
+      set((state) => {
+        const children = activeScene(state.project).children;
+        // Filtered on the way in, so nothing downstream has to ask whether a
+        // selected id still names something — and so a stale id from a caller
+        // holding an old list cannot resurrect a deleted node in the inspector.
+        const live = ids.filter((id) => findNode(children, id));
+        return { selectedIds: live, moveOrigins: originsFor(children, live) };
+      }),
+
+    selectAll: () =>
+      get().selectMany(activeScene(get().project).children.map((node) => node.id)),
+
+    cancelMove: () => {
+      const { moveOrigins } = get();
+      if (moveOrigins.length === 0) return;
+      // Applied as ordinary edits rather than a history rewind, so cancelling
+      // is itself undoable and can't strand the user mid-stack. One transaction
+      // for the whole selection: the move was one gesture, so putting it back
+      // is one step.
+      get().beginTransaction();
+      for (const origin of moveOrigins) get().updateTransform(origin.id, origin.transform);
+      get().endTransaction();
+      set({ selectedIds: [], moveOrigins: [] });
+    },
+
+    commitMove: () => set({ selectedIds: [], moveOrigins: [] }),
 
     addAsset: (asset) =>
       editProject((project) => ({ ...project, assets: [...project.assets, asset] })),
@@ -467,81 +613,136 @@ export const useEditorStore = create<EditorState>((set, get) => {
         };
       }),
 
-    groupNode: (id) => {
-      const scene = activeScene(get().project);
-      const node = findNode(scene.children, id);
-      if (!node) return;
+    groupSelection: () => {
+      const state = get();
+      const scene = activeScene(state.project);
+      const ids = selectionRoots(scene.children, state.selectedIds);
+      if (ids.length === 0) return;
 
-      // The container takes the node's position and the node moves to the
-      // container's origin: an exact swap, with no rotation or scale to
-      // decompose, so nothing on the canvas moves by a pixel.
+      // The frontmost selected object anchors the group: the group takes its
+      // place in the draw order, its parent, and its position. Anchoring on the
+      // frontmost rather than the first keeps the group where the objects
+      // already were relative to everything else in the list.
+      const anchor = ids[ids.length - 1];
+      const anchorNode = findNode(scene.children, anchor);
+      if (!anchorNode) return;
+      const parentId = findParent(scene.children, anchor)?.id ?? null;
+
       const group = createNode(
         'container',
-        Math.round(node.transform.x),
-        Math.round(node.transform.y),
-        `${node.name} group`,
+        Math.round(anchorNode.transform.x),
+        Math.round(anchorNode.transform.y),
+        ids.length === 1 ? `${anchorNode.name} group` : undefined,
       );
-      const child = {
-        ...node,
-        transform: {
-          ...node.transform,
-          x: node.transform.x - Math.round(node.transform.x),
-          y: node.transform.y - Math.round(node.transform.y),
-        },
-      } as GameObjectNode;
+      // The group is unrotated and unscaled, so composing it onto its parent
+      // and inverting that for each child is an exact translation: nothing
+      // moves, rotates or changes size, whatever the objects came from.
+      const groupWorld = composeTransform(
+        worldTransformOf(scene.children, parentId),
+        group.transform,
+      );
+      const children = ids.flatMap((id) => {
+        const node = findNode(scene.children, id);
+        if (!node) return [];
+        return [
+          {
+            ...node,
+            transform: tidyTransform(
+              localTransformIn(groupWorld, worldTransformOf(scene.children, id)),
+            ),
+          } as GameObjectNode,
+        ];
+      });
 
-      editScene((s) => ({
-        ...s,
-        children: editSiblings(s.children, id, (list, index) => [
-          ...list.slice(0, index),
-          { ...group, children: [child] },
-          ...list.slice(index + 1),
-        ]),
-      }));
+      editScene((s) => {
+        const siblings = parentId
+          ? (findNode(s.children, parentId)?.children ?? [])
+          : s.children;
+        const at = siblings.findIndex((node) => node.id === anchor);
+        // The originals have to come out before the group goes in — they carry
+        // the same ids as the nodes now inside it, and `removeNode` recurses,
+        // so a group inserted first would have its own contents pulled back out
+        // from under it. Removing first moves the anchor's index, hence the
+        // count of selected siblings ahead of it.
+        const ahead = siblings
+          .slice(0, at)
+          .filter((node) => ids.includes(node.id)).length;
+        return {
+          ...s,
+          children: insertNode(
+            ids.reduce(removeNode, s.children),
+            parentId,
+            { ...group, children },
+            at - ahead,
+          ),
+        };
+      });
       get().select(group.id);
     },
 
-    deleteNode: (id) => {
-      editScene((scene) => ({ ...scene, children: removeNode(scene.children, id) }));
-      if (get().selectedId === id) set({ selectedId: null, moveOrigin: null });
+    // Deletes one named node — the scene tree's row button, which is about the
+    // row it sits on and not about what happens to be selected. `editProject`
+    // takes the node out of the selection if it was in it.
+    deleteNode: (id) =>
+      editScene((scene) => ({ ...scene, children: removeNode(scene.children, id) })),
+
+    deleteSelection: () => {
+      const ids = selectionRoots(activeScene(get().project).children, get().selectedIds);
+      if (ids.length === 0) return;
+      editScene((scene) => ({ ...scene, children: ids.reduce(removeNode, scene.children) }));
     },
 
-    duplicateNode: (id) => {
-      const node = findNode(activeScene(get().project).children, id);
-      if (!node) return;
-      const copy = offsetCopy(node);
-      editScene((scene) => ({
-        ...scene,
-        // Directly after the original, among its own siblings: the copy sits
-        // one step in front of what it was copied from, in the same container,
-        // rather than jumping to the top of the scene.
-        children: editSiblings(scene.children, id, (list, index) => [
-          ...list.slice(0, index + 1),
-          copy,
-          ...list.slice(index + 1),
-        ]),
-      }));
-      get().select(copy.id);
+    duplicateSelection: () => {
+      const ids = selectionRoots(activeScene(get().project).children, get().selectedIds);
+      if (ids.length === 0) return;
+
+      const copies: string[] = [];
+      editScene((scene) => {
+        let children = scene.children;
+        for (const id of ids) {
+          const node = findNode(children, id);
+          if (!node) continue;
+          const copy = offsetCopy(node);
+          copies.push(copy.id);
+          // Directly after the original, among its own siblings: the copy sits
+          // one step in front of what it was copied from, in the same
+          // container, rather than jumping to the top of the scene.
+          children = editSiblings(children, id, (list, index) => [
+            ...list.slice(0, index + 1),
+            copy,
+            ...list.slice(index + 1),
+          ]);
+        }
+        return children === scene.children ? scene : { ...scene, children };
+      });
+      // The copies, not the originals: what you have just made is what you want
+      // to move, and that holds however many of them there are.
+      if (copies.length > 0) get().selectMany(copies);
     },
 
-    copyNode: (id) => {
-      const node = findNode(activeScene(get().project).children, id);
-      if (node) set({ clipboard: node });
+    copySelection: () => {
+      const scene = activeScene(get().project);
+      const ids = selectionRoots(scene.children, get().selectedIds);
+      const nodes = ids.flatMap((id) => findNode(scene.children, id) ?? []);
+      if (nodes.length > 0) set({ clipboard: nodes });
     },
 
     pasteNode: () => {
       const state = get();
       const { clipboard } = state;
-      if (!clipboard) return;
-      const copy = offsetCopy(clipboard);
+      if (clipboard.length === 0) return;
+      const copies = clipboard.map(offsetCopy);
       const parentId = openContainerId(state);
       editScene((scene) => ({
         ...scene,
-        children: insertNode(scene.children, parentId, copy),
+        children: copies.reduce(
+          (children, copy) => insertNode(children, parentId, copy),
+          scene.children,
+        ),
       }));
       // Cascade: the next paste offsets from where this one landed.
-      set({ clipboard: copy });
-      get().select(copy.id);
+      set({ clipboard: copies });
+      get().selectMany(copies.map((copy) => copy.id));
     },
 
     reorderNode: (id, toIndex) =>
@@ -568,6 +769,49 @@ export const useEditorStore = create<EditorState>((set, get) => {
         ...scene,
         children: mapNode(scene.children, id, (node) => ({ ...node, visible })),
       })),
+
+    setSelectionVisible: (visible) => {
+      const ids = selectionRoots(activeScene(get().project).children, get().selectedIds);
+      if (ids.length === 0) return;
+      editScene((scene) => ({
+        ...scene,
+        children: ids.reduce(
+          (children, id) => mapNode(children, id, (node) => ({ ...node, visible })),
+          scene.children,
+        ),
+      }));
+    },
+
+    nudgeSelection: (dx, dy) => {
+      const state = get();
+      const children = activeScene(state.project).children;
+      const ids = selectionRoots(children, state.selectedIds);
+      if (ids.length === 0) return;
+
+      // One undo step for the whole selection, nested inside whatever
+      // transaction the caller has open for the key press itself.
+      state.beginTransaction();
+      for (const id of ids) {
+        const node = findNode(children, id);
+        if (!node) continue;
+        // The delta is converted into the space the node's own x/y live in, so
+        // a node inside a rotated or scaled group still travels the way the
+        // screen says. Applied as a *difference* against the stored value
+        // rather than as the recomputed local position: the world round trip
+        // is not numerically exact, and a node nudged back and forth should
+        // land on the number it started on. For a top-level node the parent is
+        // the identity and the whole thing is `x + dx`, integers included.
+        const parent = worldTransformOf(children, findParent(children, id)?.id ?? null);
+        const world = worldTransformOf(children, id);
+        const moved = localTransformIn(parent, { ...world, x: world.x + dx, y: world.y + dy });
+        const local = localTransformIn(parent, world);
+        state.updateTransform(id, {
+          x: settle(node.transform.x + moved.x - local.x),
+          y: settle(node.transform.y + moved.y - local.y),
+        });
+      }
+      state.endTransaction();
+    },
 
     updateTransform: (id, patch) =>
       editScene((scene) => ({
@@ -619,10 +863,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         past: state.past.slice(0, -1),
         future: [state.project, ...state.future].slice(0, HISTORY_LIMIT),
         dirty: true,
-        selectedId:
-          state.selectedId && findNode(activeScene(previous).children, state.selectedId)
-            ? state.selectedId
-            : null,
+        selectedIds: pruneIds(activeScene(previous).children, state.selectedIds, (id) => id),
       });
     },
 
@@ -635,10 +876,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         past: [...state.past, state.project].slice(-HISTORY_LIMIT),
         future: state.future.slice(1),
         dirty: true,
-        selectedId:
-          state.selectedId && findNode(activeScene(next).children, state.selectedId)
-            ? state.selectedId
-            : null,
+        selectedIds: pruneIds(activeScene(next).children, state.selectedIds, (id) => id),
       });
     },
   };
@@ -664,9 +902,17 @@ export function countAssetUses(project: Project, assetId: string): number {
   return count;
 }
 
-export const useSelectedNode = (): GameObjectNode | null =>
-  useEditorStore((state) =>
-    state.selectedId
-      ? (findNode(activeScene(state.project).children, state.selectedId) ?? null)
-      : null,
+/**
+ * Every selected object, in document order and without anything already
+ * covered by a selected group. This is the set the multi-object inspector
+ * lists and the set every action on the selection acts on.
+ */
+export const useSelectionNodes = (): GameObjectNode[] =>
+  useEditorStore(
+    useShallow((state) => {
+      const children = activeScene(state.project).children;
+      return selectionRoots(children, state.selectedIds).flatMap(
+        (id) => findNode(children, id) ?? [],
+      );
+    }),
   );

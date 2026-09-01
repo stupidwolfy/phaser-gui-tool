@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from 'react';
+import { useState, type DragEvent, type MouseEvent } from 'react';
 import { useActiveScene, useEditorStore } from '../core/store';
 import { findParent, type GameObjectNode, type NodeType } from '../core/schema';
 
@@ -36,6 +36,9 @@ export function SceneTree() {
   const scene = useActiveScene();
   const addNode = useEditorStore((s) => s.addNode);
   const moveNode = useEditorStore((s) => s.moveNode);
+  const multiSelect = useEditorStore((s) => s.multiSelect);
+  const setMultiSelect = useEditorStore((s) => s.setMultiSelect);
+  const selectedCount = useEditorStore((s) => s.selectedIds.length);
 
   // Drag-to-reorder is HTML5 drag and drop, which touch browsers ignore
   // entirely. That is why the inspector carries an Arrange row and a Parent
@@ -82,7 +85,23 @@ export function SceneTree() {
     <div className="panel">
       <div className="panel__header">
         <span>{scene.name}</span>
-        <span className="panel__count">{countNodes(scene.children)}</span>
+        <span className="panel__count">
+          {selectedCount > 1
+            ? `${selectedCount} of ${countNodes(scene.children)}`
+            : countNodes(scene.children)}
+        </span>
+        {/* The one control that changes what every row below it does, so it
+            sits with them rather than in the inspector. Shift-click does the
+            same thing on a desktop; a phone has no modifier key at all, which
+            is why this exists. */}
+        <button
+          className={`btn btn--toggle ${multiSelect ? 'is-active' : ''}`}
+          aria-pressed={multiSelect}
+          title="Tap objects to add them to the selection"
+          onClick={() => setMultiSelect(!multiSelect)}
+        >
+          Multi
+        </button>
       </div>
 
       <div className="add-row">
@@ -130,10 +149,23 @@ interface RowsProps {
 
 function TreeRows(props: RowsProps) {
   const { nodes, depth, dragId, target, collapsed } = props;
-  const selectedId = useEditorStore((s) => s.selectedId);
+  const selectedIds = useEditorStore((s) => s.selectedIds);
+  const multiSelect = useEditorStore((s) => s.multiSelect);
   const select = useEditorStore((s) => s.select);
+  const toggleSelect = useEditorStore((s) => s.toggleSelect);
   const deleteNode = useEditorStore((s) => s.deleteNode);
   const setNodeVisible = useEditorStore((s) => s.setNodeVisible);
+
+  /**
+   * A row click replaces the selection, unless the multi toggle is on or a
+   * modifier is held — then it adds or removes this one row. The two ways to
+   * say "and this one as well" go through the same branch so they cannot drift
+   * apart.
+   */
+  const pick = (event: MouseEvent<HTMLButtonElement>, id: string) => {
+    if (multiSelect || event.shiftKey || event.ctrlKey || event.metaKey) toggleSelect(id);
+    else select(id);
+  };
 
   /**
    * A drop on the middle of a container row nests; anywhere else, and any drop
@@ -163,7 +195,7 @@ function TreeRows(props: RowsProps) {
             <div
               className={[
                 'tree__item',
-                node.id === selectedId ? 'is-selected' : '',
+                selectedIds.includes(node.id) ? 'is-selected' : '',
                 node.id === dragId ? 'is-dragging' : '',
                 target?.id === node.id && target.kind === 'into' ? 'is-drop-into' : '',
                 target?.id === node.id && target.kind === 'before' ? 'is-drop-before' : '',
@@ -199,7 +231,7 @@ function TreeRows(props: RowsProps) {
               ) : (
                 <span className="tree__twisty" />
               )}
-              <button className="tree__label" onClick={() => select(node.id)}>
+              <button className="tree__label" onClick={(event) => pick(event, node.id)}>
                 <span className="tree__type" data-type={node.type} />
                 <span className="tree__name">{node.name}</span>
               </button>
