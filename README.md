@@ -71,11 +71,11 @@ working editor but a small one.
 **Not built yet** — animations and sprite sheets, tilemaps, physics, particles, audio,
 cameras, multiple scenes, prefabs, nesting/containers, and multi-select.
 
-**Not verified automatically** — there is no test suite and no CI on pull requests.
-`npm run build` (which typechecks) is the only gate; changes to the canvas, layout or file
-I/O are checked by driving the production build in Chromium at 1440×900 and 390×844, and
-exports are checked by running them. Committing that as a Playwright suite is the next
-infrastructure task.
+**Verified by** a Playwright suite that drives the production build in Chromium at both
+1440×900 and 390×844, and by CI on every pull request. It checks the editing round trip
+against the pixels on the canvas — not just the document — and checks the three exports by
+running them: the page in a browser, the `.ts` under `tsc --strict`, and the `.js` through
+a real Vite bundle.
 
 ## Development
 
@@ -84,9 +84,14 @@ npm install
 npm run dev        # http://localhost:5173/phaser-gui-tool/  (note the base path)
 npm run build      # typecheck + production build to dist/
 npm run preview    # serve the production build
+npm test           # the Playwright suite (builds first, then drives dist/)
 ```
 
 Requires Node 20+. Built with Vite, React and Phaser 4.
+
+The first `npm test` on a machine needs the browser: `npx playwright install chromium`.
+`npm run test:ui` opens the interactive runner, and `npm run test:report` shows the report
+from the last run.
 
 ```
 src/
@@ -96,6 +101,12 @@ src/
   io/exportPhaser.ts  the document turned into runnable Phaser code
   editor/phaser/      the Phaser scene that renders the document
   ui/                 toolbar, scene tree, inspector, responsive shell
+tests/
+  editing.spec.ts     add, drag, inspect, undo, save, reopen — on both viewports
+  assets.spec.ts      image import, drawing, save/reopen, removal
+  export.spec.ts      the runnable page, run in a browser
+  export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite
+  helpers/            the page object, pixel readback, fixtures
 ```
 
 One rule shapes all of it: **the project document is the single source of truth, and
