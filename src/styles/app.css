@@ -219,6 +219,12 @@ select {
   text-transform: none;
 }
 
+/* The snap toggle's icon has no text baseline to sit on, so the button centres
+   it explicitly rather than inheriting the row's text alignment. */
+.btn--toggle svg {
+  display: block;
+}
+
 .btn--toggle.is-active {
   background: var(--accent);
   border-color: var(--accent);

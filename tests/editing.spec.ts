@@ -58,6 +58,11 @@ test('drags on the canvas, stores the move, and undoes it', async ({ editor }) =
   await editor.addObject('Rectangle');
   await editor.setField('Fill', MARKER);
   await editor.closePanels();
+  // Snapping off: this test's claim is that the object lands where the pointer
+  // put it, and a snap is the editor deliberately putting it somewhere else.
+  // Snapping has its own spec; here it would only add a neighbour's edge to
+  // the arithmetic.
+  await editor.setSnapping(false);
 
   const start = await editor.sceneToScreen({ x: SCENE.width / 2, y: SCENE.height / 2 });
   const before = await editor.findDrawn(MARKER);
@@ -240,6 +245,11 @@ test('a selected group is dragged by its contents', async ({ editor }) => {
   await editor.panel('inspect').getByRole('button', { name: 'Wrap in a new group' }).click();
   await editor.settle();
   await editor.closePanels();
+  // Snapping off: this test's claim is that the object lands where the pointer
+  // put it, and a snap is the editor deliberately putting it somewhere else.
+  // Snapping has its own spec; here it would only add a neighbour's edge to
+  // the arithmetic.
+  await editor.setSnapping(false);
 
   // Wrapping leaves the group selected, so this press lands on the child and
   // moves the group — a group's own box is covered by the children that give

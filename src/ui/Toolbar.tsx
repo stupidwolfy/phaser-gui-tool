@@ -13,6 +13,30 @@ export interface ToolbarActions {
 }
 
 /**
+ * A magnet, drawn rather than typed.
+ *
+ * The rest of the toolbar is Unicode glyphs, but no text-presentation magnet
+ * exists — the emoji one renders in colour, so it ignores the active state's
+ * white foreground and looks wrong in a row of monochrome controls. A dozen
+ * lines of SVG inherit `currentColor` and render identically everywhere.
+ */
+function SnapIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      {/* A horseshoe, open downward, with the tips left square: at 14px the
+          poles cannot be distinguished by colour the way a real magnet icon
+          does it, so the shape has to carry it alone. */}
+      <path
+        d="M4 13.2V8a4 4 0 0 1 8 0v5.2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.6"
+      />
+    </svg>
+  );
+}
+
+/**
  * Top bar.
  *
  * On a phone this keeps only what you reach for mid-edit — history, fit, save —
@@ -31,6 +55,8 @@ export function Toolbar({
   const canRedo = useEditorStore((s) => s.future.length > 0);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
+  const snapEnabled = useEditorStore((s) => s.snapEnabled);
+  const setSnapEnabled = useEditorStore((s) => s.setSnapEnabled);
 
   return (
     <header className="toolbar">
@@ -64,6 +90,20 @@ export function Toolbar({
         </button>
         <button className="btn" onClick={actions.onFit} title="Fit scene to view">
           ⤢
+        </button>
+        {/* In the toolbar rather than the tree or the inspector because it is
+            the one group that survives the compact layout: snapping changes what
+            a drag does, so it has to be reachable without opening a panel — on a
+            phone the panels are modal sheets covering the canvas you are
+            dragging on. */}
+        <button
+          className={`btn btn--toggle ${snapEnabled ? 'is-active' : ''}`}
+          aria-pressed={snapEnabled}
+          onClick={() => setSnapEnabled(!snapEnabled)}
+          title={snapEnabled ? 'Snapping on' : 'Snapping off'}
+          aria-label="Snap to objects"
+        >
+          <SnapIcon />
         </button>
       </div>
 

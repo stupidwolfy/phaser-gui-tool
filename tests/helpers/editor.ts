@@ -22,8 +22,14 @@ const OVERLAY_BAND = 130;
 /**
  * How far the priming move travels before the real drag is measured. Anything
  * over Phaser's 8px `dragDistanceThreshold` will do.
+ *
+ * Exported because it is not only a harness detail: Phaser captures the
+ * pointer-to-object offset when the drag actually starts, so the object ends
+ * this much *behind* wherever the pointer was aimed. A test that needs the
+ * object to finish on a particular spot — rather than needing to know how far
+ * it travelled — has to aim past it by exactly this.
  */
-const PRIME = 12;
+export const PRIME = 12;
 
 export interface Point {
   x: number;
@@ -47,6 +53,8 @@ const SHEET_TITLE: Record<PanelName, string> = {
  */
 export class EditorPage {
   private cdp?: CDPSession;
+  /** Which pointer a `{ hold: true }` drag left down, so endDrag can lift it. */
+  private held: 'mouse' | 'touch' | null = null;
 
   private constructor(
     readonly page: Page,
@@ -151,6 +159,24 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * Empties the scene, leaving a project with no objects in it.
+   *
+   * A new project ships three example objects, which is right for someone
+   * opening the editor and wrong for any test whose claim is about *which*
+   * objects took part: they are three more boxes to snap to, three more
+   * colours a centroid can pick up. Deleting them by the tree's own row button
+   * keeps this honest — nothing here reaches past the UI into the store.
+   */
+  async clearScene(): Promise<void> {
+    await this.openPanel('scene');
+    const rows = this.panel('scene').locator('.tree__item');
+    for (let guard = 0; (await rows.count()) > 0 && guard < 50; guard += 1) {
+      await rows.first().getByRole('button', { name: /^Delete / }).click();
+    }
+    await this.settle();
+  }
+
   async selectInTree(name: string): Promise<void> {
     await this.openPanel('scene');
     await this.panel('scene').getByRole('button', { name, exact: true }).click();
@@ -165,6 +191,18 @@ export class EditorPage {
   async setMultiSelect(on: boolean): Promise<void> {
     await this.openPanel('scene');
     const button = this.panel('scene').getByRole('button', { name: 'Multi', exact: true });
+    if (((await button.getAttribute('aria-pressed')) === 'true') !== on) await button.click();
+    await this.settle();
+  }
+
+  /**
+   * The toolbar's snap toggle. In the toolbar rather than a panel because it
+   * has to be reachable while the canvas is visible, which on mobile a sheet
+   * is not.
+   */
+  async setSnapping(on: boolean): Promise<void> {
+    await this.closePanels();
+    const button = this.page.getByRole('button', { name: 'Snap to objects' });
     if (((await button.getAttribute('aria-pressed')) === 'true') !== on) await button.click();
     await this.settle();
   }
@@ -310,7 +348,7 @@ export class EditorPage {
    * whatever the machine's frame timing happened to make it; the returned
    * displacement is `to - from` less that priming move.
    */
-  async drag(from: Point, to: Point, { select = true } = {}): Promise<Point> {
+  async drag(from: Point, to: Point, { select = true, hold = false } = {}): Promise<Point> {
     const length = Math.hypot(to.x - from.x, to.y - from.y);
     if (length <= PRIME) throw new Error('drag is too short to clear Phaser\'s threshold');
     const prime = { x: ((to.x - from.x) / length) * PRIME, y: ((to.y - from.y) / length) * PRIME };
@@ -333,7 +371,8 @@ export class EditorPage {
         await this.page.mouse.move(point.x, point.y);
       }
       await this.settle();
-      await this.page.mouse.up();
+      if (hold) this.held = 'mouse';
+      else await this.page.mouse.up();
       await this.settle();
       return { x: to.x - primed.x, y: to.y - primed.y };
     }
@@ -355,9 +394,27 @@ export class EditorPage {
     await this.settle();
     for (let i = 1; i <= steps; i += 1) await send('touchMove', [at(i)]);
     await this.settle();
-    await send('touchEnd', []);
+    if (hold) this.held = 'touch';
+    else await send('touchEnd', []);
     await this.settle();
     return { x: to.x - primed.x, y: to.y - primed.y };
+  }
+
+  /**
+   * Ends a drag left down by `{ hold: true }`.
+   *
+   * Held drags exist for the one thing that is only true mid-gesture: the snap
+   * guides are drawn while the pointer is down and cleared when it lifts, so a
+   * test that always completes the drag can never see them.
+   */
+  async endDrag(): Promise<void> {
+    if (this.held === 'mouse') await this.page.mouse.up();
+    else if (this.held === 'touch') {
+      const cdp = await this.touch();
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    }
+    this.held = null;
+    await this.settle();
   }
 
   // -- commands --------------------------------------------------------------
