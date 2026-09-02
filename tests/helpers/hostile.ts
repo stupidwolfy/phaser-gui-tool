@@ -29,6 +29,16 @@ export function hostileProject(): Project {
         height: 540,
         // Reaches a CSS declaration and a JS string; not a hex colour at all.
         backgroundColor: '#1d2330; } body { background: url(javascript:1) } /*',
+        // Guides carry no user text — a machine id, a two-member union and a
+        // number — so there is nothing here for the escaping to get wrong. They
+        // are in the fixture for the other risk: an exporter that one day walks
+        // the scene's keys instead of naming them would start emitting editor
+        // furniture into somebody's game. `export.spec` asserts they do not
+        // appear in the output, and that assertion needs a guide to be real.
+        guides: [
+          { id: 'guide-1', axis: 'x' as const, position: 480 },
+          { id: 'guide-2', axis: 'y' as const, position: 270 },
+        ],
         children: [
           {
             id: 'a',

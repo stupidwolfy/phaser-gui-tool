@@ -68,15 +68,24 @@ export type Deltas = Map<string, { dx: number; dy: number }>;
 /**
  * How far each box must move to line up with the others on `edge`.
  *
- * The target is the selection's own bounding box, so aligning left moves
- * everything to the leftmost object rather than to the scene or to whichever
- * object happened to be picked first. Nothing outside the selection moves, and
- * running the same alignment twice is a no-op — both of which are what makes
- * it safe to press repeatedly while looking at the result.
+ * The target defaults to the selection's own bounding box, so aligning left
+ * moves everything to the leftmost object rather than to whichever object
+ * happened to be picked first. Nothing outside the selection moves, and running
+ * the same alignment twice is a no-op — both of which are what makes it safe to
+ * press repeatedly while looking at the result.
+ *
+ * Pass `target` to line the boxes up against something else instead. The scene
+ * rectangle is the one caller that does, and it is the only alignment a *single*
+ * object can meaningfully ask for: one object's union with itself is itself, so
+ * every default alignment of one object is a no-op by construction.
  */
-export function alignDeltas(boxes: ReadonlyMap<string, Rect>, edge: AlignEdge): Deltas {
+export function alignDeltas(
+  boxes: ReadonlyMap<string, Rect>,
+  edge: AlignEdge,
+  target?: Rect,
+): Deltas {
   const deltas: Deltas = new Map();
-  const union = unionRect([...boxes.values()]);
+  const union = target ?? unionRect([...boxes.values()]);
   if (!union) return deltas;
 
   for (const [id, box] of boxes) {

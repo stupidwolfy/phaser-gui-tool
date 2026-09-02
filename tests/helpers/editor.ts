@@ -140,7 +140,14 @@ export class EditorPage {
     if (!this.isMobile) return;
     const sheet = this.panel(name);
     if (await sheet.evaluate((element) => element.classList.contains('is-open'))) return;
-    await this.page.getByRole('button', { name: SHEET_TITLE[name] }).click();
+    // `exact`, and not by accident: the tab bar's labels are single common
+    // words, so a substring match picks up any panel button whose own label
+    // happens to contain one — "Centre in scene ↔" matched the Scene tab, and
+    // every mobile test that opened a panel failed at once, nowhere near the
+    // feature that added the button.
+    await this.page
+      .getByRole('button', { name: SHEET_TITLE[name], exact: true })
+      .click();
     await expect(sheet).toHaveClass(/is-open/);
     // The sheet shrinks the viewport, which re-fits the camera.
     await this.settle();
@@ -250,6 +257,38 @@ export class EditorPage {
   async setAngleStep(degrees: number): Promise<void> {
     await this.deselect();
     await this.setField('Angle step°', degrees);
+  }
+
+  /**
+   * Adds a guide down or across the middle of the scene.
+   *
+   * The buttons live in the Scene panel, which the inspector shows only while
+   * nothing is selected — so this deselects first rather than leaving the
+   * caller to remember, the way `setGridSize` does.
+   */
+  async addGuide(axis: 'x' | 'y'): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect')
+      .getByRole('button', { name: axis === 'x' ? '+ Guide ↕' : '+ Guide ↔' })
+      .click();
+    await this.settle();
+  }
+
+  /** The Scene panel's guide visibility toggle, which also governs snapping. */
+  async setGuidesVisible(on: boolean): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    const box = this.checkbox('Show guides');
+    if ((await box.isChecked()) !== on) await box.click();
+    await this.settle();
+  }
+
+  async clearGuides(): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByRole('button', { name: 'Clear guides' }).click();
+    await this.settle();
   }
 
   /**

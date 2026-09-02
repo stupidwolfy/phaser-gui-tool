@@ -10,6 +10,7 @@ import {
   containsNode,
   findNode,
   findParent,
+  guidesOf,
   worldTransformOf,
   type GameObjectNode,
   type Project,
@@ -48,6 +49,37 @@ const FRAME_COLOR = 0x5a6478;
  * outline, and a guide has to be readable while lying across both.
  */
 const GUIDE_COLOR = 0xff3ea5;
+
+/**
+ * A guide the user placed, as against the magenta one a snap draws for itself.
+ *
+ * A different colour on purpose, and for the reason the selection outline is
+ * not the accent blue: drawn in the snap guide's magenta, "these two objects
+ * agree right now" and "there is a line here always" would be the same mark,
+ * and the transient one would vanish the moment it landed on the permanent one.
+ * Amber is far enough from the accent, the selection cyan and the default
+ * rectangle fill to stay tellable apart on top of any of them.
+ *
+ * Two screen pixels wide like the selection outline and the snap guides: a
+ * hairline is the desktop convention and is invisible under a thumb, and this
+ * one has to be *grabbable*, not merely visible.
+ */
+const PLACED_GUIDE_COLOR = 0xffa723;
+const PLACED_GUIDE_WIDTH = 2;
+
+/**
+ * The grab band around a guide, in screen pixels.
+ *
+ * Narrower than the handles' 44 on purpose, and it is not a compromise. Those
+ * are *point* targets, where a thumb has to land inside a square; a guide is a
+ * line, unbounded along its own axis, so only one coordinate has to be right —
+ * a far easier target for the same width. And a guide's band steals every press
+ * within it from the objects underneath, across the whole height of the scene:
+ * at the mobile project's zoom, 44px is about 119 scene units of canvas that
+ * cannot be pressed, per guide. 24 is wide enough for a thumb on a line and
+ * halves the strip.
+ */
+const PLACED_GUIDE_TOUCH = 24;
 
 /**
  * How close a dragged edge has to come before it is pulled into line, in
@@ -396,6 +428,32 @@ export class EditorScene extends Phaser.Scene {
   private angleLabel: { text: string; x: number; y: number } | null = null;
   private guideGraphics!: Phaser.GameObjects.Graphics;
   /**
+   * One interactive rectangle per guide the user has placed, pooled the way the
+   * selection outlines are.
+   *
+   * Objects rather than a signature-driven `Graphics` like the grid, because a
+   * `Graphics` cannot be hit-tested line by line and grabbing one is the whole
+   * point: everything about placing a guide with a thumb depends on being able
+   * to press it afterwards.
+   */
+  private placedGuides: Phaser.GameObjects.Rectangle[] = [];
+  /**
+   * The guide a drag is moving, if any.
+   *
+   * `syncPlacedGuides` skips it for the reason the object sync skips
+   * `draggingId`: the store rounds on release, and a rounded value arriving
+   * mid-gesture fights the finger. Cleared *before* `endTransaction`, or the
+   * sync that publishes the final position is skipped too and the guide sits
+   * visually stale until something unrelated redraws it.
+   */
+  private draggingGuide: { id: string; axis: 'x' | 'y' } | null = null;
+  /**
+   * The ids of the guides holding the current snap, on the same lifecycle as
+   * `guides` and `spacings`: rebuilt every frame of the gesture, empty the rest
+   * of the time. What `syncPlacedGuides` recolours.
+   */
+  private heldGuides = new Set<string>();
+  /**
    * Pooled overlay labels — the spacing bars' distances and the rotate
    * readout — created on first use. See `labelAt`.
    *
@@ -710,6 +768,22 @@ export class EditorScene extends Phaser.Scene {
           return;
         }
 
+        // And a guide, for the first of those two reasons: it carries no
+        // nodeId, so the touch rule below would compare null against the
+        // selection, find they differ and reject every guide drag made with a
+        // finger. It is exempt on its own merits as well — the two-step rule
+        // exists because a fingertip lands on whichever *object* it grazed, and
+        // a guide is chrome the user aimed at deliberately.
+        if (object.getData('handle') === 'guide') {
+          const id = object.getData('guideId') as string | undefined;
+          const axis = object.getData('guideAxis') as 'x' | 'y' | undefined;
+          if (!id || !axis) return;
+          this.draggingGuide = { id, axis };
+          this.dragRejected = false;
+          store.getState().beginTransaction();
+          return;
+        }
+
         // An additive press is a selection change and nothing else; letting
         // Phaser turn it into a drag would move the object you were only trying
         // to add to the selection.
@@ -782,6 +856,20 @@ export class EditorScene extends Phaser.Scene {
           return;
         }
 
+        // A guide follows the pointer on its own axis and ignores the other.
+        // It does not snap: a guide is the thing objects snap *to*, so pulling
+        // it onto an object's edge would only say that edge twice, and the
+        // interesting case — a guide on a round number — is the grid's job and
+        // the inspector's.
+        const guide = this.draggingGuide;
+        if (guide) {
+          const line = object as Phaser.GameObjects.Rectangle;
+          const position = guide.axis === 'x' ? pointer.worldX : pointer.worldY;
+          line[guide.axis] = position;
+          store.getState().moveGuide(guide.id, position);
+          return;
+        }
+
         const drag = this.dragging;
         if (this.dragRejected || !drag) return;
 
@@ -850,6 +938,32 @@ export class EditorScene extends Phaser.Scene {
     this.spacings = [];
     this.angleMarks = [];
     this.angleLabel = null;
+    this.heldGuides.clear();
+
+    // A guide gesture ends here with the rest of them, and for the same reason:
+    // several of the end events fire on a real device and sometimes only one
+    // does, and a transaction left open swallows every later edit's undo step.
+    if (this.draggingGuide) {
+      const { id, axis } = this.draggingGuide;
+      const store = useEditorStore.getState();
+      const scene = activeScene(store.project);
+      const guide = guidesOf(scene).find((candidate) => candidate.id === id);
+      // Nulled before the store writes, for the reason `draggingId` had to be:
+      // `endTransaction` publishes a change, and the sync it triggers is what
+      // settles the guide on its final position. Still standing, that sync is
+      // skipped and the guide sits stale until something unrelated redraws it.
+      this.draggingGuide = null;
+      if (guide) {
+        // Released outside the scene, it is thrown away — the convention every
+        // editor with rulers uses, and the one deletion gesture that needs no
+        // control on a 390px screen. Inside the same transaction, so dragging a
+        // guide off is one undo step and not two.
+        const limit = axis === 'x' ? scene.width : scene.height;
+        if (guide.position < 0 || guide.position > limit) store.removeGuide(id);
+        else store.moveGuide(id, Math.round(guide.position));
+      }
+      store.endTransaction();
+    }
 
     // A scale gesture ends through exactly the same paths as a move, for the
     // same reason: on a real device several of them fire and some of them
@@ -977,9 +1091,11 @@ export class EditorScene extends Phaser.Scene {
     drag.snappedY = false;
     this.guides = [];
     this.spacings = [];
+    this.heldGuides.clear();
 
     const start = drag.startBounds;
-    const { snapEnabled, gridEnabled, gridSize } = useEditorStore.getState();
+    const state = useEditorStore.getState();
+    const { snapEnabled, gridEnabled, gridSize, guidesVisible } = state;
     if (!start || (!snapEnabled && !gridEnabled)) return raw;
 
     const moved: Rect = {
@@ -987,20 +1103,35 @@ export class EditorScene extends Phaser.Scene {
       x: start.x + raw.x - drag.pointerX,
       y: start.y + raw.y - drag.pointerY,
     };
-    // The two toggles are independent, and each is expressed by withholding
-    // what it feeds the geometry rather than by a flag it has to interpret:
-    // no targets is no object snapping, no pitch is no grid.
+    // Every toggle is expressed by withholding what it feeds the geometry
+    // rather than by a flag it has to interpret: no targets is no object
+    // snapping, no pitch is no grid, no lines is no guides. Guides ride on the
+    // magnet rather than a switch of their own — it already means "agree with
+    // something specific" — and are withheld when they are hidden too, by the
+    // rule that keeps hidden objects out of the targets: a snap onto a line
+    // that is not on screen is the editor moving things for a reason the user
+    // cannot see.
     const result = snapMove(
       moved,
       snapEnabled ? drag.targets : [],
       SNAP_THRESHOLD / this.cameras.main.zoom,
-      { grid: gridEnabled ? gridSize : 0 },
+      {
+        grid: gridEnabled ? gridSize : 0,
+        guides: snapEnabled && guidesVisible ? this.guideLinesFor(state.project) : undefined,
+      },
     );
 
     drag.snappedX = result.dx !== 0;
     drag.snappedY = result.dy !== 0;
     this.guides = result.guides;
     this.spacings = result.spacings;
+    // Positions come back rather than ids — `snapping.ts` knows nothing about
+    // the document — so the guides holding the drag are matched back here.
+    for (const guide of guidesOf(activeScene(state.project))) {
+      if (result.guideLines[guide.axis].includes(guide.position)) {
+        this.heldGuides.add(guide.id);
+      }
+    }
     return { x: raw.x + result.dx, y: raw.y + result.dy };
   }
 
@@ -1187,6 +1318,106 @@ export class EditorScene extends Phaser.Scene {
     for (let y = gridSize; y < scene.height; y += gridSize) {
       this.gridGraphics.lineBetween(0, y, scene.width, y);
     }
+  }
+
+  /**
+   * Draws the user's guides, and keeps each one grabbable.
+   *
+   * Every frame rather than on a store change, because the two things that
+   * decide a guide's size on screen — its two-pixel thickness and its grab band
+   * — are both functions of the camera zoom, and a pinch is not a store change.
+   * Re-applying the hit area each time is the same trap the scale handle
+   * documents: `setSize` does not carry the hit area with it, so a guide whose
+   * band was set at one zoom is grabbable in the wrong place at the next.
+   *
+   * Depth 998: above the objects and the grid, because a guide hidden behind a
+   * rectangle is neither visible nor grabbable; below the snap guides, the
+   * selection outline and the handles at 999+, which describe the gesture
+   * actually in progress and must never be covered by the furniture.
+   */
+  private syncPlacedGuides(): void {
+    const { project, guidesVisible } = useEditorStore.getState();
+    const scene = activeScene(project);
+    const guides = guidesVisible ? guidesOf(scene) : [];
+    const { zoom } = this.cameras.main;
+    const thickness = PLACED_GUIDE_WIDTH / zoom;
+    const band = PLACED_GUIDE_TOUCH / zoom;
+
+    guides.forEach((guide, index) => {
+      let line = this.placedGuides[index];
+      if (!line) {
+        line = this.add.rectangle(0, 0, 1, 1, PLACED_GUIDE_COLOR).setDepth(998);
+        line.setData('handle', 'guide');
+        this.placedGuides.push(line);
+      }
+
+      // The guide under the finger keeps the position the gesture gave it; the
+      // store catches up on release.
+      const dragging = this.draggingGuide?.id === guide.id;
+      const position = dragging ? line[guide.axis] : guide.position;
+
+      const width = guide.axis === 'x' ? thickness : scene.width;
+      const height = guide.axis === 'x' ? scene.height : thickness;
+      line.setSize(width, height);
+      line.setPosition(
+        guide.axis === 'x' ? position : scene.width / 2,
+        guide.axis === 'x' ? scene.height / 2 : position,
+      );
+      line.setVisible(true);
+      line.setData('guideId', guide.id);
+      line.setData('guideAxis', guide.axis);
+
+      // A guide holding the current drag turns the snap magenta. Not a second
+      // line drawn beside it — that would say the same thing twice, which is
+      // why the grid draws nothing — but the line itself answering *which*
+      // guide caught, the question a uniform grid never raises.
+      const held = this.heldGuides.has(guide.id);
+      line.setFillStyle(held ? GUIDE_COLOR : PLACED_GUIDE_COLOR);
+
+      // The band is the touch target, not the line: two pixels is unhittable
+      // with a thumb. Measured from the local top-left, like every hit area
+      // here, so it has to be re-offset as well as resized.
+      const hitWidth = guide.axis === 'x' ? band : width;
+      const hitHeight = guide.axis === 'x' ? height : band;
+      const rectangle = new Phaser.Geom.Rectangle(
+        (width - hitWidth) / 2,
+        (height - hitHeight) / 2,
+        hitWidth,
+        hitHeight,
+      );
+      if (line.input) {
+        (line.input.hitArea as Phaser.Geom.Rectangle).setTo(
+          rectangle.x,
+          rectangle.y,
+          rectangle.width,
+          rectangle.height,
+        );
+        line.setInteractive();
+      } else {
+        line.setInteractive(rectangle, Phaser.Geom.Rectangle.Contains);
+      }
+      this.input.setDraggable(line);
+    });
+
+    // Unused entries are hidden *and* disabled. `setVisible(false)` alone does
+    // not stop Phaser hit-testing an object, so a switched-off guide would go
+    // on stealing presses from the objects under it with nothing on screen to
+    // explain why.
+    for (let index = guides.length; index < this.placedGuides.length; index += 1) {
+      this.placedGuides[index].setVisible(false).disableInteractive();
+    }
+  }
+
+  /** The guides' positions per axis, as `snapMove` wants them. */
+  private guideLinesFor(project: Project): { x: number[]; y: number[] } {
+    const lines: { x: number[]; y: number[] } = { x: [], y: [] };
+    for (const guide of guidesOf(activeScene(project))) {
+      // The one being dragged is not a line to snap to: it would catch on
+      // itself and never move.
+      if (this.draggingGuide?.id === guide.id) continue;
+      lines[guide.axis].push(guide.position);
+    }
+    return lines;
   }
 
   /**
@@ -1495,6 +1726,7 @@ export class EditorScene extends Phaser.Scene {
       this.overlayLabels[index].setVisible(false);
     }
     this.drawGrid();
+    this.syncPlacedGuides();
   }
 
   /** Two fingers down: zoom by how much the gap between them changed. */

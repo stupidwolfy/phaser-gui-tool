@@ -24,6 +24,14 @@
  * `createDisplayObject` leaves the object undefined and its renderer crashes,
  * and its scene tree would silently drop every nested node. The version check
  * turns both into the "made with a newer version" message.
+ *
+ * Scene `guides` deliberately did *not* bump it. The rule is "would a deployed
+ * older build break on this file", and a v3 build does not: `parseProject`
+ * passes `scenes` through verbatim, nothing in that build reads `scene.guides`,
+ * so the file opens, draws identically, and even carries the guides back out on
+ * a re-save. Guides change nothing about what is drawn for the objects — they
+ * are the editor's own furniture that happens to be worth saving. Do not bump
+ * this reflexively for the next field of that kind.
  */
 export const SCHEMA_VERSION = 3;
 
@@ -149,6 +157,31 @@ export type GameObjectNode = {
   };
 }[NodeType];
 
+/**
+ * A line the user placed for things to line up on.
+ *
+ * Every other line an object can agree with is incidental — it is wherever some
+ * other object happens to sit, or wherever the grid falls. A guide is the one
+ * the user gets to author, which is why it is document state and saved with the
+ * project rather than an editor preference like the grid pitch.
+ *
+ * `axis` is written out rather than imported as `bounds.ts`'s `Axis`: this
+ * module has no imports at all, and the file format should not come to depend
+ * on the measured-bounds cache. The two unions are identical, so they
+ * interoperate with no cast.
+ */
+export interface SceneGuide {
+  /** 'x' for a vertical line at a constant x, 'y' for a horizontal one. */
+  axis: 'x' | 'y';
+  position: number;
+  /**
+   * Its own identity, for the same reason a node has one: a guide is moved and
+   * deleted individually, and an index does not survive undo rebuilding the
+   * array.
+   */
+  id: string;
+}
+
 export interface SceneDoc {
   id: string;
   name: string;
@@ -156,6 +189,33 @@ export interface SceneDoc {
   height: number;
   backgroundColor: string;
   children: GameObjectNode[];
+  /**
+   * Optional because every file written before guides existed has no such
+   * array, and `parseProject` passes scenes through without reconstructing
+   * them. Read it through `guidesOf`, never directly.
+   */
+  guides?: SceneGuide[];
+}
+
+/**
+ * The scene's guides, defaulted and validated in one place.
+ *
+ * Scenes are the one part of an opened file that is not rebuilt field by field,
+ * so this is where a hand-edited or truncated `guides` array is made safe —
+ * `parseAssets` does the same job for the asset table. Being the only reader
+ * means no call site has to write `?? []` or wonder whether `position` is a
+ * number.
+ */
+export function guidesOf(scene: SceneDoc): SceneGuide[] {
+  if (!Array.isArray(scene.guides)) return [];
+  return scene.guides.filter(
+    (guide): guide is SceneGuide =>
+      typeof guide === 'object' &&
+      guide !== null &&
+      typeof (guide as SceneGuide).id === 'string' &&
+      ((guide as SceneGuide).axis === 'x' || (guide as SceneGuide).axis === 'y') &&
+      Number.isFinite((guide as SceneGuide).position),
+  );
 }
 
 export interface Project {

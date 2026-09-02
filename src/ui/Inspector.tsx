@@ -1,5 +1,11 @@
 import { useActiveScene, useEditorStore, useSelectionNodes } from '../core/store';
-import { containsNode, findParent, siblingsOf, type GameObjectNode } from '../core/schema';
+import {
+  containsNode,
+  findParent,
+  guidesOf,
+  siblingsOf,
+  type GameObjectNode,
+} from '../core/schema';
 import { AssetPicker, AssetSummary } from './AssetPicker';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
 
@@ -98,8 +104,13 @@ function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
  */
 function AlignSection({ count }: { count: number }) {
   const alignSelection = useEditorStore((s) => s.alignSelection);
+  const alignSelectionToScene = useEditorStore((s) => s.alignSelectionToScene);
   const distributeSelection = useEditorStore((s) => s.distributeSelection);
   const canDistribute = count >= 3;
+  // One object has nothing to align to but itself, so `alignSelection` refuses
+  // below two. Disabled rather than silently inert: a button that does nothing
+  // when pressed is worse than one that says it cannot.
+  const canAlign = count >= 2;
 
   return (
     <>
@@ -108,6 +119,7 @@ function AlignSection({ count }: { count: number }) {
         <button
           className="btn btn--add"
           title="Align left edges"
+          disabled={!canAlign}
           onClick={() => alignSelection('left')}
         >
           Left
@@ -115,6 +127,7 @@ function AlignSection({ count }: { count: number }) {
         <button
           className="btn btn--add"
           title="Align centres horizontally"
+          disabled={!canAlign}
           onClick={() => alignSelection('centerX')}
         >
           Centre
@@ -122,6 +135,7 @@ function AlignSection({ count }: { count: number }) {
         <button
           className="btn btn--add"
           title="Align right edges"
+          disabled={!canAlign}
           onClick={() => alignSelection('right')}
         >
           Right
@@ -129,6 +143,7 @@ function AlignSection({ count }: { count: number }) {
         <button
           className="btn btn--add"
           title="Align top edges"
+          disabled={!canAlign}
           onClick={() => alignSelection('top')}
         >
           Top
@@ -136,6 +151,7 @@ function AlignSection({ count }: { count: number }) {
         <button
           className="btn btn--add"
           title="Align centres vertically"
+          disabled={!canAlign}
           onClick={() => alignSelection('middleY')}
         >
           Middle
@@ -143,6 +159,7 @@ function AlignSection({ count }: { count: number }) {
         <button
           className="btn btn--add"
           title="Align bottom edges"
+          disabled={!canAlign}
           onClick={() => alignSelection('bottom')}
         >
           Bottom
@@ -165,6 +182,27 @@ function AlignSection({ count }: { count: number }) {
           onClick={() => distributeSelection('y')}
         >
           Spread ↕
+        </button>
+      </div>
+
+      {/* Against the scene rather than the selection's own box. This is the one
+          alignment a single object can ask for — lining one object up with
+          itself is a no-op by construction — which is why these are the buttons
+          that stay enabled when the six above are not. */}
+      <div className="arrange-row">
+        <button
+          className="btn btn--add"
+          title="Centre horizontally in the scene"
+          onClick={() => alignSelectionToScene('centerX')}
+        >
+          Centre in scene ↔
+        </button>
+        <button
+          className="btn btn--add"
+          title="Centre vertically in the scene"
+          onClick={() => alignSelectionToScene('middleY')}
+        >
+          Centre in scene ↕
         </button>
       </div>
     </>
@@ -262,6 +300,93 @@ function SnappingSection() {
         drop into, and — with the grid on — lands on the pitch. The knob above a selected
         object turns it, agreeing with another object's angle or landing on the step the
         same way. These are editor settings: they are not saved with the project.
+      </p>
+
+      <GuidesSection />
+    </>
+  );
+}
+
+/**
+ * Placing, showing and clearing the user's own guides.
+ *
+ * In this panel rather than the toolbar for the reason the angle step is: a
+ * 390px toolbar that already clips cannot hold three more controls, and this is
+ * the panel about the space objects are placed in, which is exactly what a
+ * guide is. Placing one is not a mid-gesture act either — the gesture that
+ * follows it happens on the canvas with no panel open, the same shape as adding
+ * an object and then dragging it.
+ */
+function GuidesSection() {
+  const scene = useActiveScene();
+  const addGuide = useEditorStore((s) => s.addGuide);
+  const moveGuide = useEditorStore((s) => s.moveGuide);
+  const removeGuide = useEditorStore((s) => s.removeGuide);
+  const clearGuides = useEditorStore((s) => s.clearGuides);
+  const guidesVisible = useEditorStore((s) => s.guidesVisible);
+  const setGuidesVisible = useEditorStore((s) => s.setGuidesVisible);
+  const guides = guidesOf(scene);
+  const count = guides.length;
+
+  return (
+    <>
+      <div className="panel__section">Guides</div>
+      {/* At the centre rather than at 0: a guide on the scene's own edge lies
+          under the frame and is half off-screen at the fit zoom, which is the
+          same reason a new object does not land at the origin either. */}
+      <div className="arrange-row">
+        <button
+          className="btn btn--add"
+          title="Add a vertical guide down the middle of the scene"
+          onClick={() => addGuide('x', Math.round(scene.width / 2))}
+        >
+          + Guide ↕
+        </button>
+        <button
+          className="btn btn--add"
+          title="Add a horizontal guide across the middle of the scene"
+          onClick={() => addGuide('y', Math.round(scene.height / 2))}
+        >
+          + Guide ↔
+        </button>
+      </div>
+      <CheckboxField label="Show guides" value={guidesVisible} onChange={setGuidesVisible} />
+
+      {/* One row per guide, so a guide can be put on an exact number and
+          removed without a gesture. Dragging is the fast way and rounds to
+          whole pixels; this is the way to land on 300 — and on a phone it is
+          also the only way to delete a guide that has been dragged somewhere
+          the finger can no longer reach. */}
+      {guides.map((guide, index) => (
+        <div className="field-row" key={guide.id}>
+          <NumberField
+            label={`Guide ${index + 1} ${guide.axis}`}
+            value={guide.position}
+            onChange={(position) => moveGuide(guide.id, position)}
+          />
+          <button
+            className="icon-btn icon-btn--danger"
+            onClick={() => removeGuide(guide.id)}
+            title={`Delete guide ${index + 1}`}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+
+      <button
+        className="btn btn--add"
+        disabled={count === 0}
+        onClick={clearGuides}
+        title="Remove every guide in this scene"
+      >
+        Clear guides
+      </button>
+      <p className="hint">
+        Drag a guide on the canvas to move it, or off the edge of the scene to remove it.
+        Objects line up with guides before anything else while snapping is on. Unlike the
+        settings above, guides <em>are</em> saved with the project — turning them off hides
+        them and stops objects agreeing with them, but does not delete them.
       </p>
     </>
   );
@@ -433,6 +558,11 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
       <ParentRow node={node} />
 
       <ArrangeRow node={node} />
+
+      {/* Rendered for one object as well as for a set: "centre this in the
+          scene" is the alignment a single object asks for most, and it has
+          nowhere else to live. */}
+      <AlignSection count={1} />
 
       <div className="panel__section">Transform</div>
       <div className="field-row">

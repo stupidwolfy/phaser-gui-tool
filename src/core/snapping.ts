@@ -8,16 +8,19 @@
  * both, open a panel and press a button. Snapping makes the drag itself the
  * alignment.
  *
- * Three kinds of agreement are on offer, and they are tried in that order on
+ * Four kinds of agreement are on offer, and they are tried in that order on
  * each axis independently:
  *
- * 1. an **edge or centre line** shared with another object,
- * 2. an **equal gap** continuing a run of objects already evenly spaced,
- * 3. a **grid** line.
+ * 1. a **guide** the user placed,
+ * 2. an **edge or centre line** shared with another object,
+ * 3. an **equal gap** continuing a run of objects already evenly spaced,
+ * 4. a **grid** line.
  *
- * The order is the strength of the intent behind each. Sharing an edge with a
- * specific object is a decision about *those two objects*; matching a gap is a
- * decision about a run; the grid agrees with everything everywhere and so has
+ * The order is the strength of the intent behind each. A guide is the only line
+ * here the user actually authored — they put it there and it stays until they
+ * take it away — so nothing should be able to overrule it. Sharing an edge with
+ * a specific object is a decision about *those two objects*; matching a gap is
+ * a decision about a run; the grid agrees with everything everywhere and so has
  * the least to say about where this object in particular belongs. Resolving
  * them the other way round would have the grid quietly overrule the object you
  * were plainly aiming at.
@@ -73,9 +76,32 @@ export interface SnapResult {
   dy: number;
   guides: Guide[];
   spacings: Spacing[];
+  /**
+   * The user's guides the snapped box now sits on, per axis.
+   *
+   * A guide snap draws no line of its own — the guide is already on the canvas
+   * — but with three guides on screen "it landed on a guide" leaves open *which*
+   * one, which is the question the grid never raises because a grid is uniform.
+   * So the renderer lights these, rather than drawing a second line beside
+   * them: the same claim `guidesFor` makes by lighting a whole column, said on
+   * the line that is already there.
+   */
+  guideLines: { x: number[]; y: number[] };
 }
 
 export interface SnapOptions {
+  /**
+   * The user's own guide lines, as positions on each axis; absent or empty for
+   * none.
+   *
+   * Lines rather than boxes, and deliberately not folded into `targets`. A
+   * zero-width `Rect` would work for the offset, but its three `linesOf` are
+   * the same number three times, so `guidesFor` would draw the same line again
+   * on top of the one already on the canvas — and it would pass `bandOverlap`
+   * and join equal-spacing rows as a phantom object, forming gaps the user
+   * cannot see.
+   */
+  guides?: { x: readonly number[]; y: readonly number[] };
   /**
    * Grid pitch in world units; 0 or absent for no grid.
    *
@@ -295,6 +321,36 @@ function spacingsFor(snapped: Rect, row: readonly Rect[], axis: Axis): Spacing[]
  * which one the user meant is answered by whichever is nearest to the one they
  * dragged it to.
  */
+/**
+ * The pull onto the nearest user-placed guide, if one is within reach.
+ *
+ * The same shape as `gridOffset` one step up the chain: every line the moving
+ * box snaps by is offered against every guide on the axis, and the closest
+ * within the threshold wins.
+ */
+function guideOffset(
+  moving: Rect,
+  axis: Axis,
+  lines: readonly number[],
+  threshold: number,
+): number | null {
+  if (lines.length === 0) return null;
+  const best = closest(threshold);
+  for (const guide of lines) {
+    for (const line of linesOf(moving, axis)) {
+      best.offer(guide - line);
+    }
+  }
+  return best.value;
+}
+
+/** Every guide on the axis the snapped box now agrees with — all of them. */
+function guideHitsFor(snapped: Rect, axis: Axis, lines: readonly number[]): number[] {
+  return lines.filter((guide) =>
+    linesOf(snapped, axis).some((line) => Math.abs(line - guide) < SAME_LINE),
+  );
+}
+
 function gridOffset(moving: Rect, axis: Axis, grid: number, threshold: number): number | null {
   if (!(grid > 0)) return null;
   const best = closest(threshold);
@@ -329,6 +385,9 @@ export function snapMove(
     // be spaced within; the same list decides both the offset and the bars.
     const row = targets.filter((target) => bandOverlap(moving, target, axis) !== null);
 
+    const guide = guideOffset(moving, axis, options.guides?.[axis] ?? [], threshold);
+    if (guide !== null) return { offset: guide, kind: 'guide' as const, row };
+
     const edge = bestOffset(moving, targets, axis, threshold);
     if (edge !== null) return { offset: edge, kind: 'edge' as const, row };
 
@@ -354,20 +413,24 @@ export function snapMove(
     if (result?.kind === 'spacing') {
       return { guides: [], spacings: spacingsFor(snapped, result.row, axis) };
     }
-    // A grid snap draws nothing of its own: the grid is already on the canvas,
-    // and the object visibly landing on it is the feedback. A guide along a
-    // line that is drawn anyway would only say it twice.
+    // A grid or guide snap draws nothing of its own: both lines are already on
+    // the canvas, and the object visibly landing on one is the feedback. A
+    // guide drawn along a line that is drawn anyway would only say it twice.
     return { guides: [], spacings: [] };
   };
 
   const horizontal = drawn('x', x);
   const vertical = drawn('y', y);
 
+  const hits = (axis: Axis, result: ReturnType<typeof resolve>) =>
+    result?.kind === 'guide' ? guideHitsFor(snapped, axis, options.guides?.[axis] ?? []) : [];
+
   return {
     dx: x?.offset ?? 0,
     dy: y?.offset ?? 0,
     guides: [...horizontal.guides, ...vertical.guides],
     spacings: [...horizontal.spacings, ...vertical.spacings],
+    guideLines: { x: hits('x', x), y: hits('y', y) },
   };
 }
 
