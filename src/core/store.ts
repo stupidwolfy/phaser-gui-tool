@@ -27,6 +27,15 @@ import {
 
 const HISTORY_LIMIT = 100;
 
+/**
+ * The grid's pitch until someone changes it, in scene units.
+ *
+ * 32 because it is the tile size most 2D games start from, and because it is
+ * coarse enough at the default 960x540 scene that switching the grid on is
+ * visibly a different way of working rather than a rounding of what you had.
+ */
+const DEFAULT_GRID_SIZE = 32;
+
 export interface EditorState {
   project: Project;
   /**
@@ -96,6 +105,24 @@ export interface EditorState {
    */
   snapEnabled: boolean;
   setSnapEnabled: (snapEnabled: boolean) => void;
+  /**
+   * Whether a canvas drag is also pulled onto a regular grid, and how far apart
+   * that grid's lines are in scene units.
+   *
+   * A second toggle rather than a mode of the first: the two answer different
+   * questions — "line this up with that object" and "put this on the pitch this
+   * layout is built to" — and a tile-based game wants both at once. Object
+   * snapping wins wherever they disagree (see `snapMove`).
+   *
+   * Off by default, because a grid nobody asked for silently coarsens every
+   * drag in a project that has no pitch at all. Editor state like the rest of
+   * this group: the pitch describes how you are working, not what the scene
+   * is, and two people opening the same file are entitled to different answers.
+   */
+  gridEnabled: boolean;
+  setGridEnabled: (gridEnabled: boolean) => void;
+  gridSize: number;
+  setGridSize: (gridSize: number) => void;
   /**
    * Scales a node, honouring `lockAspect`. Both the inspector's Scale fields
    * and the canvas corner handle go through here so the lock cannot mean one
@@ -559,10 +586,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
     lockAspect: true,
     multiSelect: false,
     snapEnabled: true,
+    gridEnabled: false,
+    gridSize: DEFAULT_GRID_SIZE,
 
     setLockAspect: (lockAspect) => set({ lockAspect }),
     setMultiSelect: (multiSelect) => set({ multiSelect }),
     setSnapEnabled: (snapEnabled) => set({ snapEnabled }),
+    setGridEnabled: (gridEnabled) => set({ gridEnabled }),
+    // Clamped rather than validated: a grid of 0 divides by zero in the
+    // snapping maths and a fractional one cannot be drawn, and the field this
+    // arrives from is a text box a user can empty.
+    setGridSize: (gridSize) =>
+      set({ gridSize: Math.max(1, Math.round(gridSize) || DEFAULT_GRID_SIZE) }),
 
     scaleNode: (id, axis, value) => {
       const state = get();

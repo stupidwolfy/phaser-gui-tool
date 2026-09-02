@@ -207,6 +207,39 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * The toolbar's grid toggle, the other half of the snapping pair, and off by
+   * default so that every test not about the grid is unaffected by it.
+   */
+  async setGrid(on: boolean): Promise<void> {
+    await this.closePanels();
+    const button = this.page.getByRole('button', { name: 'Snap to grid' });
+    if (((await button.getAttribute('aria-pressed')) === 'true') !== on) await button.click();
+    await this.settle();
+  }
+
+  /**
+   * The grid's pitch, which lives in the Scene panel — and the Scene panel is
+   * what the inspector shows only while nothing is selected, so this clears the
+   * selection first rather than leaving the caller to remember.
+   */
+  async setGridSize(size: number): Promise<void> {
+    await this.deselect();
+    await this.setField('Grid size', size);
+  }
+
+  /**
+   * Clears the selection with a press on empty canvas — which is also what
+   * switches the inspector back to the scene's own panel.
+   */
+  async deselect(): Promise<void> {
+    await this.closePanels();
+    const box = await this.canvasBox();
+    // The top-left corner of the viewport: outside the fitted scene rectangle
+    // at either project's zoom, so it cannot land on an object.
+    await this.tap({ x: box.x + 6, y: box.y + 6 });
+  }
+
   /** The tree header's object count, which reads "n of m" while several are selected. */
   selectionCount(): Locator {
     return this.panel('scene').locator('.panel__count');

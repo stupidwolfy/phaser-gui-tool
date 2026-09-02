@@ -37,6 +37,27 @@ function SnapIcon() {
 }
 
 /**
+ * The grid, as four lines.
+ *
+ * A hash rather than a checkerboard: at 14px the squares of a drawn grid merge
+ * into a grey block, while four strokes stay four strokes. Like the magnet it
+ * is SVG inheriting `currentColor`, so it follows the toggle's active state
+ * instead of fighting it the way an emoji would.
+ */
+function GridIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        d="M6 2v12M10 2v12M2 6h12M2 10h12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+      />
+    </svg>
+  );
+}
+
+/**
  * Top bar.
  *
  * On a phone this keeps only what you reach for mid-edit — history, fit, save —
@@ -57,6 +78,8 @@ export function Toolbar({
   const redo = useEditorStore((s) => s.redo);
   const snapEnabled = useEditorStore((s) => s.snapEnabled);
   const setSnapEnabled = useEditorStore((s) => s.setSnapEnabled);
+  const gridEnabled = useEditorStore((s) => s.gridEnabled);
+  const setGridEnabled = useEditorStore((s) => s.setGridEnabled);
 
   return (
     <header className="toolbar">
@@ -104,6 +127,19 @@ export function Toolbar({
           aria-label="Snap to objects"
         >
           <SnapIcon />
+        </button>
+        {/* Beside the magnet because it is the same kind of control — what a
+            drag does — and because the two are read together: which of them is
+            lit is the whole answer to "why did it land there". The pitch itself
+            is a number you set once, so it stays in the Scene panel. */}
+        <button
+          className={`btn btn--toggle ${gridEnabled ? 'is-active' : ''}`}
+          aria-pressed={gridEnabled}
+          onClick={() => setGridEnabled(!gridEnabled)}
+          title={gridEnabled ? 'Grid on' : 'Grid off'}
+          aria-label="Snap to grid"
+        >
+          <GridIcon />
         </button>
       </div>
 
