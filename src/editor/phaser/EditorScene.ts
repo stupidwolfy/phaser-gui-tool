@@ -6,10 +6,24 @@ import {
   useEditorStore,
   type EditorState,
 } from '../../core/store';
-import { containsNode, findNode, type GameObjectNode, type Project } from '../../core/schema';
+import {
+  containsNode,
+  findNode,
+  findParent,
+  worldTransformOf,
+  type GameObjectNode,
+  type Project,
+} from '../../core/schema';
 import { decodeImage, decodedImage } from '../../core/assets';
 import { publishBounds, unionRect, type Rect } from '../../core/bounds';
-import { snapMove, type Guide, type Spacing } from '../../core/snapping';
+import {
+  snapMove,
+  snapRotation,
+  type AngleMark,
+  type AngleTarget,
+  type Guide,
+  type Spacing,
+} from '../../core/snapping';
 
 /**
  * The editing surface.
@@ -42,6 +56,36 @@ const GUIDE_COLOR = 0xff3ea5;
  * unusably sticky zoomed out and unreachable zoomed in.
  */
 const SNAP_THRESHOLD = 8;
+
+/**
+ * How close a turned object has to come to another's angle, or to the step,
+ * before it is pulled onto it — in **degrees**, and deliberately *not* divided
+ * by the camera zoom the way the constant above is.
+ *
+ * That division exists because a translation's size on screen is its size in
+ * the world times the zoom, so the quantity being snapped changes size as the
+ * camera moves. An angle does not: five degrees is five degrees at every zoom,
+ * and dividing would correct for a distortion that is not there — making the
+ * snap unreachable zoomed in on a gesture that has become no more precise in
+ * the quantity it controls.
+ *
+ * The real sensitivity question is the grip: at radius r from the pivot, a
+ * pixel of finger travel is 1/r radians. But the knob is parked a fixed
+ * *screen* distance beyond the object's edge, so that radius barely varies with
+ * the camera either, and a user who has gripped close in has chosen a coarse
+ * gesture rather than earned a wider capture.
+ */
+const SNAP_ANGLE = 5;
+
+/**
+ * The tick drawn through each pivot that agrees on an angle, in screen pixels.
+ *
+ * Short on purpose. It is the junior half of the feedback — it says *which*
+ * objects agreed, the way a guide lights a whole column, while the readout
+ * carries the claim itself. A long one would read as a guide, which is a
+ * stronger statement than a shared direction can support.
+ */
+const ANGLE_MARK_LENGTH = 34;
 
 /**
  * Guide thickness, in screen pixels — the same weight as the selection
@@ -110,6 +154,44 @@ const HANDLE_SIZE = 14;
 const HANDLE_TOUCH_SIZE = 44;
 /** A scale below this is indistinguishable from gone, and can't be dragged back. */
 const MIN_SCALE = 0.02;
+
+/**
+ * The rotate knob: the circle drawn, and how far beyond the object's own top
+ * edge it is parked — both in screen pixels.
+ *
+ * Outside the object rather than on a corner, and that is the load-bearing
+ * choice. The scale handle already keeps a 44px touch target that swallows a
+ * small object's own centre at the mobile zoom; a second 44px target anywhere
+ * *on* the object would leave its middle inside both and make it undraggable
+ * rather than merely awkward. Parked a constant screen distance outside the
+ * edge, the collision is impossible by construction however small the object
+ * gets — and the knob visibly carries the object's tilt, which is what makes
+ * the gesture legible with no cursor to change.
+ */
+const ROTATE_HANDLE_SIZE = 12;
+const ROTATE_HANDLE_OFFSET = 28;
+
+/** Pivot-to-point angle in degrees, y down — the sense Phaser's rotation has. */
+const degreesBetween = (px: number, py: number, x: number, y: number): number =>
+  (Math.atan2(y - py, x - px) * 180) / Math.PI;
+
+/** The shortest signed way round, in (-180, 180]. See snapping.ts. */
+const wrapDegrees = (value: number): number =>
+  ((((value + 180) % 360) + 360) % 360) - 180;
+
+/**
+ * Three decimals and one turn.
+ *
+ * Unlike a position, which settles on whole pixels unless a snap is holding, a
+ * rotation settles on three decimals *always*: `tidyTransform` already does
+ * that everywhere else in the store, and whole degrees would destroy exactly
+ * the agreements this gesture exists to make — a neighbour match at 37.5° would
+ * not survive them. Wrapped, because the document cannot express "the user
+ * spun it three times" anyway: the renderer takes it mod 360 and so does the
+ * exported `setAngle`.
+ */
+const roundRotation = (value: number): number =>
+  Math.round(wrapDegrees(value) * 1000) / 1000;
 
 /** Three decimals: finer than the eye at any zoom, and readable in a field. */
 const roundScale = (value: number): number =>
@@ -209,6 +291,7 @@ export class EditorScene extends Phaser.Scene {
    */
   private selectionOutlines: Phaser.GameObjects.Rectangle[] = [];
   private scaleHandle!: Phaser.GameObjects.Rectangle;
+  private rotateHandle!: Phaser.GameObjects.Arc;
   private unsubscribe?: () => void;
 
   /**
@@ -226,6 +309,34 @@ export class EditorScene extends Phaser.Scene {
     /** Corner minus pointer at grab time, so the handle doesn't jump to it. */
     grabOffsetX: number;
     grabOffsetY: number;
+  } | null = null;
+
+  /**
+   * The state a rotate gesture is resolved against — its start, never the
+   * previous frame, for the reason `scaling` is: turning out and back returns
+   * the object to the angle it began at instead of accumulating the rounding of
+   * every frame in between.
+   */
+  private rotating: {
+    id: string;
+    /**
+     * The object's own origin, in its parent's space.
+     *
+     * Its `x`/`y` unconverted: that is already the space `transform.rotation`
+     * lives in, and it is the point Phaser actually turns about — so a group
+     * whose children sit off to one side swings the way the document says
+     * rather than about the box that happens to be drawn round it.
+     */
+    pivotX: number;
+    pivotY: number;
+    /** `transform.rotation` at grab time, from the document, in degrees. */
+    startRotation: number;
+    /** Pivot-to-pointer angle at grab time, degrees, in the parent's space. */
+    grabAngle: number;
+    /** What the parent chain contributes: world angle = this + the local one. */
+    parentRotation: number;
+    /** Every other node's world angle and pivot, measured once at DRAG_START. */
+    targets: AngleTarget[];
   } | null = null;
 
   /**
@@ -276,9 +387,25 @@ export class EditorScene extends Phaser.Scene {
    * guides: rebuilt every frame of the gesture, empty the rest of the time.
    */
   private spacings: Spacing[] = [];
+  /**
+   * The angles the current rotate snap is claiming, on the same lifecycle as
+   * the guides: rebuilt every frame of the gesture, empty the rest of the time.
+   */
+  private angleMarks: AngleMark[] = [];
+  /** The degree readout for the current rotate snap, or null when nothing is. */
+  private angleLabel: { text: string; x: number; y: number } | null = null;
   private guideGraphics!: Phaser.GameObjects.Graphics;
-  /** Pooled labels for the spacing bars, created on first use. See labelAt. */
-  private spacingLabels: Phaser.GameObjects.Text[] = [];
+  /**
+   * Pooled overlay labels — the spacing bars' distances and the rotate
+   * readout — created on first use. See `labelAt`.
+   *
+   * One pool, because the two gestures can never be in flight at once and a
+   * second would be the same styling written twice. The counter and the hide
+   * loop live in `update()` rather than in either drawer: scoped to one of
+   * them, whichever ran second would blank the other's label.
+   */
+  private overlayLabels: Phaser.GameObjects.Text[] = [];
+  private usedLabels = 0;
   private gridGraphics!: Phaser.GameObjects.Graphics;
   /**
    * What the grid was last drawn for.
@@ -355,6 +482,23 @@ export class EditorScene extends Phaser.Scene {
       Phaser.Geom.Rectangle.Contains,
     );
     this.input.setDraggable(this.scaleHandle);
+
+    // A circle so that shape, not colour, tells the two handles apart at a
+    // glance; both stay selection cyan because both belong to the selection.
+    // The hit area is a Rectangle even so: `updateRotateHandle` then re-applies
+    // it exactly as `updateScaleHandle` does, and an Arc's own origin
+    // convention — the thing that produced the container hit-area bug — never
+    // enters into it.
+    this.rotateHandle = this.add
+      .circle(0, 0, ROTATE_HANDLE_SIZE / 2, SELECTION_COLOR)
+      .setDepth(1001)
+      .setVisible(false);
+    this.rotateHandle.setData('handle', 'rotate');
+    this.rotateHandle.setInteractive(
+      new Phaser.Geom.Rectangle(0, 0, ROTATE_HANDLE_SIZE, ROTATE_HANDLE_SIZE),
+      Phaser.Geom.Rectangle.Contains,
+    );
+    this.input.setDraggable(this.rotateHandle);
 
     this.registerInput();
 
@@ -558,6 +702,14 @@ export class EditorScene extends Phaser.Scene {
           return;
         }
 
+        // The rotate knob is here for exactly the same reasons, and it only
+        // exists while one object is selected, so the two-step rule has already
+        // been satisfied by the time a finger can reach it.
+        if (object.getData('handle') === 'rotate') {
+          this.beginRotate(pointer);
+          return;
+        }
+
         // An additive press is a selection change and nothing else; letting
         // Phaser turn it into a drag would move the object you were only trying
         // to add to the selection.
@@ -622,6 +774,11 @@ export class EditorScene extends Phaser.Scene {
           // The scale is a function of where the pointer is relative to the
           // object, so this gesture reads the pointer directly.
           this.applyScale(pointer);
+          return;
+        }
+
+        if (object.getData('handle') === 'rotate') {
+          this.applyRotate(pointer);
           return;
         }
 
@@ -691,6 +848,8 @@ export class EditorScene extends Phaser.Scene {
     this.dragRejected = false;
     this.guides = [];
     this.spacings = [];
+    this.angleMarks = [];
+    this.angleLabel = null;
 
     // A scale gesture ends through exactly the same paths as a move, for the
     // same reason: on a real device several of them fire and some of them
@@ -709,6 +868,20 @@ export class EditorScene extends Phaser.Scene {
           scaleY: roundScale(node.transform.scaleY),
         });
       }
+      store.endTransaction();
+    }
+
+    // And a rotate gesture, on the same footing.
+    if (this.rotating) {
+      const { id } = this.rotating;
+      // Nulled before the store write, for the reason `draggingId` had to be:
+      // `endTransaction` publishes a change, and gesture state still standing
+      // when that sync runs is how an edit ends up looking like it only applies
+      // once you press something else.
+      this.rotating = null;
+      const store = useEditorStore.getState();
+      const node = findNode(activeScene(store.project).children, id);
+      if (node) store.updateTransform(id, { rotation: roundRotation(node.transform.rotation) });
       store.endTransaction();
     }
 
@@ -869,7 +1042,6 @@ export class EditorScene extends Phaser.Scene {
    * has to take on trust; "24" twice is a claim they can check.
    */
   private drawSpacings(): void {
-    let used = 0;
     if (this.spacings.length > 0) {
       const { zoom } = this.cameras.main;
       const cap = SPACING_CAP / zoom;
@@ -891,8 +1063,8 @@ export class EditorScene extends Phaser.Scene {
           this.guideGraphics.lineBetween(spacing.cross - cap, spacing.to, spacing.cross + cap, spacing.to);
         }
 
-        const label = this.labelAt(used);
-        used += 1;
+        const label = this.labelAt(this.usedLabels);
+        this.usedLabels += 1;
         label
           .setVisible(true)
           .setText(String(Math.round(spacing.distance)))
@@ -904,16 +1076,64 @@ export class EditorScene extends Phaser.Scene {
       }
     }
 
-    // Pooled, so the labels a busier frame created are parked rather than
-    // destroyed — a drag creates and drops these several times a second.
-    for (let index = used; index < this.spacingLabels.length; index += 1) {
-      this.spacingLabels[index].setVisible(false);
+  }
+
+  /**
+   * The oriented ticks for a rotation agreement: one through the turned
+   * object's pivot and one through each object it caught on.
+   *
+   * On the guide layer and in the guide colour, because it is the same feedback
+   * about the same kind of gesture and a second magenta would only ask the user
+   * to learn which is which. What the tick cannot do is carry the claim: two
+   * objects at 37° share a *direction*, which has no position, so the segment
+   * is drawn somewhere chosen rather than on a locus both objects genuinely sit
+   * on. That is what the readout below is for, and it is why the tick is never
+   * drawn without it.
+   */
+  private drawAngleMarks(): void {
+    if (this.angleMarks.length === 0) return;
+    const { zoom } = this.cameras.main;
+    const half = ANGLE_MARK_LENGTH / zoom / 2;
+    this.guideGraphics.lineStyle(GUIDE_WIDTH / zoom, GUIDE_COLOR, 1);
+
+    for (const mark of this.angleMarks) {
+      const radians = Phaser.Math.DegToRad(mark.angle);
+      const dx = Math.cos(radians) * half;
+      const dy = Math.sin(radians) * half;
+      this.guideGraphics.lineBetween(mark.x - dx, mark.y - dy, mark.x + dx, mark.y + dy);
     }
   }
 
-  /** The pooled distance label for the nth spacing bar, created on first use. */
+  /**
+   * The degree readout for a rotation snap — the half of the feedback that is
+   * checkable.
+   *
+   * Two tilts three degrees apart are indistinguishable at a glance, exactly as
+   * two gaps a few pixels apart are, so the number does here what the spacing
+   * bars' labels do there: it turns a claim the user has to take on trust into
+   * one they can read. For a step snap it is the whole of the feedback, since
+   * there is no protractor on the canvas for the angle to visibly land on.
+   */
+  private drawAngleLabel(): void {
+    const readout = this.angleLabel;
+    if (!readout) return;
+    const { zoom } = this.cameras.main;
+    this.labelAt(this.usedLabels)
+      .setVisible(true)
+      .setText(readout.text)
+      .setScale(1 / zoom)
+      .setPosition(readout.x, readout.y);
+    this.usedLabels += 1;
+  }
+
+  /**
+   * The nth pooled overlay label, created on first use.
+   *
+   * Pooled, so the labels a busier frame created are parked rather than
+   * destroyed — a gesture creates and drops these several times a second.
+   */
   private labelAt(index: number): Phaser.GameObjects.Text {
-    let label = this.spacingLabels[index];
+    let label = this.overlayLabels[index];
     if (!label) {
       label = this.add
         .text(0, 0, '', {
@@ -929,7 +1149,7 @@ export class EditorScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(999)
         .setVisible(false);
-      this.spacingLabels[index] = label;
+      this.overlayLabels[index] = label;
     }
     return label;
   }
@@ -1087,6 +1307,143 @@ export class EditorScene extends Phaser.Scene {
    * The object's own bottom-right corner in world space, rotation, scale and
    * every enclosing container included — the world matrix does all of it.
    */
+  /**
+   * Opens a rotate gesture, capturing everything it will be resolved against.
+   *
+   * Single selection only, exactly as scaling is, and the reason is stronger
+   * here: turning a *set* about a shared centre moves every member's position
+   * as well as its angle — each one orbits the pivot — which is a different
+   * action against the store, not this gesture with a longer list. So the knob
+   * is hidden for a set rather than made to mean two things.
+   */
+  private beginRotate(pointer: Phaser.Input.Pointer): void {
+    const store = useEditorStore.getState();
+    const id = store.selectedIds.length === 1 ? primaryId(store) : null;
+    const object = id ? this.displayObjects.get(id) : undefined;
+    const children = activeScene(store.project).children;
+    const node = id ? findNode(children, id) : undefined;
+    // Every bail is before `beginTransaction`: it snapshots the document
+    // whether or not an edit follows, and one left open swallows the undo step
+    // of every edit after it.
+    if (!id || !object || !node) return;
+
+    const grab = this.toParentSpace(object, { x: pointer.worldX, y: pointer.worldY });
+
+    this.rotating = {
+      id,
+      pivotX: object.x,
+      pivotY: object.y,
+      // From the document, not from `object.rotation`: Phaser's is radians and
+      // is a derived copy, and round-tripping through it is exactly the drift
+      // `tidyTransform` exists to clean up.
+      startRotation: node.transform.rotation,
+      grabAngle: degreesBetween(object.x, object.y, grab.x, grab.y),
+      parentRotation: worldTransformOf(children, findParent(children, id)?.id ?? null).rotation,
+      targets: this.angleTargetsFor(id, store.project),
+    };
+    store.beginTransaction();
+  }
+
+  /**
+   * Turns the object to follow the pointer round its pivot.
+   *
+   * Both angles are measured in the *parent's* space, so a container's own
+   * rotation cancels out of their difference exactly and what comes out is the
+   * change in the local angle — which is the number the document stores. That
+   * is the parent-space rule the corner-scale code follows, applied to angles,
+   * and it is why nothing here composes or inverts a rotation by hand.
+   */
+  private applyRotate(pointer: Phaser.Input.Pointer): void {
+    const gesture = this.rotating;
+    const object = gesture ? this.displayObjects.get(gesture.id) : undefined;
+    if (!gesture || !object) return;
+
+    const point = this.toParentSpace(object, { x: pointer.worldX, y: pointer.worldY });
+    const now = degreesBetween(gesture.pivotX, gesture.pivotY, point.x, point.y);
+    // Against the gesture's start, and wrapped: without the wrap, a pointer
+    // crossing the half turn would spin the object all the way round the other
+    // way.
+    const raw = gesture.startRotation + wrapDegrees(now - gesture.grabAngle);
+
+    useEditorStore.getState().updateTransform(gesture.id, {
+      rotation: this.snappedRotation(gesture, raw),
+    });
+  }
+
+  /**
+   * The angle the turn should actually land on — the raw one when both toggles
+   * are off or nothing is in range.
+   *
+   * The snap resolves in **world** degrees and the correction is folded back
+   * into the local value, so an object inside a tilted group agrees with what
+   * is on the screen rather than with its parent's frame.
+   */
+  private snappedRotation(gesture: NonNullable<EditorScene['rotating']>, raw: number): number {
+    this.angleMarks = [];
+    this.angleLabel = null;
+
+    const { snapEnabled, gridEnabled, angleStep } = useEditorStore.getState();
+    if (!snapEnabled && !gridEnabled) return raw;
+
+    const object = this.displayObjects.get(gesture.id);
+    if (!object) return raw;
+    const pivot = object.getWorldTransformMatrix().transformPoint(0, 0);
+
+    // Each toggle withholds what it feeds the geometry rather than setting a
+    // flag the geometry reads: no targets is no neighbour snap, no step is no
+    // step. One code path, and it cannot disagree with the toolbar.
+    const result = snapRotation(
+      { angle: raw + gesture.parentRotation, x: pivot.x, y: pivot.y },
+      snapEnabled ? gesture.targets : [],
+      SNAP_ANGLE,
+      { step: gridEnabled ? angleStep : 0 },
+    );
+
+    // Only while something is holding it. A number that appeared throughout the
+    // gesture would be a readout; appearing only when the angle has been caught
+    // makes it mean the same thing a guide does.
+    if (result.delta !== 0) {
+      this.angleMarks = result.marks;
+      this.angleLabel = { text: `${Math.round(result.angle)}\u00b0`, x: pivot.x, y: pivot.y };
+    }
+    return raw + result.delta;
+  }
+
+  /**
+   * Every other drawn node's world angle and pivot, for a rotate gesture to
+   * agree with.
+   *
+   * The same three exclusions `snapTargetsFor` makes, for the same reasons: a
+   * descendant turns with the gesture, an ancestor's own angle composes into
+   * the very number being measured, and a hidden object is not on screen for a
+   * tick to point at.
+   *
+   * The scene rectangle is *not* here, though it is a target for a move. It has
+   * no tilt of its own to agree with, and offering it as "an object at 0°"
+   * would have the magnet quietly do the step's job — upright would then snap
+   * with the grid switched off, which is not what either toggle says.
+   */
+  private angleTargetsFor(moving: string, project: Project): AngleTarget[] {
+    const roots = activeScene(project).children;
+    const movingNode = findNode(roots, moving);
+    if (!movingNode) return [];
+
+    const targets: AngleTarget[] = [];
+    for (const [id, object] of this.displayObjects) {
+      if (!object.visible) continue;
+      const node = findNode(roots, id);
+      if (!node) continue;
+      if (containsNode(movingNode, id) || containsNode(node, moving)) continue;
+      const pivot = object.getWorldTransformMatrix().transformPoint(0, 0);
+      // The angle comes from the document through `worldTransformOf` — degrees,
+      // composed down the chain — rather than from Phaser's `object.rotation`,
+      // which is local radians and would silently mean the wrong thing for
+      // anything inside a rotated group.
+      targets.push({ angle: worldTransformOf(roots, id).rotation, x: pivot.x, y: pivot.y });
+    }
+    return targets;
+  }
+
   private cornerOf(object: Renderable): { x: number; y: number } {
     const rect = this.localRectOf(object);
     const point = object.getWorldTransformMatrix().transformPoint(rect.right, rect.bottom);
@@ -1126,8 +1483,17 @@ export class EditorScene extends Phaser.Scene {
   update(): void {
     this.updatePinch();
     this.updateSelectionOutline();
+    // `drawGuides` clears the shared Graphics; everything drawing into it has
+    // to come after. The label budget is one per frame across both drawers —
+    // scoped to either of them, whichever ran second would hide the other's.
+    this.usedLabels = 0;
     this.drawGuides();
+    this.drawAngleMarks();
     this.drawSpacings();
+    this.drawAngleLabel();
+    for (let index = this.usedLabels; index < this.overlayLabels.length; index += 1) {
+      this.overlayLabels[index].setVisible(false);
+    }
     this.drawGrid();
   }
 
@@ -1515,13 +1881,68 @@ export class EditorScene extends Phaser.Scene {
       this.selectionOutlines[index].setVisible(false);
     }
 
-    // The handle belongs to a single object's own corner; with several selected
-    // there is no one corner for it to sit on. See `beginScale`.
+    // Both handles belong to a single object's own frame; with several selected
+    // there is no one corner for one to sit on and no one pivot for the other
+    // to turn about. See `beginScale` and `beginRotate` — one gate, so the two
+    // cannot disagree about when they exist.
     const primary = primaryId(state);
     const handleTarget =
       state.selectedIds.length === 1 && primary ? this.displayObjects.get(primary) : undefined;
-    if (handleTarget && handleTarget.visible) this.updateScaleHandle(handleTarget);
-    else this.scaleHandle.setVisible(false);
+    if (handleTarget && handleTarget.visible) {
+      this.updateScaleHandle(handleTarget);
+      this.updateRotateHandle(handleTarget);
+    } else {
+      this.scaleHandle.setVisible(false);
+      this.rotateHandle.setVisible(false);
+    }
+  }
+
+  /**
+   * Parks the rotate knob beyond the middle of the selected object's top edge.
+   *
+   * The direction is taken from the world matrix rather than from any stored
+   * angle, so a container's rotation, scale and depth all compose into it for
+   * free — the same reason `cornerOf` transforms a point instead of adding
+   * rotations up.
+   */
+  private updateRotateHandle(target: Renderable): void {
+    const { zoom } = this.cameras.main;
+    const size = ROTATE_HANDLE_SIZE / zoom;
+    const touch = HANDLE_TOUCH_SIZE / zoom;
+
+    const rect = this.localRectOf(target);
+    const midX = (rect.x + rect.right) / 2;
+    const matrix = target.getWorldTransformMatrix();
+    const edge = matrix.transformPoint(midX, rect.y);
+    // A second point one unit further up the object's own axis, so the
+    // direction survives any rotation and any scale.
+    const above = matrix.transformPoint(midX, rect.y - 1);
+    const dx = above.x - edge.x;
+    const dy = above.y - edge.y;
+    // A collapsed scale still has a direction to park along; fall back to
+    // straight up rather than dividing by zero.
+    const length = Math.hypot(dx, dy);
+    const unitX = length === 0 ? 0 : dx / length;
+    const unitY = length === 0 ? -1 : dy / length;
+    const reach = ROTATE_HANDLE_OFFSET / zoom;
+
+    this.rotateHandle
+      .setVisible(true)
+      .setPosition(edge.x + unitX * reach, edge.y + unitY * reach)
+      // `setRadius`, not `setDisplaySize`: it resizes the geometry and with it
+      // `width`/`height`, so the hit area below stays in world units. Scaling
+      // the knob instead would leave the hit area in *scaled* units and make
+      // the 44px target wrong by the zoom squared.
+      .setRadius(size / 2)
+      .setStrokeStyle(1 / zoom, 0x0d1117);
+
+    // The same rule as the scale handle: resizing does not carry the hit area,
+    // and the hit area is what the finger actually hits.
+    const area = this.rotateHandle.input?.hitArea;
+    if (area instanceof Phaser.Geom.Rectangle) {
+      const pad = (touch - size) / 2;
+      area.setTo(-pad, -pad, touch, touch);
+    }
   }
 
   /** The pooled outline for the nth selected object, created on first use. */

@@ -31,6 +31,19 @@ const OVERLAY_BAND = 130;
  */
 export const PRIME = 12;
 
+/**
+ * How far beyond an object's top edge the rotate knob is parked, in screen
+ * pixels — `ROTATE_HANDLE_OFFSET` in `EditorScene`.
+ *
+ * Exported for the same reason `PRIME` is: it is not only a harness detail. The
+ * knob sits a fixed distance from the object *on screen* at every zoom, which
+ * is what keeps it reachable on a phone and what lets a test work out where it
+ * is from geometry alone rather than reaching into the scene. Change it there
+ * without changing it here and the suite misses the knob entirely, then reports
+ * that rotation does nothing.
+ */
+export const ROTATE_HANDLE_OFFSET = 28;
+
 export interface Point {
   x: number;
   y: number;
@@ -226,6 +239,33 @@ export class EditorPage {
   async setGridSize(size: number): Promise<void> {
     await this.deselect();
     await this.setField('Grid size', size);
+  }
+
+  /**
+   * The rotate gesture's angular pitch, which lives in the Scene panel beside
+   * the grid's — and the Scene panel is what the inspector shows only while
+   * nothing is selected, so this clears the selection first. Set the step
+   * *before* selecting the object the test means to turn.
+   */
+  async setAngleStep(degrees: number): Promise<void> {
+    await this.deselect();
+    await this.setField('Angle step°', degrees);
+  }
+
+  /**
+   * Where the rotate knob is, in page coordinates, for an object centred on
+   * `pivot` whose own half-height is `halfHeight` scene units.
+   *
+   * Derived rather than read out of Phaser, the way `sceneToScreen` is: the
+   * knob is the object's top edge plus a constant *screen* offset, so the
+   * radius is a scene distance times the zoom plus a screen distance.
+   */
+  async rotateHandleAt(pivot: Point, halfHeight: number, rotationDeg = 0): Promise<Point> {
+    const centre = await this.sceneToScreen(pivot);
+    const zoom = await this.zoom();
+    const reach = halfHeight * zoom + ROTATE_HANDLE_OFFSET;
+    const radians = ((rotationDeg - 90) * Math.PI) / 180;
+    return { x: centre.x + Math.cos(radians) * reach, y: centre.y + Math.sin(radians) * reach };
   }
 
   /**

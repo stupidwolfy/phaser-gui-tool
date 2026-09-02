@@ -370,3 +370,171 @@ export function snapMove(
     spacings: [...horizontal.spacings, ...vertical.spacings],
   };
 }
+
+// -----------------------------------------------------------------------------
+// Rotation
+// -----------------------------------------------------------------------------
+
+/**
+ * An object's world angle and the point it turns about.
+ *
+ * Degrees, because that is the unit the document stores and the inspector
+ * shows; nothing in this path converts to radians, so there is one place a sign
+ * or a factor could be wrong and it is the renderer's `DegToRad` call.
+ */
+export interface AngleTarget {
+  angle: number;
+  /** The pivot, in scene coordinates — where an agreement is drawn. */
+  x: number;
+  y: number;
+}
+
+/**
+ * A short tick through a pivot, at a direction: what a rotation agreement
+ * draws.
+ *
+ * Not a `Guide`, and it cannot be one. A guide works because a shared line is a
+ * real locus in the scene — both objects genuinely sit on it, so drawing it is
+ * not a symbol for the agreement, it *is* the agreement. Two objects at 37°
+ * share no locus, only a direction, which has no position; any segment drawn
+ * for it is drawn somewhere chosen. So the tick says *which* objects agreed,
+ * the way `guidesFor` lights a whole column, and the readout label carries the
+ * claim itself — the same division of labour the spacing bars make, where the
+ * number is what turns two bars that look similar into two bars that are equal.
+ */
+export interface AngleMark {
+  x: number;
+  y: number;
+  /** Direction, in degrees. */
+  angle: number;
+}
+
+export interface RotationSnapResult {
+  /** Added to the rotation being proposed, in degrees. No snap is simply 0. */
+  delta: number;
+  /** The angle landed on, wrapped — what the readout shows. */
+  angle: number;
+  marks: AngleMark[];
+}
+
+export interface RotationSnapOptions {
+  /**
+   * Fixed angular pitch in degrees; 0 or absent for no step.
+   *
+   * The rotational form of `SnapOptions.grid`, and withheld the same way: a
+   * caller turns the step off by passing 0 rather than by setting a flag this
+   * module reads.
+   */
+  step?: number;
+}
+
+/**
+ * The shortest signed way round from one angle to another, in (-180, 180].
+ *
+ * The one piece of arithmetic a linear axis never needed. Without it 179° and
+ * -179° read as 358° apart, so the snap would refuse to fire anywhere near the
+ * half turn, and a gesture crossing it would spin the object the long way.
+ */
+const wrapDegrees = (value: number): number =>
+  ((((value + 180) % 360) + 360) % 360) - 180;
+
+/** Angles out of the same subtraction, compared as the same angle. */
+const SAME_ANGLE = 1e-6;
+
+/** The smallest turn that brings the moving angle onto a target's. */
+function neighbourOffset(
+  angle: number,
+  targets: readonly AngleTarget[],
+  threshold: number,
+): number | null {
+  const best = closest(threshold);
+  for (const target of targets) best.offer(wrapDegrees(target.angle - angle));
+  return best.value;
+}
+
+/**
+ * The smallest turn that puts the angle on a multiple of the step.
+ *
+ * The `step > 0` guard is what makes "no step" expressible as a number rather
+ * than as a flag — exactly as `gridOffset` guards its pitch, and for the same
+ * reason: a pitch of zero would divide by zero.
+ */
+function stepOffset(angle: number, step: number, threshold: number): number | null {
+  if (!(step > 0)) return null;
+  const best = closest(threshold);
+  best.offer(wrapDegrees(Math.round(angle / step) * step - angle));
+  return best.value;
+}
+
+/**
+ * Every target the snapped angle now agrees with, as ticks to draw — plus the
+ * moving object's own.
+ *
+ * All of them, not just the one that decided the offset, for the reason
+ * `guidesFor` lights a whole column: turning an object onto the tilt three
+ * others already share should show all four agreeing.
+ */
+function marksFor(snapped: AngleTarget, targets: readonly AngleTarget[]): AngleMark[] {
+  const marks: AngleMark[] = [{ x: snapped.x, y: snapped.y, angle: snapped.angle }];
+  for (const target of targets) {
+    if (Math.abs(wrapDegrees(target.angle - snapped.angle)) < SAME_ANGLE) {
+      marks.push({ x: target.x, y: target.y, angle: target.angle });
+    }
+  }
+  return marks;
+}
+
+/**
+ * Where a proposed rotation should actually land, and what to draw for it.
+ *
+ * `moving` is the object's *world* angle after the raw gesture, so this is a
+ * correction to an angle rather than an angle — the same contract `snapMove`
+ * has for a position. The precedence is the same argument too: agreeing with a
+ * specific object's tilt is a decision about those two objects, while the step
+ * agrees with everything everywhere and so has the least to say about this
+ * object in particular.
+ *
+ * The threshold is in **degrees, and the caller does not divide it by the
+ * camera zoom** — the one place this departs from `snapMove`, deliberately.
+ * `SNAP_THRESHOLD` is divided because a translation's size on screen is its
+ * world size times the zoom, so the quantity being snapped changes size as the
+ * camera moves. An angle does not: five degrees is five degrees at any zoom,
+ * and dividing would correct for a distortion that is not there, making the
+ * snap unreachable zoomed in on a gesture that has become no more precise.
+ *
+ * Equality is modulo 360, not 180. A rectangle turned half a turn looks the
+ * same as it started, but that is a property of that one object's symmetry, not
+ * of rotation: 190° and 10° are not the same tilt, they are upside down from
+ * each other, and for text or a sprite that difference is the whole point.
+ */
+export function snapRotation(
+  moving: AngleTarget,
+  targets: readonly AngleTarget[],
+  threshold: number,
+  options: RotationSnapOptions = {},
+): RotationSnapResult {
+  const resolve = () => {
+    const neighbour = neighbourOffset(moving.angle, targets, threshold);
+    if (neighbour !== null) return { offset: neighbour, kind: 'neighbour' as const };
+
+    const step = stepOffset(moving.angle, options.step ?? 0, threshold);
+    if (step !== null) return { offset: step, kind: 'step' as const };
+
+    return null;
+  };
+
+  const result = resolve();
+  const snapped: AngleTarget = { ...moving, angle: moving.angle + (result?.offset ?? 0) };
+
+  // A step snap draws no ticks, for the reason a grid snap draws no guides
+  // turned inside out: the grid is already on the canvas and a guide would say
+  // it twice, whereas there is no protractor on the canvas at all — so for the
+  // step the readout is not a second saying of the feedback, it is the whole of
+  // it, and a tick through the object's own pivot would claim an agreement with
+  // nothing in particular.
+  return {
+    delta: result?.offset ?? 0,
+    angle: wrapDegrees(snapped.angle),
+    marks: result?.kind === 'neighbour' ? marksFor(snapped, targets) : [],
+  };
+}

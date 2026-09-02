@@ -40,7 +40,7 @@ export function NumberField({
    * Whether editing this field belongs in the undo history.
    *
    * True for everything in the document, false for the handful of fields that
-   * edit *editor* state — the grid pitch, so far. `beginTransaction` snapshots
+   * edit *editor* state — the grid pitch and the angle step. `beginTransaction` snapshots
    * the document whether or not an edit follows, so a field that never touches
    * the document would otherwise push an undo step on every focus, and Ctrl+Z
    * would spend its first press undoing a click.

@@ -76,7 +76,11 @@ export function hostileProject(): Project {
             name: `${breakout} group`,
             type: 'container',
             visible: true,
-            transform: { x: 700, y: 400, rotation: 0, scaleX: 1, scaleY: 1 },
+            // A rotation, and a rotated one at three decimals, because that is
+            // what the rotate gesture settles on and nothing else in this
+            // fixture had a non-zero angle — so `modifiersFor`'s `.setAngle`
+            // line reached neither export toolchain.
+            transform: { x: 700, y: 400, rotation: 12.5, scaleX: 1, scaleY: 1 },
             props: { alpha: 1 },
             children: [
               {
@@ -85,7 +89,7 @@ export function hostileProject(): Project {
                 type: 'rectangle',
                 visible: true,
                 // Local coordinates: the group puts it at 700,400.
-                transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+                transform: { x: 0, y: 0, rotation: -37.125, scaleX: 1, scaleY: 1 },
                 props: { width: 120, height: 80, fill: '#22d3ee', alpha: 1 },
                 children: [],
               },
