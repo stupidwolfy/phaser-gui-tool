@@ -17,6 +17,9 @@ on a desktop.
   in one go
 - Line several objects up: align their left, right, top or bottom edges or their
   centres, or spread three or more evenly across or down
+- Snap while you drag: an object pulled near another's edge or centre — or the scene's —
+  lands exactly on it, with a guide showing what it caught. The magnet button in the
+  toolbar turns it off for the drag that has to sit one pixel out
 - Resize by dragging the corner handle, keeping the aspect ratio unless you unlink it
 - Import your own images and use them as sprites, with tint, flip and alpha
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
@@ -118,6 +121,7 @@ src/
   core/schema.ts      the project document types (the file format)
   core/store.ts       zustand store: document, selection, undo/redo
   core/bounds.ts      the boxes the renderer last drew, and the align maths
+  core/snapping.ts    pulling a dragged box onto the lines around it
   io/fileIO.ts        save/open, File System Access API + download fallback
   io/exportPhaser.ts  the document turned into runnable Phaser code
   editor/phaser/      the Phaser scene that renders the document
@@ -126,6 +130,7 @@ tests/
   editing.spec.ts     add, drag, inspect, group, undo, save, reopen — on both viewports
   multi-select.spec.ts  building a selection, and moving/grouping it as one
   align.spec.ts       aligning and distributing a selection by its drawn edges
+  snapping.spec.ts    a drag landing exactly on a neighbour's edge, and its guides
   assets.spec.ts      image import, drawing, save/reopen, removal
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite

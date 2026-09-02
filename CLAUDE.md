@@ -17,7 +17,8 @@ and image assets. Iteration 4 (shipped) made the tree a real tree: a `container`
 type, Phaser Containers, reparenting, and nested export. Iteration 5 (shipped) made the
 selection a set: several objects moved, grouped, duplicated, hidden and deleted as one.
 Iteration 6 (shipped) added align and distribute, and with them the first thing the store
-knows about *drawn* geometry. See the README for the user-facing feature list.
+knows about *drawn* geometry. Iteration 7 (shipped) put that geometry inside the gesture:
+a drag now snaps to the objects around it, with guides. See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -321,6 +322,50 @@ the one thing the store reads that is not the document.
 - Aligning a *single* object against the scene rectangle ("centre this in the scene") is
   the obvious next use of this, and needs no new machinery.
 
+## Snapping
+
+`src/core/snapping.ts` is the other half of `bounds.ts`: align tidies a layout up after
+it is built, snapping does it while the finger is still down. It is pure geometry over
+the same boxes — no store, no scene, no camera — and returns a *correction* plus the
+lines to draw for it.
+
+- **The renderer decides what a target is; `snapMove` decides where the move lands.**
+  `EditorScene.snapTargetsFor` collects every other drawn object's box plus the scene
+  rectangle, once, at `DRAG_START`.
+- **The moving set is measured once, at the start, and translated.** Everything in a drag
+  takes the same world displacement, so the box after a move is the starting box plus that
+  displacement — and re-measuring each frame would feed the snapped position back in as
+  the next frame's input, which is a snap that drifts.
+- **Three kinds of node are excluded from the targets.** The moving nodes and their
+  descendants travel with the gesture. An *ancestor* is subtler: a container's box is the
+  union of its children, so a child snapping to its own parent would be chasing a target
+  that moves with it. And a hidden object is not on screen, so a guide pointing at one
+  points at nothing.
+- **The correction is computed once, for the set, in world space** — then folded into the
+  pointer position each node is measured against, so `DRAG`'s per-node loop is unchanged
+  and a set moves as one piece. Snapping node by node would pull each onto a different
+  line and tear the selection apart.
+- **The threshold is in screen pixels, divided by the camera zoom at use.** In world units
+  it would be unusably sticky zoomed out and unreachable zoomed in.
+- **The axes resolve independently**, so catching a neighbour's left edge does not also
+  move the object vertically.
+- **A snapped axis is not rounded to whole pixels on release.** `finishDrag` has always
+  rounded a drag's final position; doing that to a snapped axis would undo by up to half a
+  pixel the alignment the gesture had just made. A snapped axis settles on three decimals
+  instead, the way a scale does.
+- **Guides carry their own extent** — drawn from the dragged object to the object it
+  caught on, rather than across the viewport, so they say *which* object agreed. Every
+  target that agrees gets one, so dropping a box onto a column of three lights the whole
+  column.
+- **Guides are two screen pixels wide, like the selection outline.** A hairline is the
+  desktop convention and is feedback you cannot see under a thumb, which makes a snap read
+  as the editor moving things by itself.
+- The toggle is `store.snapEnabled` — editor state, like `lockAspect` and `multiSelect`,
+  never saved. It lives in the toolbar rather than a panel because it changes what a drag
+  does, and on mobile a panel is a sheet covering the canvas you are dragging on.
+- Snapping applies to the drag only. Arrow-key nudges and align/distribute are exact
+  already, and a snap on a 1px nudge would fight the user rather than help.
+
 ## Interaction model
 
 Touch and mouse deliberately differ, keyed off `pointer.wasTouch`:
@@ -434,6 +479,7 @@ tests/
   editing.spec.ts           add → select → drag → inspector → undo → save → reopen
   multi-select.spec.ts      building a selection, then moving, grouping, duplicating it
   align.spec.ts             aligning and distributing it, by edges rather than origins
+  snapping.spec.ts          a drag landing exactly on an edge, and the guides for it
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
@@ -492,6 +538,28 @@ Traps, each of which produced a confident wrong answer at some point:
   sequentially (`describe.configure({ mode: 'default' })`) even though the rest of the
   suite is fully parallel. Two compilers competing with the browsers is how it went from
   ten seconds to a four-minute timeout.
+- **A drag test that asserts where the pointer put something has to turn snapping off.**
+  It is on by default, so `editing.spec`'s two "the object lands where I dragged it" tests
+  now begin with `setSnapping(false)` — the starter project's own objects were pulling the
+  marker four pixels onto a neighbour's edge, which is the feature working, not a failure.
+- **The scale handle's 44px touch target can swallow a small object's own centre.** At the
+  mobile project's zoom a 100x60 object is 37x22 on screen, so a press aimed at its middle
+  starts a resize instead of a drag and the test sees an object that never moved — or one
+  that vanished. That is the editor behaving as designed (see "Interaction model"); a
+  fixture that means to be dragged has to be big enough to have a middle that is not the
+  handle.
+- **A new project ships three example objects, and they are part of the scene under test.**
+  Harmless for a tolerance-based assertion, fatal for an exact one: they are three more
+  boxes to snap to and three more colours a centroid can pick up. `EditorPage.clearScene`
+  empties the scene through the tree's own row buttons.
+- **Reading the document means saving, and saving opens the file sheet.** On mobile that
+  sheet covers the canvas, so a `findDrawn` after a `saveToFile` screenshots the sheet and
+  reports the object missing. Assert the canvas first, then read the file.
+- **A one-pixel line never reaches full strength on screen.** Antialiasing left the guides
+  at about 78% over the background on one project and split across two pixels on the
+  other, so a colour match found them in one and not the other. Matching loosely enough to
+  catch the blend also matches an object's own antialiased edge — which is a wrong answer,
+  not a flaky one.
 - `@playwright/test` is pinned to `~1.56` because that is the release whose bundled
   Chromium (1194) is the one preinstalled in the container this repo is developed in — do
   not run `playwright install` there. `CHROMIUM_PATH` overrides the executable if a
@@ -542,6 +610,8 @@ render as Phaser `Image`s, not `Sprite`s — animation is the reason to change t
 tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Prefabs are the
 natural next thing built on containers, and a group is what a prefab instance would be —
 now that a selection is a set, "make a prefab of these" has something to start from.
-Alignment and distribution shipped in iteration 6; the bounds they needed are now in
-`src/core/bounds.ts`, which any future geometry tool — snapping, smart guides, "centre in
-the scene" — can read.
+Alignment and distribution shipped in iteration 6 and snapping in iteration 7; the boxes
+both need are in `src/core/bounds.ts`, which any further geometry tool can read. Grid and
+rotation snapping, spacing badges between snapped objects, and persistent user-placed
+guides are the obvious extensions of `src/core/snapping.ts` — all three are more target
+lines fed to the same `snapMove`.

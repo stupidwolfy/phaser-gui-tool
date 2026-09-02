@@ -87,6 +87,16 @@ export interface EditorState {
   multiSelect: boolean;
   setMultiSelect: (multiSelect: boolean) => void;
   /**
+   * Whether a canvas drag is pulled into line with the objects around it.
+   *
+   * Editor state, like the two above: it changes how a gesture behaves, never
+   * what the document says, so it is neither saved nor undoable. On by default,
+   * because the precision a snap supplies is precisely what a fingertip lacks —
+   * and off is one tap away for the drag that has to sit at 241.
+   */
+  snapEnabled: boolean;
+  setSnapEnabled: (snapEnabled: boolean) => void;
+  /**
    * Scales a node, honouring `lockAspect`. Both the inspector's Scale fields
    * and the canvas corner handle go through here so the lock cannot mean one
    * thing in one place and something else in the other.
@@ -548,9 +558,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
     clipboard: [],
     lockAspect: true,
     multiSelect: false,
+    snapEnabled: true,
 
     setLockAspect: (lockAspect) => set({ lockAspect }),
     setMultiSelect: (multiSelect) => set({ multiSelect }),
+    setSnapEnabled: (snapEnabled) => set({ snapEnabled }),
 
     scaleNode: (id, axis, value) => {
       const state = get();

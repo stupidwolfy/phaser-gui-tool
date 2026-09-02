@@ -8,7 +8,8 @@ import {
 } from '../../core/store';
 import { containsNode, findNode, type GameObjectNode, type Project } from '../../core/schema';
 import { decodeImage, decodedImage } from '../../core/assets';
-import { publishBounds, type Rect } from '../../core/bounds';
+import { publishBounds, unionRect, type Rect } from '../../core/bounds';
+import { snapMove, type Guide } from '../../core/snapping';
 
 /**
  * The editing surface.
@@ -27,6 +28,29 @@ const MAX_ZOOM = 4;
 // just selected.
 const SELECTION_COLOR = 0x00e5ff;
 const FRAME_COLOR = 0x5a6478;
+/**
+ * Snap guides are magenta so that all three canvas overlays stay tellable
+ * apart: the accent blue is the default rectangle fill, cyan is the selection
+ * outline, and a guide has to be readable while lying across both.
+ */
+const GUIDE_COLOR = 0xff3ea5;
+
+/**
+ * How close a dragged edge has to come before it is pulled into line, in
+ * *screen* pixels — divided by the camera zoom at use, so the pull is the same
+ * distance to the finger at every zoom. In world units instead it would be
+ * unusably sticky zoomed out and unreachable zoomed in.
+ */
+const SNAP_THRESHOLD = 8;
+
+/**
+ * Guide thickness, in screen pixels — the same weight as the selection
+ * outline, and for the same reason. A hairline is the desktop convention, but
+ * on a phone held at arm's length with a thumb over the object it is feedback
+ * you cannot see, which makes the snap look like the editor moving things on
+ * its own.
+ */
+const GUIDE_WIDTH = 2;
 
 /**
  * Texture keys are namespaced so that `syncTextures` can tell the textures it
@@ -54,6 +78,9 @@ const MIN_SCALE = 0.02;
 /** Three decimals: finer than the eye at any zoom, and readable in a field. */
 const roundScale = (value: number): number =>
   Math.max(MIN_SCALE, Math.round(value * 1000) / 1000);
+
+/** The same three decimals, for a position a snap has to keep exact. */
+const roundPosition = (value: number): number => Math.round(value * 1000) / 1000;
 
 /** '#rrggbb' -> 0xrrggbb, tolerating a missing '#' or a malformed value. */
 function hexToNumber(hex: string, fallback = 0xffffff): number {
@@ -186,7 +213,29 @@ export class EditorScene extends Phaser.Scene {
     nodes: { id: string; startX: number; startY: number }[];
     pointerX: number;
     pointerY: number;
+    /**
+     * The moving set's box where the gesture began, and everything it may
+     * snap to — both measured once, at DRAG_START.
+     *
+     * Once, because the set translates rigidly: every node in it takes the
+     * same world displacement, so the box after a move is the starting box
+     * plus that displacement, and nothing being snapped *to* is moving at all.
+     * Re-measuring each frame would instead feed the snapped position back in
+     * as the next frame's input, which is how a snap turns into a drift.
+     */
+    startBounds: Rect | undefined;
+    targets: Rect[];
+    /** Whether the last move was held by a snap, per axis. See finishDrag. */
+    snappedX: boolean;
+    snappedY: boolean;
   } | null = null;
+  /**
+   * The lines the current snap is holding, redrawn each frame and cleared when
+   * the gesture ends. Empty whenever nothing is snapped, which is also what
+   * hides them.
+   */
+  private guides: Guide[] = [];
+  private guideGraphics!: Phaser.GameObjects.Graphics;
   private isPanning = false;
   private pinchDistance = 0;
   /** Once the user has zoomed or panned, stop re-framing the view for them. */
@@ -230,6 +279,11 @@ export class EditorScene extends Phaser.Scene {
       .setStrokeStyle(1, FRAME_COLOR)
       .setFillStyle()
       .setDepth(-1000);
+
+    // Below the selection outline and the handle, above everything the user
+    // draws: a guide is feedback about a gesture, and must never be mistaken
+    // for something in the scene or cover the handle being dragged.
+    this.guideGraphics = this.add.graphics().setDepth(999);
 
     // Sits above the outline so it is never the outline that takes the press.
     this.scaleHandle = this.add
@@ -488,7 +542,15 @@ export class EditorScene extends Phaser.Scene {
         }
 
         this.dragRejected = false;
-        this.dragging = { nodes, pointerX: pointer.worldX, pointerY: pointer.worldY };
+        this.dragging = {
+          nodes,
+          pointerX: pointer.worldX,
+          pointerY: pointer.worldY,
+          startBounds: this.boundsOfSet(nodes.map((item) => item.id)),
+          targets: this.snapTargetsFor(nodes.map((item) => item.id), state.project),
+          snappedX: false,
+          snappedY: false,
+        };
         // One undo entry per drag, not one per pointer-move.
         store.getState().beginTransaction();
       },
@@ -515,11 +577,18 @@ export class EditorScene extends Phaser.Scene {
         // Exact floats while the finger is down; finishDrag rounds once at the
         // end. Rounding per-move would step in whole world units, which is
         // visible as stutter when the camera is zoomed in.
+        // The correction is worked out once, in world space, on the box the
+        // whole set occupies — then folded into the pointer position every node
+        // is measured against, so one snap moves the set as one piece. Snapping
+        // per node would pull each of them onto a different line and tear the
+        // selection apart.
+        const target = this.snappedPointer(drag, pointer);
+
         for (const item of drag.nodes) {
           const moving = this.displayObjects.get(item.id);
           if (!moving) continue;
           const from = this.toParentSpace(moving, { x: drag.pointerX, y: drag.pointerY });
-          const to = this.toParentSpace(moving, { x: pointer.worldX, y: pointer.worldY });
+          const to = this.toParentSpace(moving, target);
           store.getState().updateTransform(item.id, {
             x: item.startX + to.x - from.x,
             y: item.startY + to.y - from.y,
@@ -561,6 +630,7 @@ export class EditorScene extends Phaser.Scene {
    */
   private finishDrag(): void {
     this.dragRejected = false;
+    this.guides = [];
 
     // A scale gesture ends through exactly the same paths as a move, for the
     // same reason: on a real device several of them fire and some of them
@@ -590,12 +660,127 @@ export class EditorScene extends Phaser.Scene {
     for (const item of drag.nodes) {
       const node = findNode(activeScene(store.getState().project).children, item.id);
       if (!node) continue;
+      // Whole pixels, except on an axis a snap is holding: rounding there
+      // would undo by up to half a pixel the alignment the snap had just made,
+      // which is exactly the thing the gesture was for. A snapped axis settles
+      // on three decimals instead — finer than the eye at any zoom, and enough
+      // to keep 479.99999999999994 out of the inspector.
       store.getState().updateTransform(item.id, {
-        x: Math.round(node.transform.x),
-        y: Math.round(node.transform.y),
+        x: drag.snappedX ? roundPosition(node.transform.x) : Math.round(node.transform.x),
+        y: drag.snappedY ? roundPosition(node.transform.y) : Math.round(node.transform.y),
       });
     }
     store.getState().endTransaction();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Snapping
+  // ---------------------------------------------------------------------------
+
+  /** The box a set of nodes occupies together, as last drawn. */
+  private boundsOfSet(ids: readonly string[]): Rect | undefined {
+    const boxes = ids.flatMap((id) => {
+      const object = this.displayObjects.get(id);
+      if (!object) return [];
+      const bounds = this.worldBoundsOf(object);
+      return [{ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }];
+    });
+    return unionRect(boxes);
+  }
+
+  /**
+   * Everything the moving set may snap to: every other drawn object, plus the
+   * scene rectangle itself.
+   *
+   * Three kinds of node are deliberately left out. The moving nodes and
+   * anything inside them travel with the gesture, so they are not lines to
+   * catch on. An *ancestor* of a moving node is excluded for a subtler reason:
+   * a container's box is the union of its children, so dragging a child changes
+   * the very box it would be snapping to — the target would chase the gesture.
+   * And a hidden object is not on screen, so a guide leading to it would point
+   * at nothing.
+   *
+   * The scene rectangle is in for the case with no other objects at all:
+   * centring the first object of a new project is the most common alignment
+   * there is, and it has nothing else to line up against.
+   */
+  private snapTargetsFor(moving: readonly string[], project: Project): Rect[] {
+    const roots = activeScene(project).children;
+    const movingNodes = moving.flatMap((id) => findNode(roots, id) ?? []);
+
+    const targets: Rect[] = [];
+    for (const [id, object] of this.displayObjects) {
+      if (!object.visible) continue;
+      const node = findNode(roots, id);
+      if (!node) continue;
+      const related = movingNodes.some(
+        (movingNode) => containsNode(movingNode, id) || containsNode(node, movingNode.id),
+      );
+      if (related) continue;
+      const bounds = this.worldBoundsOf(object);
+      targets.push({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+    }
+
+    const scene = activeScene(project);
+    targets.push({ x: 0, y: 0, width: scene.width, height: scene.height });
+    return targets;
+  }
+
+  /**
+   * Where the pointer should be treated as being, once the snap has had its
+   * say — the raw position when snapping is off or nothing is in range.
+   *
+   * Returning a pointer position rather than a corrected object position is
+   * what lets the per-node loop stay exactly as it was: every node already
+   * converts this one world point into its own parent space, so a group inside
+   * a rotated container snaps correctly with no extra maths.
+   */
+  private snappedPointer(
+    drag: NonNullable<EditorScene['dragging']>,
+    pointer: Phaser.Input.Pointer,
+  ): { x: number; y: number } {
+    const raw = { x: pointer.worldX, y: pointer.worldY };
+    drag.snappedX = false;
+    drag.snappedY = false;
+    this.guides = [];
+
+    const start = drag.startBounds;
+    if (!start || !useEditorStore.getState().snapEnabled) return raw;
+
+    const moved: Rect = {
+      ...start,
+      x: start.x + raw.x - drag.pointerX,
+      y: start.y + raw.y - drag.pointerY,
+    };
+    const result = snapMove(moved, drag.targets, SNAP_THRESHOLD / this.cameras.main.zoom);
+
+    drag.snappedX = result.dx !== 0;
+    drag.snappedY = result.dy !== 0;
+    this.guides = result.guides;
+    return { x: raw.x + result.dx, y: raw.y + result.dy };
+  }
+
+  /**
+   * Redraws the guides for the current frame.
+   *
+   * Cleared and rebuilt every frame rather than diffed: there are at most a
+   * handful of them, they change on every pointer move, and a Graphics object
+   * makes one draw call for all of them however many there are. The line width
+   * is divided by the camera zoom for the same reason the selection outline's
+   * is — a guide is a screen-space annotation, not something in the scene.
+   */
+  private drawGuides(): void {
+    this.guideGraphics.clear();
+    if (this.guides.length === 0) return;
+
+    this.guideGraphics.lineStyle(GUIDE_WIDTH / this.cameras.main.zoom, GUIDE_COLOR, 1);
+    for (const guide of this.guides) {
+      if (guide.axis === 'x') {
+        this.guideGraphics.lineBetween(guide.position, guide.from, guide.position, guide.to);
+      } else {
+        this.guideGraphics.lineBetween(guide.from, guide.position, guide.to, guide.position);
+      }
+    }
   }
 
   /**
@@ -755,6 +940,7 @@ export class EditorScene extends Phaser.Scene {
   update(): void {
     this.updatePinch();
     this.updateSelectionOutline();
+    this.drawGuides();
   }
 
   /** Two fingers down: zoom by how much the gap between them changed. */
