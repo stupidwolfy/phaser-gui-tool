@@ -21,7 +21,9 @@ knows about *drawn* geometry. Iteration 7 (shipped) put that geometry inside the
 a drag now snaps to the objects around it, with guides. Iteration 8 (shipped) widened what
 a drag can agree with: equal spacing within a row, and a grid. Iteration 9 (shipped) gave
 rotation a gesture of its own — a knob on the canvas — and put the same kind of agreement
-inside it. See the README for the user-facing feature list.
+inside it. Iteration 10 (shipped) let the user author a line of their own: guides, saved
+with the document, that a drag agrees with before anything else — and, with them, "centre
+this in the scene". See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -331,8 +333,14 @@ the one thing the store reads that is not the document.
   other geometry tool here does — but an angle is not a box, and the angles it compares
   come from the document through `worldTransformOf`. What it takes from the renderer is
   only the pivots to draw ticks through.
-- Aligning a *single* object against the scene rectangle ("centre this in the scene") is
-  the obvious next use of this, and needs no new machinery.
+- **Aligning against the scene rectangle is `alignDeltas`' optional `target`**, defaulting
+  to `unionRect(boxes)` so the existing behaviour is unchanged byte for byte. It is the one
+  alignment a *single* object can ask for — one object's union with itself is itself, so
+  every default alignment of one object is a no-op by construction, which is why
+  `alignSelection` refuses below two and `alignSelectionToScene` deliberately does not.
+  That is also why `AlignSection` now renders for one object with its six union buttons
+  disabled rather than absent: a button that silently does nothing is worse than one that
+  says it cannot.
 
 ## Snapping
 
@@ -341,17 +349,22 @@ it is built, snapping does it while the finger is still down. It is pure geometr
 the same boxes — no store, no scene, no camera — and returns a *correction* plus what to
 draw for it.
 
-- **Three kinds of agreement, tried in that order on each axis**: a shared edge or centre
-  line, an equal gap within a row, then a grid line. The order is the strength of the
-  intent behind each — an edge is a decision about *those two objects*, a gap is a
-  decision about a run, and the grid agrees with everything everywhere. Resolving them the
-  other way round has the grid quietly overrule the object you were plainly aiming at.
-  `snapMove`'s `resolve` is the whole of that precedence; a fourth kind goes in the same
-  chain.
-- **Only one of the three draws anything per axis.** A guide means "these agree on a
-  line", a spacing bar means "this space is that space", and the grid draws nothing at
-  all, because it is already on the canvas — a guide along a line that is drawn anyway
-  says it twice.
+- **Four kinds of agreement, tried in that order on each axis**: a user-placed guide, a
+  shared edge or centre line, an equal gap within a row, then a grid line. The order is
+  the strength of the intent behind each — a guide is the only line here the user
+  *authored*, an edge is a decision about *those two objects*, a gap is a decision about a
+  run, and the grid agrees with everything everywhere. Resolving them the other way round
+  has the grid quietly overrule the object you were plainly aiming at. `snapMove`'s
+  `resolve` is the whole of that precedence; a fifth kind goes in the same chain.
+- **Only one of the four draws a line of its own per axis.** A snap guide means "these
+  agree on a line", a spacing bar means "this space is that space", and the grid draws
+  nothing at all, because it is already on the canvas — a line along a line that is drawn
+  anyway says it twice. A user guide is in the grid's position and for the grid's reason,
+  with one difference: a grid is uniform, so "which line caught it" is not a question,
+  while with three guides on screen it is. So the *guide itself* turns the snap magenta
+  while it is holding the drag — the line already there answering which one agreed, rather
+  than a second line beside it. That is what `SnapResult.guideLines` carries; `guides`
+  stays empty for a guide snap.
 
 - **The renderer decides what a target is; `snapMove` decides where the move lands.**
   `EditorScene.snapTargetsFor` collects every other drawn object's box plus the scene
@@ -418,6 +431,66 @@ draw for it.
 - Snapping applies to the drag and to the rotate gesture, and to nothing else. Arrow-key
   nudges and align/distribute are exact already, and a snap on a 1px nudge would fight the
   user rather than help.
+
+**Guides** (`SceneGuide` in `schema.ts`, `guideOffset` in `snapping.ts`) are the one part
+of this family that is document state, and everything below follows from that.
+
+- **They live on the scene, and `SCHEMA_VERSION` did not bump.** A guide is a line in a
+  *scene's* coordinates, so a project-level one would be off the edge of a smaller scene.
+  The version stayed at 3 because the rule is "would a deployed older build break", and a
+  v3 build does not: `parseProject` passes `scenes` through verbatim, nothing there reads
+  `scene.guides`, and `editScene` spreads — so an old build opens the file, draws it
+  identically, and carries the guides back out on a re-save. That is the opposite of the
+  `container` bump, where an unhandled type crashed the renderer. **The no-bump decision
+  is contingent on that spread**: if `parseProject` ever starts reconstructing scenes field
+  by field, an old build silently drops guides on every save, which is data loss with no
+  crash. `guides.spec.ts` asserts the version in the saved artefact so a future bump is a
+  deliberate act.
+- **`guidesOf` is the only reader**, and it is both the default for older files and the
+  validator for hand-edited ones — the job `parseAssets` does for the asset table. Scenes
+  are the one part of an opened file that is not rebuilt field by field, so a `?? []` at
+  each call site would be trusting a string from disk five times over.
+- **They are lines, not zero-width boxes.** Folding them into `targets` would work for the
+  offset, and then `guidesFor` would redraw the line already on the canvas, and
+  `bandOverlap` would enrol the guide in equal-spacing rows as a phantom object forming
+  gaps nobody can see.
+- **One toggle, two effects.** Guides ride on the magnet (`snapEnabled`) rather than a
+  third switch — the same call the angle step made — and `guidesVisible` hides them *and*
+  withholds them from `snapMove`, by the rule that already keeps hidden objects out of the
+  targets. Both are still expressed by withholding input, never by a flag the geometry
+  reads.
+- **A guide is drawn as an interactive `Rectangle` per guide, not a signature-driven
+  `Graphics` like the grid** — a `Graphics` cannot be hit-tested line by line, and being
+  grabbable is the whole point. Depth 998: above the objects (a guide behind a rectangle is
+  neither visible nor grabbable), below the snap overlays and the handles at 999+.
+- **Its grab band is 24 screen pixels, not the handles' 44, and that is not a
+  compromise.** The handles are *point* targets; a guide is a line, unbounded along its
+  own axis, so only one coordinate has to be right — a far easier target at the same
+  width. And the band steals every press inside it from the objects underneath, across the
+  whole scene: 44px is ~119 scene units of unpressable canvas per guide at the mobile
+  zoom. Re-apply the hit area every frame against the zoom, like both handles — `setSize`
+  does not carry it.
+- **Hidden guides are `disableInteractive()`, not merely invisible.** `setVisible(false)`
+  does not stop Phaser hit-testing, so a switched-off guide would go on stealing presses
+  with nothing on screen to explain why.
+- **A guide is exempt from the two-step touch rule**, like the two handles and for the
+  same mechanical reason — it carries no `nodeId`, so the `DRAG_START` comparison would
+  reject every guide drag made with a finger — and on its own merits: that rule exists
+  because a fingertip lands on whichever *object* it grazed, and a guide is chrome aimed
+  at deliberately. Its branch has to come before the rule, as theirs do.
+- **`draggingGuide` is cleared before `endTransaction()`**, the `draggingId` trap exactly.
+- **A guide drag does not itself snap.** A guide is the thing objects snap *to*, so
+  pulling one onto an object's edge would only say that edge twice; a guide on a round
+  number is the grid's job and the inspector row's.
+- **Dragging one off the scene deletes it** — the convention every editor with rulers has,
+  and the one deletion gesture that costs no chrome on a 390px screen. Inside the drag's
+  own transaction, so it is one undo step. The inspector's per-guide row is the other way,
+  and the one that reaches a guide dragged somewhere a finger no longer can.
+- **There are no rulers, and that is deliberate.** A ruler is a place to drag a guide
+  *from*; it costs ~24px of chrome on two edges of a 390px viewport, and drag-out from a
+  DOM strip onto a WebGL canvas is a cross-boundary gesture with no touch story. Two
+  buttons in the Snapping section say the same thing, and the gesture that actually has to
+  work under a thumb — *moving* a guide — is identical either way.
 
 **Rotation snapping** (`snapRotation`, same module) is the same shape one dimension over:
 a correction plus what to draw, resolved by a first-non-null chain.
@@ -610,6 +683,7 @@ tests/
   align.spec.ts             aligning and distributing it, by edges rather than origins
   snapping.spec.ts          a drag landing on an edge, an equal gap or the grid
   rotation.spec.ts          the rotate knob, and an angle landing on a neighbour or a step
+  guides.spec.ts            placing a guide, dragging it, and a drag agreeing with it
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
@@ -675,6 +749,17 @@ Traps, each of which produced a confident wrong answer at some point:
   wide joiner are shaped by nothing else. Sizing a clearance against the desktop number
   gives a test that passes on one project and quietly measures a different feature on the
   other.
+- **`openPanel` matches the mobile tab bar's labels exactly, and has to.** They are single
+  common words — Scene, Properties, File — so a substring match picks up any panel button
+  whose own label happens to contain one. "Centre in scene ↔" matched the Scene tab, and
+  every mobile test that opened a panel failed at once, seventeen of them, none of them
+  near the button that caused it. Adding a control whose label contains one of those words
+  is fine; loosening that locator is not.
+- **A guide's grab band steals presses over a wide strip on mobile.** 24 screen pixels at
+  the mobile project's zoom is about 65 scene units, across the whole height or width of
+  the scene — so a fixture whose draggable object sits within ~65 units of a guide has its
+  press taken by the guide and drags that instead. The analogue of the spacing tests' tall
+  narrow posts: shape the fixture around it, or turn the guides off.
 - **The rotation threshold is the one threshold identical on both projects** — 5°, because
   it is not divided by the zoom (see Snapping). A rotation fixture therefore does not need
   the mobile-sized clearances every drag fixture is shaped by.
@@ -765,10 +850,11 @@ tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Pref
 natural next thing built on containers, and a group is what a prefab instance would be —
 now that a selection is a set, "make a prefab of these" has something to start from.
 Alignment and distribution shipped in iteration 6, snapping in iteration 7, equal spacing
-and the grid in iteration 8, and the rotate gesture with rotation snapping in iteration 9;
-the boxes they all need are in `src/core/bounds.ts`, which any further geometry tool can
-read. What is left of that family is **persistent user-placed guides**, the one extension
-that is not purely geometric: a guide the user drags out of a ruler is document state, so
-it needs a schema field, a `SCHEMA_VERSION` decision and a way to place one with a thumb.
-Everything else is another line or gap fed to the same `snapMove`, or another kind of
-agreement on the end of `snapRotation`'s chain.
+and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9, and
+persistent guides in iteration 10; the boxes they all need are in `src/core/bounds.ts`,
+which any further geometry tool can read. That family is complete in the sense that
+mattered — the user can now author a line of their own — and what is left of it is more of
+the same shape: another line or gap fed to `snapMove`, or another kind of agreement on the
+end of `snapRotation`'s chain. Guides at an angle are the one that is not, since a diagonal
+guide has no per-axis offset and would need `snapMove`'s whole per-axis structure
+rethought.

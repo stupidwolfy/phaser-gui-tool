@@ -1,5 +1,5 @@
 import { expect, test } from './helpers/fixtures';
-import type { EditorPage } from './helpers/editor';
+import { SCENE, type EditorPage } from './helpers/editor';
 
 /**
  * Align and distribute.
@@ -152,4 +152,36 @@ test('distribute is offered only once there is something in between', async ({ e
   const inspect = editor.panel('inspect');
   await expect(inspect.getByRole('button', { name: 'Spread ↔' })).toBeDisabled();
   await expect(inspect.getByRole('button', { name: 'Spread ↕' })).toBeDisabled();
+});
+
+test('a single object centres itself in the scene', async ({ editor }) => {
+  // The case the other six buttons cannot serve: one object's bounding box is
+  // itself, so lining it up with that box moves nothing. Against the *scene*
+  // rectangle it is the alignment people reach for most.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Only');
+  await editor.setField('Fill', A);
+  await editor.setField('Width', 120);
+  await editor.setField('Height', 80);
+  await editor.setField('X', 180);
+  await editor.setField('Y', 140);
+
+  await editor.panel('inspect').getByRole('button', { name: 'Centre in scene ↔' }).click();
+  await editor.panel('inspect').getByRole('button', { name: 'Centre in scene ↕' }).click();
+  await editor.closePanels();
+
+  // Drawn, not merely stored: a centred origin and a centred object are the
+  // same thing only because a rectangle's origin is its centre, and this
+  // asserts the one the user can see.
+  const drawn = await editor.findDrawn(A);
+  const middle = await editor.sceneToScreen({ x: SCENE.width / 2, y: SCENE.height / 2 });
+  expect(Math.abs(drawn.x - middle.x)).toBeLessThan(NEAR);
+  expect(Math.abs(drawn.y - middle.y)).toBeLessThan(NEAR);
+
+  // Pressing again does nothing, the property every alignment here has: the
+  // second press is how someone checks the first.
+  const saved = await editor.saveToFile();
+  const node = JSON.parse(saved.contents).scenes[0].children[0];
+  expect(node.transform).toMatchObject({ x: SCENE.width / 2, y: SCENE.height / 2 });
 });

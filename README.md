@@ -16,7 +16,8 @@ on a desktop.
   Shift/Ctrl-click on a desktop — then move, group, duplicate, hide or delete all of them
   in one go
 - Line several objects up: align their left, right, top or bottom edges or their
-  centres, or spread three or more evenly across or down
+  centres, or spread three or more evenly across or down — or centre one object, or all
+  of them, in the scene
 - Snap while you drag: an object pulled near another's edge or centre — or the scene's —
   lands exactly on it, with a guide showing what it caught. The magnet button in the
   toolbar turns it off for the drag that has to sit one pixel out
@@ -26,6 +27,12 @@ on a desktop.
 - Snap to a grid: the **#** button beside the magnet draws a grid and lands drags on
   it. Set its pitch under Snapping in the Scene panel; the two toggles are independent,
   and lining up with an object wins wherever they disagree
+- Place your own guides: add a vertical or horizontal one under Guides in the Scene
+  panel, drag it on the canvas to move it or off the edge of the scene to remove it, or
+  type an exact number. Objects line up with a guide before anything else, and the guide
+  lights up while it is holding a drag. Guides are saved with the project — unlike the
+  snapping settings — and **Show guides** hides them and stops objects agreeing with them
+  without deleting them
 - Resize by dragging the corner handle, keeping the aspect ratio unless you unlink it
 - Turn an object with the knob above it, on the canvas rather than in a panel. The angle
   snaps the same way a drag does: the magnet catches another object's angle, the **#**
@@ -98,7 +105,7 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; six iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; ten iterations in, it is a
 working editor but a small one.
 
 **Not built yet** — animations and sprite sheets, tilemaps, physics, particles, audio,
@@ -131,8 +138,8 @@ src/
   core/schema.ts      the project document types (the file format)
   core/store.ts       zustand store: document, selection, undo/redo
   core/bounds.ts      the boxes the renderer last drew, and the align maths
-  core/snapping.ts    pulling a dragged box onto the lines, gaps and grid around it,
-                      and a turned object onto the angles around it
+  core/snapping.ts    pulling a dragged box onto the guides, lines, gaps and grid around
+                      it, and a turned object onto the angles around it
   io/fileIO.ts        save/open, File System Access API + download fallback
   io/exportPhaser.ts  the document turned into runnable Phaser code
   editor/phaser/      the Phaser scene that renders the document
@@ -143,6 +150,7 @@ tests/
   align.spec.ts       aligning and distributing a selection by its drawn edges
   snapping.spec.ts    a drag landing on a neighbour's edge, an equal gap or the grid
   rotation.spec.ts    the rotate knob, and an angle landing on a neighbour or a step
+  guides.spec.ts      placing a guide, dragging it, and a drag agreeing with it
   assets.spec.ts      image import, drawing, save/reopen, removal
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite

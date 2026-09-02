@@ -15,7 +15,9 @@ import {
   containsNode,
   findNode,
   findParent,
+  guidesOf,
   localTransformIn,
+  newId,
   worldTransformOf,
   type GameObjectNode,
   type ImageAsset,
@@ -149,6 +151,21 @@ export interface EditorState {
   angleStep: number;
   setAngleStep: (angleStep: number) => void;
   /**
+   * Whether the user's own guides are drawn — and, by the same switch, whether
+   * a drag agrees with them.
+   *
+   * One flag for both because the alternative is a line that silently moves
+   * things while not being on screen, which is the rule already applied to
+   * hidden objects: a snap the user cannot see the reason for reads as the
+   * editor rearranging their scene by itself.
+   *
+   * Editor state like the rest of this group, even though the guides
+   * *themselves* are saved with the document. Whether you are currently looking
+   * at them is how you are working; where they are is what the project says.
+   */
+  guidesVisible: boolean;
+  setGuidesVisible: (guidesVisible: boolean) => void;
+  /**
    * Scales a node, honouring `lockAspect`. Both the inspector's Scale fields
    * and the canvas corner handle go through here so the lock cannot mean one
    * thing in one place and something else in the other.
@@ -245,11 +262,39 @@ export interface EditorState {
    * almost always are.
    */
   alignSelection: (edge: AlignEdge) => void;
+  /**
+   * The same, against the scene rectangle instead of the selection's own box.
+   *
+   * This is the one alignment a *single* object can ask for — "centre this in
+   * the scene". Aligning one object to its own bounding box is a no-op by
+   * construction, which is why `alignSelection` refuses below two and this
+   * deliberately does not.
+   */
+  alignSelectionToScene: (edge: AlignEdge) => void;
   /** Spaces the selection evenly along one axis, by centres. Needs three. */
   distributeSelection: (axis: Axis) => void;
   updateTransform: (id: string, patch: Partial<Transform>) => void;
   updateProps: (id: string, patch: Record<string, unknown>) => void;
-  updateScene: (patch: Partial<Omit<SceneDoc, 'children' | 'id'>>) => void;
+  /**
+   * `guides` is excluded alongside `children` and `id`: they have their own
+   * four actions below, and one patch path that could also rewrite the array
+   * wholesale is how a second, undocumented way to edit them appears.
+   */
+  updateScene: (patch: Partial<Omit<SceneDoc, 'children' | 'id' | 'guides'>>) => void;
+
+  // -- guides ----------------------------------------------------------------
+  /**
+   * Places a guide, and moves, removes or clears them.
+   *
+   * Document actions, so they are undoable like any other edit and are saved
+   * with the project — a guide is a line the user authored, not a preference
+   * about how the editor behaves. (`guidesVisible`, above, is the preference,
+   * and it is neither.)
+   */
+  addGuide: (axis: Axis, position: number) => void;
+  moveGuide: (id: string, position: number) => void;
+  removeGuide: (id: string) => void;
+  clearGuides: () => void;
 
   // -- history ---------------------------------------------------------------
   /**
@@ -614,6 +659,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     gridEnabled: false,
     gridSize: DEFAULT_GRID_SIZE,
     angleStep: DEFAULT_ANGLE_STEP,
+    guidesVisible: true,
 
     setLockAspect: (lockAspect) => set({ lockAspect }),
     setMultiSelect: (multiSelect) => set({ multiSelect }),
@@ -632,6 +678,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       set({
         angleStep: Math.max(1, Math.min(180, Math.round(angleStep) || DEFAULT_ANGLE_STEP)),
       }),
+    setGuidesVisible: (guidesVisible) => set({ guidesVisible }),
 
     scaleNode: (id, axis, value) => {
       const state = get();
@@ -962,6 +1009,13 @@ export const useEditorStore = create<EditorState>((set, get) => {
       );
     },
 
+    alignSelectionToScene: (edge) => {
+      const state = get();
+      const scene = activeScene(state.project);
+      const rect: Rect = { x: 0, y: 0, width: scene.width, height: scene.height };
+      applyWorldDeltas(state, (boxes) => alignDeltas(boxes, edge, rect));
+    },
+
     distributeSelection: (axis) => {
       applyWorldDeltas(get(), (boxes) => distributeDeltas(boxes, axis));
     },
@@ -1007,6 +1061,32 @@ export const useEditorStore = create<EditorState>((set, get) => {
       })),
 
     updateScene: (patch) => editScene((scene) => ({ ...scene, ...patch })),
+
+    addGuide: (axis, position) =>
+      editScene((scene) => ({
+        ...scene,
+        guides: [...guidesOf(scene), { id: newId(), axis, position }],
+      })),
+
+    // A move rebuilds the array rather than mutating an entry: the document is
+    // the undo history's snapshots, so an in-place edit would rewrite the past
+    // as well as the present.
+    moveGuide: (id, position) =>
+      editScene((scene) => ({
+        ...scene,
+        guides: guidesOf(scene).map((guide) =>
+          guide.id === id ? { ...guide, position } : guide,
+        ),
+      })),
+
+    removeGuide: (id) =>
+      editScene((scene) => ({
+        ...scene,
+        guides: guidesOf(scene).filter((guide) => guide.id !== id),
+      })),
+
+    clearGuides: () =>
+      editScene((scene) => (guidesOf(scene).length === 0 ? scene : { ...scene, guides: [] })),
 
     beginTransaction: () => {
       const state = get();

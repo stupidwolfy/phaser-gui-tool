@@ -108,6 +108,14 @@ test('an export of a hostile project runs, and injects nothing', async ({
   // and the scene script — and no third one hiding inside a string literal.
   expect(exported.contents.split('</script>')).toHaveLength(3);
 
+  // Guides are editor furniture, not scene content, and the exporter reads the
+  // scene's fields by name rather than enumerating them — so nothing about them
+  // reaches the output today. This pins that: the failure it guards against is
+  // silent in both directions, an exporter that starts emitting the editor's
+  // own overlay into somebody's game.
+  expect(exported.contents).not.toContain('guide-1');
+  expect(exported.contents).not.toContain('guides');
+
   const run = await runExportedPage(page.context(), testInfo.outputPath('hostile'), exported.contents);
 
   expect(
