@@ -17,10 +17,11 @@ interface FieldProps<T> {
   onChange: (value: T) => void;
 }
 
-function useTransactionHandlers() {
+function useTransactionHandlers(undoable = true) {
   const begin = useEditorStore((s) => s.beginTransaction);
   const end = useEditorStore((s) => s.endTransaction);
-  return { onFocus: begin, onBlur: end };
+  const noop = () => {};
+  return undoable ? { onFocus: begin, onBlur: end } : { onFocus: noop, onBlur: noop };
 }
 
 export function NumberField({
@@ -30,8 +31,23 @@ export function NumberField({
   step = 1,
   min,
   max,
-}: FieldProps<number> & { step?: number; min?: number; max?: number }) {
-  const tx = useTransactionHandlers();
+  undoable = true,
+}: FieldProps<number> & {
+  step?: number;
+  min?: number;
+  max?: number;
+  /**
+   * Whether editing this field belongs in the undo history.
+   *
+   * True for everything in the document, false for the handful of fields that
+   * edit *editor* state — the grid pitch, so far. `beginTransaction` snapshots
+   * the document whether or not an edit follows, so a field that never touches
+   * the document would otherwise push an undo step on every focus, and Ctrl+Z
+   * would spend its first press undoing a click.
+   */
+  undoable?: boolean;
+}) {
+  const tx = useTransactionHandlers(undoable);
   const [draft, setDraft] = useState(String(value));
   const [focused, setFocused] = useState(false);
 

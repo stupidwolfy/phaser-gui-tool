@@ -9,7 +9,7 @@ import {
 import { containsNode, findNode, type GameObjectNode, type Project } from '../../core/schema';
 import { decodeImage, decodedImage } from '../../core/assets';
 import { publishBounds, unionRect, type Rect } from '../../core/bounds';
-import { snapMove, type Guide } from '../../core/snapping';
+import { snapMove, type Guide, type Spacing } from '../../core/snapping';
 
 /**
  * The editing surface.
@@ -51,6 +51,42 @@ const SNAP_THRESHOLD = 8;
  * its own.
  */
 const GUIDE_WIDTH = 2;
+
+/**
+ * The end caps on a spacing bar, and the gap the shortest bar still needs to
+ * be drawn at all — both in screen pixels.
+ *
+ * A bar without caps is indistinguishable from a guide lying across the gap,
+ * which is the one reading it must not have: a guide says "these agree on a
+ * line", a bar says "this space is that space". Below the minimum there is not
+ * enough room between two caps for a bar to be anything but a smudge, and two
+ * objects that close read as touching anyway.
+ */
+const SPACING_CAP = 5;
+const MIN_SPACING = 6;
+
+/**
+ * The grid, in the same slate as the scene frame and at a third of its
+ * strength.
+ *
+ * The frame is the other piece of editor chrome drawn under the user's
+ * objects, and it has to survive any background colour they choose, so the
+ * grid inherits both the colour and that constraint. A third is where it
+ * stopped competing with the objects on top of it: a grid you read before the
+ * scene is a grid in the way.
+ */
+const GRID_COLOR = FRAME_COLOR;
+const GRID_ALPHA = 0.33;
+
+/**
+ * The smallest a grid square may get on screen before the grid stops being
+ * drawn, in screen pixels.
+ *
+ * Zoomed far enough out, a 32-unit pitch is a solid wash that hides the scene
+ * it is meant to help place things in. Snapping still uses the pitch — it is
+ * the drawing that has nothing left to say, not the geometry.
+ */
+const MIN_GRID_PIXELS = 6;
 
 /**
  * Texture keys are namespaced so that `syncTextures` can tell the textures it
@@ -235,7 +271,25 @@ export class EditorScene extends Phaser.Scene {
    * hides them.
    */
   private guides: Guide[] = [];
+  /**
+   * The equal gaps the current snap is claiming, on the same lifecycle as the
+   * guides: rebuilt every frame of the gesture, empty the rest of the time.
+   */
+  private spacings: Spacing[] = [];
   private guideGraphics!: Phaser.GameObjects.Graphics;
+  /** Pooled labels for the spacing bars, created on first use. See labelAt. */
+  private spacingLabels: Phaser.GameObjects.Text[] = [];
+  private gridGraphics!: Phaser.GameObjects.Graphics;
+  /**
+   * What the grid was last drawn for.
+   *
+   * The grid depends on the camera zoom as well as on the store — its lines are
+   * one screen pixel wide, so it has to be redrawn on a pinch, which is not a
+   * store change. Redrawing it unconditionally every frame is a few dozen line
+   * segments for nothing; comparing a signature makes it a string compare on
+   * the frames where nothing about it moved.
+   */
+  private gridSignature = '';
   private isPanning = false;
   private pinchDistance = 0;
   /** Once the user has zoomed or panned, stop re-framing the view for them. */
@@ -284,6 +338,11 @@ export class EditorScene extends Phaser.Scene {
     // draws: a guide is feedback about a gesture, and must never be mistaken
     // for something in the scene or cover the handle being dragged.
     this.guideGraphics = this.add.graphics().setDepth(999);
+
+    // Above the scene frame and below everything the user draws: the grid is
+    // the surface objects are placed on, so nothing in the scene may end up
+    // behind it.
+    this.gridGraphics = this.add.graphics().setDepth(-999);
 
     // Sits above the outline so it is never the outline that takes the press.
     this.scaleHandle = this.add
@@ -631,6 +690,7 @@ export class EditorScene extends Phaser.Scene {
   private finishDrag(): void {
     this.dragRejected = false;
     this.guides = [];
+    this.spacings = [];
 
     // A scale gesture ends through exactly the same paths as a move, for the
     // same reason: on a real device several of them fire and some of them
@@ -743,20 +803,31 @@ export class EditorScene extends Phaser.Scene {
     drag.snappedX = false;
     drag.snappedY = false;
     this.guides = [];
+    this.spacings = [];
 
     const start = drag.startBounds;
-    if (!start || !useEditorStore.getState().snapEnabled) return raw;
+    const { snapEnabled, gridEnabled, gridSize } = useEditorStore.getState();
+    if (!start || (!snapEnabled && !gridEnabled)) return raw;
 
     const moved: Rect = {
       ...start,
       x: start.x + raw.x - drag.pointerX,
       y: start.y + raw.y - drag.pointerY,
     };
-    const result = snapMove(moved, drag.targets, SNAP_THRESHOLD / this.cameras.main.zoom);
+    // The two toggles are independent, and each is expressed by withholding
+    // what it feeds the geometry rather than by a flag it has to interpret:
+    // no targets is no object snapping, no pitch is no grid.
+    const result = snapMove(
+      moved,
+      snapEnabled ? drag.targets : [],
+      SNAP_THRESHOLD / this.cameras.main.zoom,
+      { grid: gridEnabled ? gridSize : 0 },
+    );
 
     drag.snappedX = result.dx !== 0;
     drag.snappedY = result.dy !== 0;
     this.guides = result.guides;
+    this.spacings = result.spacings;
     return { x: raw.x + result.dx, y: raw.y + result.dy };
   }
 
@@ -780,6 +851,121 @@ export class EditorScene extends Phaser.Scene {
       } else {
         this.guideGraphics.lineBetween(guide.from, guide.position, guide.to, guide.position);
       }
+    }
+  }
+
+  /**
+   * Draws the equal gaps the current snap is claiming, as capped bars with the
+   * distance on them.
+   *
+   * The bar and its caps go on the guide layer, in the guide colour: it is the
+   * same feedback about the same gesture, and a second palette would only ask
+   * the user to learn which magenta means what. What separates the two is the
+   * shape — a guide runs *through* objects, a bar runs *between* them and stops
+   * at a cap on each side.
+   *
+   * The number matters more than it looks. Two gaps a few pixels apart are
+   * indistinguishable at a glance, so a pair of bare bars is a claim the user
+   * has to take on trust; "24" twice is a claim they can check.
+   */
+  private drawSpacings(): void {
+    let used = 0;
+    if (this.spacings.length > 0) {
+      const { zoom } = this.cameras.main;
+      const cap = SPACING_CAP / zoom;
+      this.guideGraphics.lineStyle(GUIDE_WIDTH / zoom, GUIDE_COLOR, 1);
+
+      for (const spacing of this.spacings) {
+        // Too small to draw as a gap: the caps alone would overlap, and two
+        // objects that close read as touching rather than as spaced.
+        if (spacing.distance * zoom < MIN_SPACING) continue;
+        const middle = (spacing.from + spacing.to) / 2;
+
+        if (spacing.axis === 'x') {
+          this.guideGraphics.lineBetween(spacing.from, spacing.cross, spacing.to, spacing.cross);
+          this.guideGraphics.lineBetween(spacing.from, spacing.cross - cap, spacing.from, spacing.cross + cap);
+          this.guideGraphics.lineBetween(spacing.to, spacing.cross - cap, spacing.to, spacing.cross + cap);
+        } else {
+          this.guideGraphics.lineBetween(spacing.cross, spacing.from, spacing.cross, spacing.to);
+          this.guideGraphics.lineBetween(spacing.cross - cap, spacing.from, spacing.cross + cap, spacing.from);
+          this.guideGraphics.lineBetween(spacing.cross - cap, spacing.to, spacing.cross + cap, spacing.to);
+        }
+
+        const label = this.labelAt(used);
+        used += 1;
+        label
+          .setVisible(true)
+          .setText(String(Math.round(spacing.distance)))
+          .setScale(1 / zoom)
+          .setPosition(
+            spacing.axis === 'x' ? middle : spacing.cross,
+            spacing.axis === 'x' ? spacing.cross : middle,
+          );
+      }
+    }
+
+    // Pooled, so the labels a busier frame created are parked rather than
+    // destroyed — a drag creates and drops these several times a second.
+    for (let index = used; index < this.spacingLabels.length; index += 1) {
+      this.spacingLabels[index].setVisible(false);
+    }
+  }
+
+  /** The pooled distance label for the nth spacing bar, created on first use. */
+  private labelAt(index: number): Phaser.GameObjects.Text {
+    let label = this.spacingLabels[index];
+    if (!label) {
+      label = this.add
+        .text(0, 0, '', {
+          fontFamily: 'system-ui, sans-serif',
+          fontSize: '11px',
+          color: '#ffffff',
+          // A filled chip rather than bare text: the label sits on top of
+          // whatever the user is dragging over, and white on an arbitrary
+          // background is only legible by luck.
+          backgroundColor: '#ff3ea5',
+          padding: { x: 3, y: 1 },
+        })
+        .setOrigin(0.5)
+        .setDepth(999)
+        .setVisible(false);
+      this.spacingLabels[index] = label;
+    }
+    return label;
+  }
+
+  /**
+   * Redraws the grid when anything it depends on has changed.
+   *
+   * Anchored at the scene origin and clipped to the scene rectangle, rather
+   * than filling the viewport: the grid is a property of the scene being built,
+   * and one that carried on past the frame would say the space outside it is
+   * somewhere objects belong.
+   *
+   * Lines are one screen pixel at any zoom, for the reason every other overlay
+   * here is — but unlike the others the grid can be asked to draw hundreds of
+   * them, so below a few pixels a square it draws none at all.
+   */
+  private drawGrid(): void {
+    const { gridEnabled, gridSize } = useEditorStore.getState();
+    const scene = activeScene(useEditorStore.getState().project);
+    const { zoom } = this.cameras.main;
+    const visible = gridEnabled && gridSize * zoom >= MIN_GRID_PIXELS;
+    const signature = visible
+      ? `${gridSize}:${zoom}:${scene.width}:${scene.height}`
+      : '';
+    if (signature === this.gridSignature) return;
+    this.gridSignature = signature;
+
+    this.gridGraphics.clear();
+    if (!visible) return;
+
+    this.gridGraphics.lineStyle(1 / zoom, GRID_COLOR, GRID_ALPHA);
+    for (let x = gridSize; x < scene.width; x += gridSize) {
+      this.gridGraphics.lineBetween(x, 0, x, scene.height);
+    }
+    for (let y = gridSize; y < scene.height; y += gridSize) {
+      this.gridGraphics.lineBetween(0, y, scene.width, y);
     }
   }
 
@@ -941,6 +1127,8 @@ export class EditorScene extends Phaser.Scene {
     this.updatePinch();
     this.updateSelectionOutline();
     this.drawGuides();
+    this.drawSpacings();
+    this.drawGrid();
   }
 
   /** Two fingers down: zoom by how much the gap between them changed. */

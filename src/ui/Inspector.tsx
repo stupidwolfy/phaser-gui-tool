@@ -204,7 +204,51 @@ function SceneInspector() {
         value={scene.backgroundColor}
         onChange={(backgroundColor) => updateScene({ backgroundColor })}
       />
+
+      <SnappingSection />
     </div>
+  );
+}
+
+/**
+ * How a drag behaves, in the panel that is showing whenever nothing is
+ * selected.
+ *
+ * None of this is in the document — it is not saved, not undoable, and two
+ * people opening the same file may well want different answers. It sits in the
+ * Scene panel anyway because that is the panel about the space objects are
+ * placed in, and because a preference with no home ends up in a menu nobody
+ * opens. The two toggles are mirrored in the toolbar, which is where they are
+ * actually reached mid-gesture; this is where the grid's pitch is set, being a
+ * number you choose once per project rather than one you flick.
+ */
+function SnappingSection() {
+  const snapEnabled = useEditorStore((s) => s.snapEnabled);
+  const setSnapEnabled = useEditorStore((s) => s.setSnapEnabled);
+  const gridEnabled = useEditorStore((s) => s.gridEnabled);
+  const setGridEnabled = useEditorStore((s) => s.setGridEnabled);
+  const gridSize = useEditorStore((s) => s.gridSize);
+  const setGridSize = useEditorStore((s) => s.setGridSize);
+
+  return (
+    <>
+      <div className="panel__section">Snapping</div>
+      <CheckboxField label="Snap to objects" value={snapEnabled} onChange={setSnapEnabled} />
+      <CheckboxField label="Snap to grid" value={gridEnabled} onChange={setGridEnabled} />
+      <NumberField
+        label="Grid size"
+        value={gridSize}
+        min={1}
+        step={1}
+        undoable={false}
+        onChange={setGridSize}
+      />
+      <p className="hint">
+        Dragging lines objects up with their neighbours, matches the spacing of a row you
+        drop into, and — with the grid on — lands on the pitch. These are editor settings:
+        they are not saved with the project.
+      </p>
+    </>
   );
 }
 

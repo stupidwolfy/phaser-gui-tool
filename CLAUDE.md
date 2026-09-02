@@ -18,7 +18,9 @@ type, Phaser Containers, reparenting, and nested export. Iteration 5 (shipped) m
 selection a set: several objects moved, grouped, duplicated, hidden and deleted as one.
 Iteration 6 (shipped) added align and distribute, and with them the first thing the store
 knows about *drawn* geometry. Iteration 7 (shipped) put that geometry inside the gesture:
-a drag now snaps to the objects around it, with guides. See the README for the user-facing feature list.
+a drag now snaps to the objects around it, with guides. Iteration 8 (shipped) widened what
+a drag can agree with: equal spacing within a row, and a grid. See the README for the
+user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -326,8 +328,20 @@ the one thing the store reads that is not the document.
 
 `src/core/snapping.ts` is the other half of `bounds.ts`: align tidies a layout up after
 it is built, snapping does it while the finger is still down. It is pure geometry over
-the same boxes — no store, no scene, no camera — and returns a *correction* plus the
-lines to draw for it.
+the same boxes — no store, no scene, no camera — and returns a *correction* plus what to
+draw for it.
+
+- **Three kinds of agreement, tried in that order on each axis**: a shared edge or centre
+  line, an equal gap within a row, then a grid line. The order is the strength of the
+  intent behind each — an edge is a decision about *those two objects*, a gap is a
+  decision about a run, and the grid agrees with everything everywhere. Resolving them the
+  other way round has the grid quietly overrule the object you were plainly aiming at.
+  `snapMove`'s `resolve` is the whole of that precedence; a fourth kind goes in the same
+  chain.
+- **Only one of the three draws anything per axis.** A guide means "these agree on a
+  line", a spacing bar means "this space is that space", and the grid draws nothing at
+  all, because it is already on the canvas — a guide along a line that is drawn anyway
+  says it twice.
 
 - **The renderer decides what a target is; `snapMove` decides where the move lands.**
   `EditorScene.snapTargetsFor` collects every other drawn object's box plus the scene
@@ -360,6 +374,33 @@ lines to draw for it.
 - **Guides are two screen pixels wide, like the selection outline.** A hairline is the
   desktop convention and is feedback you cannot see under a thumb, which makes a snap read
   as the editor moving things by itself.
+- **A "row" is defined by overlap across the axis, not by proximity along it.** Spacing
+  along x only means something between objects that are side by side; two boxes in
+  opposite corners have a horizontal gap in the arithmetic and nothing a person would call
+  one, so matching it would move things for reasons the user cannot see. The scene
+  rectangle drops out of every row by itself — it encloses everything, so every gap it
+  would form is negative, and negative gaps are skipped rather than clamped.
+- **A single spacing bar is never drawn.** The claim is an *equality*, so one bar is a
+  measurement of nothing; `spacingsFor` returns bars only once at least two gaps match,
+  and then returns all of them, the way `guidesFor` lights a whole column.
+- **The bars carry the number.** Two gaps a few pixels apart are indistinguishable at a
+  glance, so bare bars ask the user to take the equality on trust. The labels are pooled
+  `Text` objects scaled against the camera zoom — a drag creates and drops them several
+  times a second, so they are parked rather than destroyed.
+- **The grid is drawn from a signature, not every frame.** Its lines are one screen pixel
+  wide, so a pinch has to redraw it and a store subscription alone would not — but it can
+  be hundreds of segments, so `drawGrid` compares `gridSize:zoom:width:height` and does
+  nothing when they match. Below `MIN_GRID_PIXELS` a square it stops drawing entirely
+  while snapping carries on: it is the drawing that has nothing left to say, not the
+  geometry.
+- **Both toggles are expressed by withholding input, not by a flag the geometry reads.**
+  `snappedPointer` passes no targets when object snapping is off and no pitch when the
+  grid is off, so `snapMove` has one code path and cannot disagree with the toolbar.
+- **The grid's pitch is editor state, and its field is `undoable={false}`.** Every other
+  `NumberField` opens a transaction on focus, and `beginTransaction` snapshots the
+  document whether or not an edit follows — so a field that never touches the document
+  would push an undo step on every click, and Ctrl+Z would spend its first press undoing
+  one.
 - The toggle is `store.snapEnabled` — editor state, like `lockAspect` and `multiSelect`,
   never saved. It lives in the toolbar rather than a panel because it changes what a drag
   does, and on mobile a panel is a sheet covering the canvas you are dragging on.
@@ -479,7 +520,7 @@ tests/
   editing.spec.ts           add → select → drag → inspector → undo → save → reopen
   multi-select.spec.ts      building a selection, then moving, grouping, duplicating it
   align.spec.ts             aligning and distributing it, by edges rather than origins
-  snapping.spec.ts          a drag landing exactly on an edge, and the guides for it
+  snapping.spec.ts          a drag landing on an edge, an equal gap or the grid
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
@@ -538,6 +579,13 @@ Traps, each of which produced a confident wrong answer at some point:
   sequentially (`describe.configure({ mode: 'default' })`) even though the rest of the
   suite is fully parallel. Two compilers competing with the browsers is how it went from
   ten seconds to a four-minute timeout.
+- **The snap threshold is much wider in world units on the mobile project.** 8 screen
+  pixels divided by a zoom of ~0.37 is about 22 scene units, against ~9 on desktop. A
+  fixture meant to isolate one kind of snap has to clear *every* line of *every* other
+  object by more than the mobile figure — the spacing tests' tall narrow posts and short
+  wide joiner are shaped by nothing else. Sizing a clearance against the desktop number
+  gives a test that passes on one project and quietly measures a different feature on the
+  other.
 - **A drag test that asserts where the pointer put something has to turn snapping off.**
   It is on by default, so `editing.spec`'s two "the object lands where I dragged it" tests
   now begin with `setSnapping(false)` — the starter project's own objects were pulling the
@@ -610,8 +658,12 @@ render as Phaser `Image`s, not `Sprite`s — animation is the reason to change t
 tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Prefabs are the
 natural next thing built on containers, and a group is what a prefab instance would be —
 now that a selection is a set, "make a prefab of these" has something to start from.
-Alignment and distribution shipped in iteration 6 and snapping in iteration 7; the boxes
-both need are in `src/core/bounds.ts`, which any further geometry tool can read. Grid and
-rotation snapping, spacing badges between snapped objects, and persistent user-placed
-guides are the obvious extensions of `src/core/snapping.ts` — all three are more target
-lines fed to the same `snapMove`.
+Alignment and distribution shipped in iteration 6, snapping in iteration 7, and equal
+spacing and the grid in iteration 8; the boxes they all need are in `src/core/bounds.ts`,
+which any further geometry tool can read. What is left of that family is **rotation
+snapping** — which wants a rotate gesture on the canvas first, since rotation is currently
+an inspector field and there is no gesture for a snap to hold — and **persistent
+user-placed guides**, the one extension that is not purely geometric: a guide the user
+drags out of a ruler is document state, so it needs a schema field, a `SCHEMA_VERSION`
+decision and a way to place one with a thumb. Everything else is another line or gap fed
+to the same `snapMove`.

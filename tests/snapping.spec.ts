@@ -209,3 +209,134 @@ test('guides are drawn while the snap holds, and gone once it is dropped', async
   await editor.endDrag();
   expect((await editor.findDrawn(GUIDE)).count).toBe(0);
 });
+
+/**
+ * The grid, which is the other half of the toolbar's snapping pair.
+ *
+ * Object snapping is switched off for this one on purpose: the scene rectangle
+ * is a snap target in its own right, so with both on there would be two
+ * explanations for the object landing on a round number and the assertion could
+ * not say which had done it. Off also proves the two toggles are independent
+ * rather than one being a mode of the other.
+ */
+const GRID = 50;
+/** Sized in multiples of the pitch, so every one of its lines is on the grid. */
+const TILE = { width: 300, height: 200 };
+const TILE_START = { x: 250, y: 200 };
+
+test('with the grid on, a drag lands on the pitch', async ({ editor }) => {
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Tile');
+  await editor.setField('Fill', A);
+  await editor.setField('Width', TILE.width);
+  await editor.setField('Height', TILE.height);
+  await editor.setField('X', TILE_START.x);
+  await editor.setField('Y', TILE_START.y);
+
+  await editor.setSnapping(false);
+  await editor.setGrid(true);
+  await editor.setGridSize(GRID);
+
+  // Six units past a grid crossing on both axes — inside the pull at either
+  // project's zoom, and far enough that landing on the crossing cannot be the
+  // pointer's own doing.
+  const { start, end } = await aimAt(editor, TILE_START, {
+    x: 400 + NEAR_MISS,
+    y: 250 + NEAR_MISS,
+  });
+  await editor.drag(start, end);
+
+  const moved = await positionOf(editor, 'Tile');
+  expect(moved.x).toBe(400);
+  expect(moved.y).toBe(250);
+
+  await editor.setGrid(false);
+  await editor.setSnapping(true);
+});
+
+/**
+ * Equal spacing: joining a run of evenly spaced objects at the spacing it
+ * already has.
+ *
+ * The fixture is built so that *only* a spacing snap can explain the result.
+ * The two objects already placed are tall and narrow and the joiner is short
+ * and wide, positioned so that no edge or centre line of any of them comes
+ * within a threshold of any other on either axis — at the mobile project's zoom
+ * that threshold is around 22 scene units, which is what all the clearances
+ * below are sized against. So there is no line to catch on: the object either
+ * matches the gap or lands where the pointer left it.
+ */
+const RUN_GAP = 100;
+const POST = { width: 100, height: 500 };
+const JOINER = { width: 200, height: 200 };
+/** Spans 450..550 and 650..750, so the gap between them is RUN_GAP. */
+const FIRST = { x: 500, y: 270 };
+const SECOND = { x: 700, y: 270 };
+const JOINER_START = { x: 600, y: 145 };
+/** Joining before the run: right edge at 450 - RUN_GAP, so the centre is here. */
+const JOINED_X = 250;
+
+async function aRunOfTwo(editor: EditorPage) {
+  await editor.clearScene();
+
+  const place = async (
+    name: string,
+    fill: string,
+    size: { width: number; height: number },
+    at: { x: number; y: number },
+  ) => {
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', name);
+    await editor.setField('Fill', fill);
+    await editor.setField('Width', size.width);
+    await editor.setField('Height', size.height);
+    await editor.setField('X', at.x);
+    await editor.setField('Y', at.y);
+  };
+
+  await place('First', A, POST, FIRST);
+  await place('Second', A, POST, SECOND);
+  await place('Joiner', B, JOINER, JOINER_START);
+  await editor.closePanels();
+}
+
+test('a drag joining a row takes the spacing the row already has', async ({ editor }) => {
+  await aRunOfTwo(editor);
+
+  const { start, end } = await aimAt(editor, JOINER_START, {
+    x: JOINED_X + NEAR_MISS,
+    y: JOINER_START.y,
+  });
+  await editor.drag(start, end);
+
+  const joiner = await positionOf(editor, 'Joiner');
+  // The gap it made is the gap that was already there, to the unit. Stated as
+  // the two gaps rather than as the position, because equality of gaps is the
+  // claim — the position is only how it is achieved.
+  const madeGap = FIRST.x - POST.width / 2 - (joiner.x + JOINER.width / 2);
+  expect(madeGap).toBe(RUN_GAP);
+  expect(joiner.x).toBe(JOINED_X);
+  // Nothing was in range on the other axis, which is what makes the line above
+  // a spacing snap rather than an edge one that happened to look like it.
+  expect(joiner.y).toBe(JOINER_START.y);
+});
+
+test('the equal gaps are drawn while the spacing snap holds', async ({ editor }) => {
+  await aRunOfTwo(editor);
+
+  const { start, end } = await aimAt(editor, JOINER_START, {
+    x: JOINED_X + NEAR_MISS,
+    y: JOINER_START.y,
+  });
+  await editor.drag(start, end, { hold: true });
+
+  // The same magenta the guides use — deliberately, since it is the same
+  // feedback about the same gesture. Here it can only be the spacing bars and
+  // their labels: this fixture has no line pair within a threshold on either
+  // axis, so no guide can be drawn at all.
+  expect((await editor.findDrawn(GUIDE)).count).toBeGreaterThan(0);
+
+  await editor.endDrag();
+  expect((await editor.findDrawn(GUIDE)).count).toBe(0);
+});
