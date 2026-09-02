@@ -219,8 +219,9 @@ function SceneInspector() {
  * Scene panel anyway because that is the panel about the space objects are
  * placed in, and because a preference with no home ends up in a menu nobody
  * opens. The two toggles are mirrored in the toolbar, which is where they are
- * actually reached mid-gesture; this is where the grid's pitch is set, being a
- * number you choose once per project rather than one you flick.
+ * actually reached mid-gesture; this is where the two pitches are set — the
+ * grid's and the angle step's — being numbers you choose once per project
+ * rather than ones you flick.
  */
 function SnappingSection() {
   const snapEnabled = useEditorStore((s) => s.snapEnabled);
@@ -229,6 +230,8 @@ function SnappingSection() {
   const setGridEnabled = useEditorStore((s) => s.setGridEnabled);
   const gridSize = useEditorStore((s) => s.gridSize);
   const setGridSize = useEditorStore((s) => s.setGridSize);
+  const angleStep = useEditorStore((s) => s.angleStep);
+  const setAngleStep = useEditorStore((s) => s.setAngleStep);
 
   return (
     <>
@@ -243,10 +246,22 @@ function SnappingSection() {
         undoable={false}
         onChange={setGridSize}
       />
+      {/* Beside the grid pitch because the grid toggle is what governs it: the
+          two numbers are the two pitches, one for position and one for angle. */}
+      <NumberField
+        label="Angle step°"
+        value={angleStep}
+        min={1}
+        max={180}
+        step={1}
+        undoable={false}
+        onChange={setAngleStep}
+      />
       <p className="hint">
         Dragging lines objects up with their neighbours, matches the spacing of a row you
-        drop into, and — with the grid on — lands on the pitch. These are editor settings:
-        they are not saved with the project.
+        drop into, and — with the grid on — lands on the pitch. The knob above a selected
+        object turns it, agreeing with another object's angle or landing on the step the
+        same way. These are editor settings: they are not saved with the project.
       </p>
     </>
   );

@@ -36,6 +36,17 @@ const HISTORY_LIMIT = 100;
  */
 const DEFAULT_GRID_SIZE = 32;
 
+/**
+ * The angular pitch a rotate gesture lands on, in degrees, until someone
+ * changes it.
+ *
+ * 15 because it divides both 360 and 90, so 30, 45 and 90 all fall on the way
+ * round without the user setting anything — and because it is the step every
+ * drawing tool's rotation constraint has used for decades, so it is the one
+ * number a user does not have to be told.
+ */
+const DEFAULT_ANGLE_STEP = 15;
+
 export interface EditorState {
   project: Project;
   /**
@@ -123,6 +134,20 @@ export interface EditorState {
   setGridEnabled: (gridEnabled: boolean) => void;
   gridSize: number;
   setGridSize: (gridSize: number) => void;
+  /**
+   * The angular pitch a rotate gesture lands on, in degrees.
+   *
+   * Governed by the *grid* toggle rather than a switch of its own. The grid
+   * already means "quantise this to a regular pitch", and an angle step is that
+   * idea one dimension over — just as the magnet means "agree with another
+   * object", and snapping to a neighbour's tilt is *that* idea one dimension
+   * over. So the two toggles each govern one more thing, and a 390px toolbar
+   * that already clips does not have to hold a third.
+   *
+   * Editor state like the rest of this group: never saved, never undoable.
+   */
+  angleStep: number;
+  setAngleStep: (angleStep: number) => void;
   /**
    * Scales a node, honouring `lockAspect`. Both the inspector's Scale fields
    * and the canvas corner handle go through here so the lock cannot mean one
@@ -588,6 +613,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     snapEnabled: true,
     gridEnabled: false,
     gridSize: DEFAULT_GRID_SIZE,
+    angleStep: DEFAULT_ANGLE_STEP,
 
     setLockAspect: (lockAspect) => set({ lockAspect }),
     setMultiSelect: (multiSelect) => set({ multiSelect }),
@@ -598,6 +624,14 @@ export const useEditorStore = create<EditorState>((set, get) => {
     // arrives from is a text box a user can empty.
     setGridSize: (gridSize) =>
       set({ gridSize: Math.max(1, Math.round(gridSize) || DEFAULT_GRID_SIZE) }),
+    // Clamped at both ends. Zero is the same division-by-zero the grid pitch
+    // guards against, and above 180 the nearest multiple of the step is always
+    // either where you started or a whole turn from it, so the step stops being
+    // a step at all.
+    setAngleStep: (angleStep) =>
+      set({
+        angleStep: Math.max(1, Math.min(180, Math.round(angleStep) || DEFAULT_ANGLE_STEP)),
+      }),
 
     scaleNode: (id, axis, value) => {
       const state = get();

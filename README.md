@@ -27,6 +27,10 @@ on a desktop.
   it. Set its pitch under Snapping in the Scene panel; the two toggles are independent,
   and lining up with an object wins wherever they disagree
 - Resize by dragging the corner handle, keeping the aspect ratio unless you unlink it
+- Turn an object with the knob above it, on the canvas rather than in a panel. The angle
+  snaps the same way a drag does: the magnet catches another object's angle, the **#**
+  button lands it on a fixed step (15° unless you change it under Snapping), and the
+  degrees are shown while either is holding it
 - Import your own images and use them as sprites, with tint, flip and alpha
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
 - Group objects: a group moves, rotates, scales and fades everything inside it as one,
@@ -127,7 +131,8 @@ src/
   core/schema.ts      the project document types (the file format)
   core/store.ts       zustand store: document, selection, undo/redo
   core/bounds.ts      the boxes the renderer last drew, and the align maths
-  core/snapping.ts    pulling a dragged box onto the lines, gaps and grid around it
+  core/snapping.ts    pulling a dragged box onto the lines, gaps and grid around it,
+                      and a turned object onto the angles around it
   io/fileIO.ts        save/open, File System Access API + download fallback
   io/exportPhaser.ts  the document turned into runnable Phaser code
   editor/phaser/      the Phaser scene that renders the document
@@ -137,6 +142,7 @@ tests/
   multi-select.spec.ts  building a selection, and moving/grouping it as one
   align.spec.ts       aligning and distributing a selection by its drawn edges
   snapping.spec.ts    a drag landing on a neighbour's edge, an equal gap or the grid
+  rotation.spec.ts    the rotate knob, and an angle landing on a neighbour or a step
   assets.spec.ts      image import, drawing, save/reopen, removal
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite

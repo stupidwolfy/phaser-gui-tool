@@ -19,8 +19,9 @@ selection a set: several objects moved, grouped, duplicated, hidden and deleted 
 Iteration 6 (shipped) added align and distribute, and with them the first thing the store
 knows about *drawn* geometry. Iteration 7 (shipped) put that geometry inside the gesture:
 a drag now snaps to the objects around it, with guides. Iteration 8 (shipped) widened what
-a drag can agree with: equal spacing within a row, and a grid. See the README for the
-user-facing feature list.
+a drag can agree with: equal spacing within a row, and a grid. Iteration 9 (shipped) gave
+rotation a gesture of its own — a knob on the canvas — and put the same kind of agreement
+inside it. See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -291,9 +292,14 @@ holding the same answer is how they come to disagree.
   is how someone checks the first. Distribute keeps the outermost pair still and spreads
   the rest by centres, so it cannot walk a layout off the screen; with two objects there
   is nothing in between and the buttons are disabled rather than silently inert.
-- **Multi-object scaling is deliberately not built.** Scaling a set about a shared centre
-  is a different gesture from dragging one object's own corner, so the handle is hidden
-  when more than one object is selected rather than made to mean two things.
+- **Multi-object scaling and rotation are deliberately not built.** Scaling a set about a
+  shared centre is a different gesture from dragging one object's own corner, so the
+  handle is hidden when more than one object is selected rather than made to mean two
+  things. Rotation is the same rule with a stronger reason: turning a set about a shared
+  centre moves every member's *position* as well as its angle — each one orbits the pivot
+  — and the gesture model here expresses one world displacement shared by every node,
+  which is exactly what an orbit is not. That is a different store action, not this
+  gesture with a longer list.
 
 ## Measured bounds
 
@@ -321,6 +327,10 @@ the one thing the store reads that is not the document.
 - **Compute the moves before opening the transaction.** `beginTransaction` snapshots the
   document whether or not an edit follows, so an alignment with nothing left to do would
   otherwise leave an undo step that undoes nothing.
+- **Rotation snapping does not read any of this.** A reader will expect it to, since every
+  other geometry tool here does — but an angle is not a box, and the angles it compares
+  come from the document through `worldTransformOf`. What it takes from the renderer is
+  only the pivots to draw ticks through.
 - Aligning a *single* object against the scene rectangle ("centre this in the scene") is
   the obvious next use of this, and needs no new machinery.
 
@@ -396,7 +406,8 @@ draw for it.
 - **Both toggles are expressed by withholding input, not by a flag the geometry reads.**
   `snappedPointer` passes no targets when object snapping is off and no pitch when the
   grid is off, so `snapMove` has one code path and cannot disagree with the toolbar.
-- **The grid's pitch is editor state, and its field is `undoable={false}`.** Every other
+- **The two pitches — the grid's and the angle step's — are editor state, and their
+  fields are `undoable={false}`.** Every other
   `NumberField` opens a transaction on focus, and `beginTransaction` snapshots the
   document whether or not an edit follows — so a field that never touches the document
   would push an undo step on every click, and Ctrl+Z would spend its first press undoing
@@ -404,8 +415,61 @@ draw for it.
 - The toggle is `store.snapEnabled` — editor state, like `lockAspect` and `multiSelect`,
   never saved. It lives in the toolbar rather than a panel because it changes what a drag
   does, and on mobile a panel is a sheet covering the canvas you are dragging on.
-- Snapping applies to the drag only. Arrow-key nudges and align/distribute are exact
-  already, and a snap on a 1px nudge would fight the user rather than help.
+- Snapping applies to the drag and to the rotate gesture, and to nothing else. Arrow-key
+  nudges and align/distribute are exact already, and a snap on a 1px nudge would fight the
+  user rather than help.
+
+**Rotation snapping** (`snapRotation`, same module) is the same shape one dimension over:
+a correction plus what to draw, resolved by a first-non-null chain.
+
+- **Two kinds, in the same order and by the same argument**: another object's angle, then
+  a fixed step. Agreeing with a specific object's tilt is a decision about those two
+  objects; the step agrees with everything everywhere.
+- **The toggles map onto the two kinds the way the words already mean.** The magnet is
+  "agree with another object", so it governs the neighbour angle; the grid is "quantise to
+  a regular pitch", so it governs the step. Each toggle now governs one more thing, and a
+  390px toolbar that already clips does not have to hold a third. Both are still expressed
+  by *withholding input* — no targets, or a step of 0 — never by a flag the geometry reads.
+- **The threshold is in degrees and is deliberately NOT divided by the camera zoom.** This
+  is the one place the rotation path contradicts the position one, so do not "fix" it.
+  `SNAP_THRESHOLD` is divided because a translation's size on screen is its world size
+  times the zoom — the quantity being snapped changes size as the camera moves. An angle
+  does not: 5° is 5° at every zoom, and dividing would correct for a distortion that is
+  not there, making the snap unreachable zoomed in on a gesture that has become no more
+  precise. The grip does change angular sensitivity — at radius r a pixel of finger travel
+  is 1/r radians — but the knob sits a fixed *screen* distance from the object, so that
+  radius barely varies with the camera either, and a user who has gripped close in has
+  chosen a coarse gesture rather than earned a wider capture. The payoff shows up in the
+  suite: this is the one threshold that is the same number on both projects.
+- **Equality is modulo 360, not 180.** A rectangle turned half a turn looks unchanged, but
+  that is a property of that one object's symmetry, not of rotation: 190° and 10° are
+  upside down from each other, and for text or a sprite that is the whole point.
+- **The scene rectangle is a target for a move and not for a turn.** It has no tilt of its
+  own to agree with, and offering it as "an object at 0°" would have the magnet quietly do
+  the step's job — upright would snap with the grid switched off, which is not what either
+  toggle says.
+- **An angle agreement has no locus, and the drawing admits it.** A guide works because a
+  shared line is somewhere both objects genuinely sit, so drawing it *is* the agreement.
+  Two objects at 37° share only a direction, which has no position, so any tick drawn for
+  it is drawn somewhere chosen. The ticks therefore do the `guidesFor` job — saying
+  *which* objects agreed, all of them — and the degree readout carries the claim itself,
+  exactly as the spacing bars' numbers do. Never ship the tick without the label.
+- **A step snap draws only the readout.** That is the grid's rule inside out: the grid
+  draws nothing because it is already on the canvas and a guide would say it twice, while
+  there is no protractor on the canvas at all, so the number is not a second saying of the
+  feedback — it is the whole of it.
+- **The readout appears only while something is holding the angle**, so a number on screen
+  means what a guide means rather than being a permanent instrument.
+- **A rotation settles on three decimals always**, unlike a position, which rounds to
+  whole pixels unless a snap is holding. `tidyTransform` already settles rotation that way
+  everywhere else, and whole degrees would destroy exactly the agreements this gesture
+  exists to make — a neighbour match at 37.5° would not survive them. It is wrapped on
+  release too: the document cannot express "the user spun it three times" anyway, since
+  the renderer takes it mod 360 and so does the exported `setAngle`.
+- **One label pool, with the counter in `update()`.** The rotate readout and the spacing
+  distances are the same styled chip and the two gestures can never be in flight at once,
+  so a second pool would be the same styling written twice. But the hide loop has to live
+  outside both drawers: scoped to one, whichever ran second would blank the other's label.
 
 ## Interaction model
 
@@ -420,11 +484,35 @@ Touch and mouse deliberately differ, keyed off `pointer.wasTouch`:
 `selectedId` — `GAMEOBJECT_DOWN` has already selected the object by then, so the live
 value always matches and the two-step rule silently stops working.
 
-The corner scale handle is the one thing exempt from that rule. It carries no `nodeId`,
-so the `DRAG_START` comparison would find `null !== selectionAtPress`, decide they differ
-and reject every scale drag made with a finger — the handle branch has to come first.
-It also only exists while something is selected, so the two-step rule has already been
-satisfied by the time it can be touched.
+The two handles — the corner scale handle and the rotate knob — are the one thing exempt
+from that rule. Neither carries a `nodeId`, so the `DRAG_START` comparison would find
+`null !== selectionAtPress`, decide they differ and reject every scale or rotate drag made
+with a finger — the handle branches have to come first. They also only exist while
+something is selected, so the two-step rule has already been satisfied by the time either
+can be touched.
+
+**The rotate knob is parked outside the object, not on a corner, and that is the
+load-bearing part of it.** The scale handle's 44px target already swallows a small
+object's own centre at the mobile project's zoom; a second 44px target anywhere *on* the
+object would leave its middle inside both and make it undraggable rather than merely
+awkward. Parked a constant *screen* distance beyond the middle of the object's own top
+edge — in the object's frame, so it carries the tilt — the collision is impossible by
+construction however small the object gets. Its direction comes from the world matrix
+rather than from any stored angle, the same way `cornerOf` transforms a point instead of
+adding rotations up. It is an `Arc`, and it is resized with `setRadius` rather than
+`setDisplaySize`: `setRadius` resizes the geometry and with it `width`/`height`, which is
+what keeps the hit area in world units. Scaling it instead leaves the hit area in *scaled*
+units and makes the 44px target wrong by the zoom squared.
+
+Rotation resolves in the object's parent space like every other gesture, and here that
+does more work than usual: both the grab angle and the current angle are measured there,
+so a container's own rotation cancels out of their *difference* exactly and what comes out
+is the change in the local angle — the number the document stores. Nothing composes or
+inverts a rotation by hand. The angle it starts from is read from the document rather than
+from `object.rotation`, which is radians and a derived copy; round-tripping through it is
+the drift `tidyTransform` exists to clean up. And every angular difference is wrapped into
+(-180, 180]: without that, a pointer crossing the half turn spins the object all the way
+round the other way.
 
 Scaling resolves against the state captured at `beginScale`, not against the previous
 frame, so dragging out and back returns the object to the size it started at. The maths
@@ -521,6 +609,7 @@ tests/
   multi-select.spec.ts      building a selection, then moving, grouping, duplicating it
   align.spec.ts             aligning and distributing it, by edges rather than origins
   snapping.spec.ts          a drag landing on an edge, an equal gap or the grid
+  rotation.spec.ts          the rotate knob, and an angle landing on a neighbour or a step
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
@@ -586,6 +675,23 @@ Traps, each of which produced a confident wrong answer at some point:
   wide joiner are shaped by nothing else. Sizing a clearance against the desktop number
   gives a test that passes on one project and quietly measures a different feature on the
   other.
+- **The rotation threshold is the one threshold identical on both projects** — 5°, because
+  it is not divided by the zoom (see Snapping). A rotation fixture therefore does not need
+  the mobile-sized clearances every drag fixture is shaped by.
+- **The priming move is *angular* in a rotate test, and it moves the gesture's start.** In
+  a drag, Phaser's 8px threshold shifts where the object ends up; in a rotation it shifts
+  the angle the grab is measured from, and at the knob's radius those 12px are ~7.6° on
+  desktop and ~12.7° on mobile — larger than the whole 5° capture. `sweepBy` in
+  `rotation.spec.ts` solves for it with three fixed-point passes, because the primed point
+  sits on the chord and so its angle depends on where the drag ends, which depends on its
+  angle.
+- **A centred rectangle's colour centroid does not move when it turns.** The obvious drawn
+  assertion — rotate a box, screenshot it — silently asserts nothing. An off-centre child
+  inside a rotated group is the smallest fixture `findDrawn` can actually see a rotation
+  in, and it is what a parent-space mistake would put in the wrong place.
+- **A rotate drag has to pass `select: false`.** On mobile `drag` otherwise taps the start
+  point first to satisfy the two-step rule — and the handles are deliberately exempt from
+  that rule, so the tap would hide the very thing under test.
 - **A drag test that asserts where the pointer put something has to turn snapping off.**
   It is on by default, so `editing.spec`'s two "the object lands where I dragged it" tests
   now begin with `setSnapping(false)` — the starter project's own objects were pulling the
@@ -658,12 +764,11 @@ render as Phaser `Image`s, not `Sprite`s — animation is the reason to change t
 tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Prefabs are the
 natural next thing built on containers, and a group is what a prefab instance would be —
 now that a selection is a set, "make a prefab of these" has something to start from.
-Alignment and distribution shipped in iteration 6, snapping in iteration 7, and equal
-spacing and the grid in iteration 8; the boxes they all need are in `src/core/bounds.ts`,
-which any further geometry tool can read. What is left of that family is **rotation
-snapping** — which wants a rotate gesture on the canvas first, since rotation is currently
-an inspector field and there is no gesture for a snap to hold — and **persistent
-user-placed guides**, the one extension that is not purely geometric: a guide the user
-drags out of a ruler is document state, so it needs a schema field, a `SCHEMA_VERSION`
-decision and a way to place one with a thumb. Everything else is another line or gap fed
-to the same `snapMove`.
+Alignment and distribution shipped in iteration 6, snapping in iteration 7, equal spacing
+and the grid in iteration 8, and the rotate gesture with rotation snapping in iteration 9;
+the boxes they all need are in `src/core/bounds.ts`, which any further geometry tool can
+read. What is left of that family is **persistent user-placed guides**, the one extension
+that is not purely geometric: a guide the user drags out of a ruler is document state, so
+it needs a schema field, a `SCHEMA_VERSION` decision and a way to place one with a thumb.
+Everything else is another line or gap fed to the same `snapMove`, or another kind of
+agreement on the end of `snapRotation`'s chain.
