@@ -1,12 +1,16 @@
 import { useActiveScene, useEditorStore, useSelectionNodes } from '../core/store';
 import {
   containsNode,
+  findAsset,
   findParent,
+  frameCountOf,
+  frameGridOf,
   guidesOf,
   siblingsOf,
   type GameObjectNode,
 } from '../core/schema';
-import { AssetPicker, AssetSummary } from './AssetPicker';
+import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
+import { AnimationEditor } from './AnimationEditor';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
 
 /**
@@ -525,6 +529,34 @@ function ArrangeRow({ node }: { node: GameObjectNode }) {
   );
 }
 
+/**
+ * Which frame of a sliced image a sprite shows.
+ *
+ * Absent for a plain image rather than shown reading 0: a one-frame image has
+ * no frame to choose, and a field whose only legal value is the one already in
+ * it is a control that cannot be used. It is also hidden while an animation is
+ * playing on the sprite, because the animation owns the frame then — the field
+ * would be a number the canvas visibly disagrees with.
+ */
+function FrameField({ node }: { node: Extract<GameObjectNode, { type: 'sprite' }> }) {
+  const updateProps = useEditorStore((s) => s.updateProps);
+  const asset = useEditorStore((s) => findAsset(s.project, node.props.assetId));
+
+  if (!asset || !frameGridOf(asset) || node.props.animationId) return null;
+
+  return (
+    <div className="field-row">
+      <NumberField
+        label="Frame"
+        value={node.props.frame}
+        min={0}
+        max={frameCountOf(asset) - 1}
+        onChange={(frame) => updateProps(node.id, { frame })}
+      />
+    </div>
+  );
+}
+
 function NodeInspector({ node }: { node: GameObjectNode }) {
   const renameNode = useEditorStore((s) => s.renameNode);
   const updateTransform = useEditorStore((s) => s.updateTransform);
@@ -647,6 +679,22 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
             selectedAssetId={node.props.assetId}
             onPick={(assetId) => setProp({ assetId })}
           />
+
+          {node.props.assetId && (
+            <>
+              <div className="panel__section">Sprite sheet</div>
+              <SheetSection assetId={node.props.assetId} />
+              <FrameField node={node} />
+
+              <div className="panel__section">Animation</div>
+              <AnimationEditor
+                nodeId={node.id}
+                assetId={node.props.assetId}
+                animationId={node.props.animationId}
+                onPick={(animationId) => setProp({ animationId })}
+              />
+            </>
+          )}
 
           <div className="panel__section">Appearance</div>
           <ColorField

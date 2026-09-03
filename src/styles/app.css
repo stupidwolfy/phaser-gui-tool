@@ -236,6 +236,18 @@ select {
   min-height: 44px;
 }
 
+/*
+ * A destructive block button — deleting an animation, so far.
+ *
+ * Outlined rather than filled: it sits at the bottom of a panel a thumb scrolls
+ * through, and a solid red bar there reads as the section's primary action
+ * rather than as its last resort.
+ */
+.btn--danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
 .stack {
   display: flex;
   flex-direction: column;

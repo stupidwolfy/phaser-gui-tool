@@ -58,6 +58,28 @@ function GridIcon() {
 }
 
 /**
+ * Play and stop, as one glyph that swaps.
+ *
+ * A triangle and a square, drawn rather than typed for the reason the magnet
+ * and the grid are: ▶ and ■ have emoji presentations that render in colour on
+ * some platforms and ignore the active state's white foreground. The shape
+ * changes with the state rather than only the highlight, because "is it
+ * previewing" is answered from across the room by a square-versus-triangle and
+ * not by a shade of blue.
+ */
+function PreviewIcon({ playing }: { playing: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      {playing ? (
+        <rect x="3.5" y="3.5" width="9" height="9" fill="currentColor" />
+      ) : (
+        <path d="M4 2.5 13 8l-9 5.5Z" fill="currentColor" />
+      )}
+    </svg>
+  );
+}
+
+/**
  * Top bar.
  *
  * On a phone this keeps only what you reach for mid-edit — history, fit, save —
@@ -80,6 +102,14 @@ export function Toolbar({
   const setSnapEnabled = useEditorStore((s) => s.setSnapEnabled);
   const gridEnabled = useEditorStore((s) => s.gridEnabled);
   const setGridEnabled = useEditorStore((s) => s.setGridEnabled);
+  const previewAnimations = useEditorStore((s) => s.previewAnimations);
+  const setPreviewAnimations = useEditorStore((s) => s.setPreviewAnimations);
+  // Only a project that has an animation gets the button. A 390px toolbar
+  // already clips when everything is shown, and a control that can only ever
+  // do nothing is worth less than the width it costs — while a project that
+  // *does* animate needs it in the toolbar rather than a panel, because on a
+  // phone a panel is a sheet covering the canvas you are trying to watch.
+  const hasAnimations = useEditorStore((s) => s.project.animations.length > 0);
 
   return (
     <header className="toolbar">
@@ -141,6 +171,17 @@ export function Toolbar({
         >
           <GridIcon />
         </button>
+        {hasAnimations && (
+          <button
+            className={`btn btn--toggle ${previewAnimations ? 'is-active' : ''}`}
+            aria-pressed={previewAnimations}
+            onClick={() => setPreviewAnimations(!previewAnimations)}
+            title={previewAnimations ? 'Stop animations' : 'Play animations'}
+            aria-label="Play animations"
+          >
+            <PreviewIcon playing={previewAnimations} />
+          </button>
+        )}
       </div>
 
       <div className="toolbar__group">

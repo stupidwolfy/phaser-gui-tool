@@ -1,6 +1,14 @@
 import { useState } from 'react';
 import { countAssetUses, useEditorStore } from '../core/store';
-import { findAsset, type ImageAsset } from '../core/schema';
+import {
+  findAsset,
+  frameCountOf,
+  frameGridOf,
+  frameLayoutOf,
+  type FrameGrid,
+  type ImageAsset,
+} from '../core/schema';
+import { CheckboxField, NumberField } from './fields';
 import { ImageImportError, formatAssetSize, importImageFile } from '../core/assets';
 import { pickImageFile } from '../io/fileIO';
 
@@ -151,6 +159,104 @@ export function AssetSummary({ assetId }: { assetId: string | null }) {
     <p className="hint">
       {asset.name} · {asset.width}×{asset.height}px. Size on the canvas is this times
       the transform scale above.
+    </p>
+  );
+}
+
+/**
+ * A starting grid for an image the user has just asked to slice.
+ *
+ * Square frames along the longer edge: a sprite sheet is overwhelmingly a strip
+ * or a grid of square cells, so the short edge is almost always exactly one
+ * frame tall. It is a guess and it is meant to be — the four fields below it
+ * are right there, and a guess that is usually right beats an empty form that
+ * never is.
+ */
+function guessGrid(asset: ImageAsset): FrameGrid {
+  const side = Math.min(asset.width, asset.height);
+  return { frameWidth: side, frameHeight: side, margin: 0, spacing: 0 };
+}
+
+/**
+ * Cutting an image into frames.
+ *
+ * On the image rather than on the sprite, because that is where the grid lives:
+ * every sprite drawing this image reads the same cuts, and every animation is a
+ * list of indices into them.
+ */
+export function SheetSection({ assetId }: { assetId: string | null }) {
+  const asset = useEditorStore((s) => findAsset(s.project, assetId));
+  const setAssetSheet = useEditorStore((s) => s.setAssetSheet);
+  if (!asset) return null;
+
+  const sheet = frameGridOf(asset);
+  const set = (patch: Partial<FrameGrid>) =>
+    setAssetSheet(asset.id, { ...(asset.sheet ?? guessGrid(asset)), ...patch });
+
+  return (
+    <>
+      <CheckboxField
+        label="Sliced into frames"
+        value={asset.sheet !== undefined}
+        onChange={(on) => setAssetSheet(asset.id, on ? guessGrid(asset) : null)}
+      />
+
+      {asset.sheet !== undefined && (
+        <>
+          <div className="field-row">
+            <NumberField
+              label="Frame W"
+              value={asset.sheet.frameWidth}
+              min={1}
+              onChange={(frameWidth) => set({ frameWidth })}
+            />
+            <NumberField
+              label="Frame H"
+              value={asset.sheet.frameHeight}
+              min={1}
+              onChange={(frameHeight) => set({ frameHeight })}
+            />
+          </div>
+          <div className="field-row">
+            <NumberField
+              label="Margin"
+              value={asset.sheet.margin}
+              min={0}
+              onChange={(margin) => set({ margin })}
+            />
+            <NumberField
+              label="Spacing"
+              value={asset.sheet.spacing}
+              min={0}
+              onChange={(spacing) => set({ spacing })}
+            />
+          </div>
+          <SheetSummary asset={asset} usable={sheet !== null} />
+        </>
+      )}
+    </>
+  );
+}
+
+function SheetSummary({ asset, usable }: { asset: ImageAsset; usable: boolean }) {
+  // A frame larger than the image is the shape of a mistyped number, and the
+  // grid is ignored until it is fixed — so say that, rather than reporting the
+  // "1 frame" the ignored grid works out to.
+  if (!usable) {
+    return (
+      <p className="hint hint--error">
+        A frame has to fit inside the {asset.width}×{asset.height} image. Drawing it whole
+        until it does.
+      </p>
+    );
+  }
+
+  const { columns, rows } = frameLayoutOf(asset);
+  const count = frameCountOf(asset);
+  return (
+    <p className="hint">
+      {count} frame{count === 1 ? '' : 's'} ({columns}×{rows}) of {asset.sheet?.frameWidth}×
+      {asset.sheet?.frameHeight}px.
     </p>
   );
 }

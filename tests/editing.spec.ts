@@ -144,7 +144,10 @@ test('saves a file, starts over, and reopens it', async ({ editor, page }, testI
   expect(saved.name).toMatch(/\.phaser\.json$/);
 
   const parsed = JSON.parse(saved.contents);
-  expect(parsed.schemaVersion).toBe(3);
+  // A literal rather than the imported constant: the point is that a bump is
+  // noticed and made deliberately, which comparing the code against itself
+  // could never catch. 4 as of sprite sheets and animations.
+  expect(parsed.schemaVersion).toBe(4);
   const names = parsed.scenes[0].children.map((node: { name: string }) => node.name);
   expect(names).toContain('Marker');
 

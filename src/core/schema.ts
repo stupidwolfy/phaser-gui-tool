@@ -32,8 +32,19 @@
  * a re-save. Guides change nothing about what is drawn for the objects — they
  * are the editor's own furniture that happens to be worth saving. Do not bump
  * this reflexively for the next field of that kind.
+ *
+ * v4 — sprite sheets and animations — is the other side of that same rule, and
+ * it is worth spelling out because it looks superficially like guides did.
+ * Neither `asset.sheet` nor `project.animations` crashes a v3 build. They do
+ * something worse: `parseAssets` rebuilds every asset field by field and
+ * `parseProject` names the project's fields one at a time, so a v3 build drops
+ * both on open and writes the file back without them. The user's frame grids
+ * and every animation they authored are gone, with nothing on screen having
+ * said so — and the sheet a sprite was showing one frame of is suddenly drawn
+ * whole. Guides survived an old build precisely because scenes are the one
+ * thing passed through verbatim; these do not, so this bumps.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -61,6 +72,106 @@ export interface ImageAsset {
   dataUrl: string;
   width: number;
   height: number;
+  /**
+   * Absent on a plain image; present when the image is a grid of frames.
+   *
+   * The grid is a property of the *image*, not of any sprite drawing it: two
+   * sprites showing different frames of one sheet are reading the same cuts,
+   * and an animation is a list of indices that only means anything against
+   * them. Recording it per sprite would let two of them disagree about how
+   * many frames their own image has.
+   */
+  sheet?: FrameGrid;
+}
+
+/**
+ * How an image is cut into equally sized frames.
+ *
+ * Exactly the four numbers Phaser's own sprite-sheet parser takes, under the
+ * same names, so that `load.spritesheet` in the exported code is handed this
+ * object more or less verbatim. Anything the editor could derive instead —
+ * a frame count, a column count — is deliberately not stored: two fields over
+ * one number is how they come to disagree, and `frameCountOf` computes it with
+ * the parser's own arithmetic.
+ */
+export interface FrameGrid {
+  frameWidth: number;
+  frameHeight: number;
+  /** Blank border around the whole sheet, in pixels. */
+  margin: number;
+  /** Gap between neighbouring frames, in pixels. */
+  spacing: number;
+}
+
+/**
+ * The asset's frame grid, but only when it can actually cut a frame out.
+ *
+ * The single reader of `asset.sheet`, for the reason `guidesOf` is the single
+ * reader of `scene.guides`: a grid whose frames are wider than the image, or
+ * zero pixels across, would divide by zero in `frameCountOf` and make Phaser's
+ * parser warn and produce a texture with no frames in it. Answering "is this a
+ * sheet" and "is this grid usable" with one call means no caller can check the
+ * first and forget the second.
+ */
+export function frameGridOf(asset: ImageAsset | undefined): FrameGrid | null {
+  const sheet = asset?.sheet;
+  if (!sheet) return null;
+  const usable =
+    Number.isFinite(sheet.frameWidth) &&
+    Number.isFinite(sheet.frameHeight) &&
+    sheet.frameWidth > 0 &&
+    sheet.frameHeight > 0 &&
+    sheet.frameWidth <= asset.width &&
+    sheet.frameHeight <= asset.height;
+  return usable ? sheet : null;
+}
+
+/**
+ * Columns and rows the grid cuts the image into.
+ *
+ * The arithmetic is copied from Phaser's `Textures.Parsers.SpriteSheet` —
+ * margin subtracted once, spacing added back before the division — and it has
+ * to stay copied. This is what the inspector's Frame field clamps against and
+ * what "12 frames (4×3)" reports, so a formula of our own that rounded
+ * differently would offer the user a frame the exported game does not have.
+ *
+ * A grid that yields nothing in one direction reports one, not zero: it is the
+ * whole image, which is the plain-image answer and keeps every caller's
+ * arithmetic free of a zero.
+ */
+export function frameLayoutOf(asset: ImageAsset): { columns: number; rows: number } {
+  const sheet = frameGridOf(asset);
+  if (!sheet) return { columns: 1, rows: 1 };
+  const across = (span: number, frame: number) =>
+    Math.max(1, Math.floor((span - sheet.margin + sheet.spacing) / (frame + sheet.spacing)));
+  return {
+    columns: across(asset.width, sheet.frameWidth),
+    rows: across(asset.height, sheet.frameHeight),
+  };
+}
+
+/**
+ * How many frames the sheet cuts into — 1 for a plain image, which is exactly
+ * what a single-frame texture is.
+ */
+export function frameCountOf(asset: ImageAsset | undefined): number {
+  if (!asset) return 1;
+  const { columns, rows } = frameLayoutOf(asset);
+  return columns * rows;
+}
+
+/**
+ * A frame index that certainly exists on the asset.
+ *
+ * A sprite keeps its frame number when its image is swapped for a smaller
+ * sheet, and a hand-edited file can name any index at all — and Phaser's
+ * `setFrame` on a frame that is not there warns and leaves the sprite on a
+ * missing texture. Clamping in one place means neither the renderer nor the
+ * exporter has to decide what an out-of-range frame means.
+ */
+export function clampFrame(asset: ImageAsset | undefined, frame: number): number {
+  if (!Number.isFinite(frame)) return 0;
+  return Math.min(Math.max(0, Math.floor(frame)), frameCountOf(asset) - 1);
 }
 
 /**
@@ -104,6 +215,22 @@ export interface SpriteProps {
   tint: string;
   flipX: boolean;
   flipY: boolean;
+  /**
+   * Which frame of the asset's sheet to draw. Always 0 for a plain image,
+   * which has exactly one frame — so this needs no "is it a sheet" branch
+   * anywhere that reads it, only a `clampFrame`.
+   */
+  frame: number;
+  /**
+   * The clip this sprite plays, or null for a still frame.
+   *
+   * An id rather than the clip itself: several sprites play one animation, and
+   * a copy per sprite would mean editing the frame rate in one place and not
+   * in the other. It is also what keeps `frame` meaningful — the animation
+   * owns the frame while it is playing, and this field is what the sprite
+   * falls back to when it is not.
+   */
+  animationId: string | null;
 }
 
 /**
@@ -182,6 +309,37 @@ export interface SceneGuide {
   id: string;
 }
 
+/**
+ * A named sequence of frames from one sheet.
+ *
+ * Project-level, beside the assets and for the same reason: a clip is a way of
+ * reading one image, so it belongs wherever that image does rather than in the
+ * scene that happens to use it first. That is also what lets two scenes share
+ * a "walk" without either owning it.
+ *
+ * The fields are Phaser's own, under Phaser's names, so `anims.create` in the
+ * exported code is this object with the frames expanded.
+ */
+export interface AnimationClip {
+  id: string;
+  /**
+   * Free text, and the animation key in exported code — so it goes through the
+   * same de-duplication object names do rather than being trusted as unique.
+   */
+  name: string;
+  /** The sheet the frame indices are read against. */
+  assetId: string;
+  /**
+   * Frame indices in playback order. Free to repeat and to run backwards: a
+   * ping-pong is `[0, 1, 2, 1]`, which is why this is a list rather than a
+   * start and an end.
+   */
+  frames: number[];
+  frameRate: number;
+  /** Phaser's own: -1 loops forever, 0 plays once. */
+  repeat: number;
+}
+
 export interface SceneDoc {
   id: string;
   name: string;
@@ -229,6 +387,15 @@ export interface Project {
    * bytes — the single largest thing in the file.
    */
   assets: ImageAsset[];
+  /**
+   * Animations, shared across every scene exactly as the assets they read are.
+   *
+   * A separate table rather than a field on the asset because a clip is
+   * removed, renamed and re-pointed on its own, and because the exporter emits
+   * only the clips a scene actually plays — which is a filter over a list, not
+   * a walk into every asset.
+   */
+  animations: AnimationClip[];
   scenes: SceneDoc[];
   activeSceneId: string;
 }
@@ -238,6 +405,21 @@ export function findAsset(
   id: string | null | undefined,
 ): ImageAsset | undefined {
   return id ? project.assets.find((asset) => asset.id === id) : undefined;
+}
+
+export function findAnimation(
+  project: Project,
+  id: string | null | undefined,
+): AnimationClip | undefined {
+  return id ? project.animations.find((clip) => clip.id === id) : undefined;
+}
+
+/** The clips that read a given sheet, which is what a sprite may choose from. */
+export function animationsForAsset(
+  project: Project,
+  assetId: string | null | undefined,
+): AnimationClip[] {
+  return assetId ? project.animations.filter((clip) => clip.assetId === assetId) : [];
 }
 
 export const newId = (): string =>

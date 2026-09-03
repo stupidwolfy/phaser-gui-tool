@@ -23,7 +23,9 @@ a drag can agree with: equal spacing within a row, and a grid. Iteration 9 (ship
 rotation a gesture of its own — a knob on the canvas — and put the same kind of agreement
 inside it. Iteration 10 (shipped) let the user author a line of their own: guides, saved
 with the document, that a drag agrees with before anything else — and, with them, "centre
-this in the scene". See the README for the user-facing feature list.
+this in the scene". Iteration 11 (shipped) made an image more than one picture: a frame
+grid on the asset, animation clips on the project, and a canvas that plays them on
+request. See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -200,6 +202,87 @@ Consequences worth knowing before touching any of it:
 - **localStorage autosave is ~5 MB**, which images blow past quickly. `scheduleDraftSave`
   now reports the failure once and clears the stale draft, rather than swallowing it —
   silently believing you have a draft is worse than knowing you don't.
+
+## Sprite sheets and animations
+
+An image can be cut into frames, and a sprite can play a sequence of them. Both are
+document state, and the shape of them follows from where each thing actually belongs.
+
+- **The frame grid is on the asset, the clip is on the project, the choice is on the
+  node.** `ImageAsset.sheet?: FrameGrid` is how *that image* is cut, so every sprite
+  drawing it reads the same cuts and no two can disagree about how many frames it has.
+  `project.animations: AnimationClip[]` sits beside the assets for the reason the assets
+  are project-level: a clip is a way of reading one image, and two scenes can share a
+  "walk" without either owning it. The sprite carries only `frame` and `animationId`.
+- **`frameGridOf` is the only reader of `asset.sheet`**, the job `guidesOf` does for
+  `scene.guides`, and it answers two questions at once — "is this a sheet" and "is this
+  grid usable" — so no caller can check the first and forget the second. A frame wider
+  than the image divides into a zero column count and would have Phaser's parser warn and
+  build a texture with no frames in it.
+- **`frameLayoutOf`'s arithmetic is copied from Phaser's `Textures.Parsers.SpriteSheet`
+  and has to stay copied** — margin subtracted once, spacing added back before the
+  division. It is what the Frame field clamps against and what "12 frames (4×3)" reports,
+  so a formula of our own that rounded differently would offer the user a frame their
+  exported game does not have.
+- **`SCHEMA_VERSION` bumped to 4, and this is the counter-example to the guides
+  decision.** Neither field crashes a v3 build. They do something worse: `parseAssets`
+  rebuilds each asset field by field and `parseProject` names the project's fields one at
+  a time, so a v3 build drops both on open and writes the file back without them — every
+  grid and every clip gone, with nothing having said so. Guides survived an old build
+  *because* scenes are the one thing passed through verbatim. These are not, so this
+  bumps. `animation.spec.ts` asserts the 4 in the saved artefact.
+- **The texture key carries the grid, and the animation key carries the clip.** A Phaser
+  texture's frames are cut once, when it is added, and an `Animation` is built from its
+  frames at `create` time; neither can be re-cut in place. Folding a signature into the
+  key means the existing "add what is wanted, remove what is not" diff in `syncTextures`
+  and `syncAnimations` handles a re-cut on its own, with no special case — the new key is
+  missing so it is added, the old key is unwanted so it goes.
+- **Animations belong to the game, not the scene.** `this.anims` is a singleton shared by
+  every scene, exactly as the texture manager is, so `EditorScene` tracks the keys it
+  registered in `animationKeys` and removes those on SHUTDOWN. Forgetting that leaks every
+  clip the user ever edited, a new key per edit.
+- **The editor draws every sprite node as a `Sprite`; the exporter emits `add.image`
+  unless the node animates.** Only a Sprite carries an AnimationState, and in the editor a
+  still sprite has to be able to start playing the moment the user gives it a clip. In an
+  export that capability would be a heavier object and a reader's question about what it
+  is for, so there the still case stays the `add.image` it always was — frame argument and
+  all, since frame 0 is `add.image`'s own default.
+- **Preview is off by default and is editor state.** A canvas that animates by itself is a
+  canvas whose objects are never where you last looked, which makes placing one by eye a
+  matter of timing; and the frame a still sprite shows is a document field the user is
+  editing, so it has to be the frame on screen while they edit it. It is the one moment
+  the canvas deliberately stops mirroring the document exactly.
+- **`play(key, true)` — ignoreIfPlaying — is not optional.** The scene syncs on every
+  store change, so without it a selection or a nudge of some unrelated object restarts
+  every animation from frame 0 and nothing ever visibly advances.
+- **The toolbar's ▶ appears only once the project holds an animation.** A 390px toolbar
+  already clips when everything is shown, and a control that can only ever do nothing is
+  worth less than the width it costs — while a project that *does* animate needs it in the
+  toolbar rather than a panel, because on a phone a panel is a sheet over the canvas you
+  are trying to watch.
+- **Un-slicing removes the clips; re-cutting only clamps them.** A clip is a list of
+  indices into a grid, so removing the grid leaves them indexing nothing — but dropping a
+  walk cycle over a one-pixel margin correction would be absurd, so a re-cut clamps
+  instead. Both are one undo step, through `mapProjectSprites`.
+- **`mapProjectSprites` is the one traversal for everything that reaches across the
+  document into sprites** — removing an image, removing a clip, re-cutting and un-cutting
+  a sheet. Each has to touch every scene and each has to preserve array identity where
+  nothing changed, because identity is the signal `editProject` reads for "nothing
+  happened" and therefore for "no undo step". Written once, that invariant is kept once.
+- **The parser drops a clip whose asset did not survive the open**, which is stricter than
+  the treatment of a sprite pointing at a missing image — that is tolerated and draws the
+  placeholder. The difference is that a dangling clip has no such fallback state:
+  `generateFrameNumbers` on a texture that was never loaded throws, so it would export a
+  game that does not boot.
+- **The frame list is text, and ranges are the readable form.** `formatFrameList` collapses
+  runs — "0-11" rather than twelve numbers, which is what fits and what a person would
+  write — and `parseFrameList` accepts both, counting down for a descending range. It runs
+  on every keystroke, so half-typed input is the normal case: an unparseable part is
+  dropped rather than throwing the rest of the list away, and the store refuses an empty
+  result rather than storing a clip Phaser cannot create.
+- **The clip's field is labelled "Animation name", not "Name".** The object's own name
+  field is a few rows up the same panel. Two fields labelled Name is ambiguous to a reader
+  as well as to a test locator, and this one is the key the exported code plays by.
 
 ## Nesting
 
@@ -684,6 +767,7 @@ tests/
   snapping.spec.ts          a drag landing on an edge, an equal gap or the grid
   rotation.spec.ts          the rotate knob, and an angle landing on a neighbour or a step
   guides.spec.ts            placing a guide, dragging it, and a drag agreeing with it
+  animation.spec.ts         slicing a sheet, drawing one frame, playing a clip
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
@@ -799,6 +883,16 @@ Traps, each of which produced a confident wrong answer at some point:
   other, so a colour match found them in one and not the other. Matching loosely enough to
   catch the blend also matches an object's own antialiased edge — which is a wrong answer,
   not a flaky one.
+- **A sheet test has to be able to see *which frame* is drawn.** `stripPng` builds a
+  horizontal strip of solid-colour frames for exactly that: the assertion "one frame is
+  drawn and the other three are not" is what separates a grid that reached Phaser's parser
+  from one that only reached the document, and no fixture of shapes could state it.
+  Scale the sprite up — at the mobile zoom a 32px frame is 12 screen pixels across, and a
+  centroid over ~14 pixels is all antialiased edge.
+- **What frame is up at any instant is a race with the frame rate.** The claim a playback
+  test can actually make is "it reaches a frame it did not start on", polled — a statement
+  about time passing, not a single screenshot. Asserting a specific frame at a specific
+  moment is a test that fails on a loaded machine.
 - `@playwright/test` is pinned to `~1.56` because that is the release whose bundled
   Chromium (1194) is the one preinstalled in the container this repo is developed in — do
   not run `playwright install` there. `CHROMIUM_PATH` overrides the executable if a
@@ -844,14 +938,17 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
-Animations and sprite sheets (the asset table holds whole images only, and `sprite` nodes
-render as Phaser `Image`s, not `Sprite`s — animation is the reason to change that),
-tilemaps, physics, particles, audio, cameras, multiple scenes, and prefabs. Prefabs are the
-natural next thing built on containers, and a group is what a prefab instance would be —
-now that a selection is a set, "make a prefab of these" has something to start from.
+Texture atlases (the asset table holds whole images cut on a regular grid; an atlas is
+named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
+than more of this one), tilemaps, physics, particles, audio, cameras, multiple scenes, and
+prefabs. Prefabs are the natural next thing built on containers, and a group is what a
+prefab instance would be — now that a selection is a set, "make a prefab of these" has
+something to start from.
+
 Alignment and distribution shipped in iteration 6, snapping in iteration 7, equal spacing
-and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9, and
-persistent guides in iteration 10; the boxes they all need are in `src/core/bounds.ts`,
+and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9,
+persistent guides in iteration 10, and sprite sheets with animations in iteration 11. The
+boxes the geometry family needs are in `src/core/bounds.ts`,
 which any further geometry tool can read. That family is complete in the sense that
 mattered — the user can now author a line of their own — and what is left of it is more of
 the same shape: another line or gap fed to `snapMove`, or another kind of agreement on the

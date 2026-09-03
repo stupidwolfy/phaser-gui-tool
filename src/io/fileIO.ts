@@ -1,4 +1,11 @@
-import { SCHEMA_VERSION, type ImageAsset, type Project } from '../core/schema';
+import { DEFAULT_FRAME_RATE } from '../core/defaults';
+import {
+  SCHEMA_VERSION,
+  type AnimationClip,
+  type FrameGrid,
+  type ImageAsset,
+  type Project,
+} from '../core/schema';
 
 /**
  * Saving and opening project files, entirely on the user's device.
@@ -152,6 +159,35 @@ export class ProjectParseError extends Error {}
 const ASSET_DATA_URL = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/;
 
 /**
+ * An asset's frame grid, rebuilt field by field like the asset around it.
+ *
+ * Undefined for anything that is not four finite non-negative numbers with a
+ * positive frame size, which drops a malformed grid back to "this is a plain
+ * image" — a usable state — rather than losing the image with it. Whether the
+ * grid actually fits the image is `frameGridOf`'s question, asked everywhere it
+ * is read; this only has to guarantee the shape.
+ */
+function parseSheet(raw: unknown): FrameGrid | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const sheet = raw as Partial<FrameGrid>;
+  const size = (value: unknown, min: number): number | null => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= min ? Math.floor(n) : null;
+  };
+
+  const frameWidth = size(sheet.frameWidth, 1);
+  const frameHeight = size(sheet.frameHeight, 1);
+  if (frameWidth === null || frameHeight === null) return undefined;
+
+  return {
+    frameWidth,
+    frameHeight,
+    margin: size(sheet.margin, 0) ?? 0,
+    spacing: size(sheet.spacing, 0) ?? 0,
+  };
+}
+
+/**
  * Keeps only the assets that are actually usable, rather than failing the whole
  * open. A project with one unreadable image should still give the user back the
  * rest of their work; the sprites pointing at it fall back to the placeholder,
@@ -173,6 +209,7 @@ function parseAssets(raw: unknown): ImageAsset[] {
       continue;
     }
 
+    const sheet = parseSheet(asset.sheet);
     assets.push({
       id: asset.id,
       name: typeof asset.name === 'string' ? asset.name : 'image',
@@ -180,9 +217,62 @@ function parseAssets(raw: unknown): ImageAsset[] {
       dataUrl: asset.dataUrl,
       width,
       height,
+      // Spread rather than assigned so a plain image has no `sheet` key at all,
+      // which is what makes `JSON.stringify` of a shape-only project identical
+      // to what it was before sheets existed.
+      ...(sheet ? { sheet } : {}),
     });
   }
   return assets;
+}
+
+/**
+ * The animation table, validated against the assets that survived the open.
+ *
+ * A clip is dropped rather than repaired when it names an asset that is not
+ * there. That is stricter than the treatment of a sprite pointing at a missing
+ * image — which is tolerated, and draws the placeholder — and the difference is
+ * that a dangling clip has no such state to fall back to: `generateFrameNumbers`
+ * on a texture that was never loaded throws, so a clip like that would export a
+ * game that does not boot. A sprite whose animation went with it simply shows
+ * its frame, which is exactly what a sprite with no animation is.
+ *
+ * Everything else is clamped rather than rejected, on the same principle the
+ * asset table follows: one bad number should not cost the user the clip.
+ */
+function parseAnimations(raw: unknown, assets: ImageAsset[]): AnimationClip[] {
+  if (!Array.isArray(raw)) return [];
+  const known = new Set(assets.map((asset) => asset.id));
+
+  const clips: AnimationClip[] = [];
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const clip = candidate as Partial<AnimationClip>;
+    if (typeof clip.id !== 'string' || !clip.id) continue;
+    if (typeof clip.assetId !== 'string' || !known.has(clip.assetId)) continue;
+
+    const frames = Array.isArray(clip.frames)
+      ? clip.frames
+          .map((frame) => Number(frame))
+          .filter((frame) => Number.isFinite(frame) && frame >= 0)
+          .map((frame) => Math.floor(frame))
+      : [];
+    // A clip with no frames has nothing to play and cannot be given one.
+    if (frames.length === 0) continue;
+
+    const frameRate = Number(clip.frameRate);
+    const repeat = Number(clip.repeat);
+    clips.push({
+      id: clip.id,
+      name: typeof clip.name === 'string' ? clip.name : 'animation',
+      assetId: clip.assetId,
+      frames,
+      frameRate: Number.isFinite(frameRate) && frameRate > 0 ? frameRate : DEFAULT_FRAME_RATE,
+      // Anything below -1 is not a Phaser repeat count; -1 is its "forever".
+      repeat: Number.isFinite(repeat) ? Math.max(-1, Math.floor(repeat)) : -1,
+    });
+  }
+  return clips;
 }
 
 /** Parses and validates untrusted file contents into a Project. */
@@ -214,6 +304,7 @@ export function parseProject(contents: string): Project {
     throw new ProjectParseError('That project has no scenes.');
   }
 
+  const assets = parseAssets(candidate.assets);
   const scenes = candidate.scenes;
   const activeSceneId =
     candidate.activeSceneId && scenes.some((s) => s.id === candidate.activeSceneId)
@@ -226,7 +317,9 @@ export function parseProject(contents: string): Project {
     phaserVersion:
       typeof candidate.phaserVersion === 'string' ? candidate.phaserVersion : 'unknown',
     // Absent in v1 files, which is a valid project with no images.
-    assets: parseAssets(candidate.assets),
+    assets,
+    // Absent before v4, which is a valid project whose sprites are all still.
+    animations: parseAnimations(candidate.animations, assets),
     scenes,
     activeSceneId,
   };

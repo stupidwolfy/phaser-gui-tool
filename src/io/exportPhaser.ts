@@ -1,7 +1,11 @@
 import { activeScene } from '../core/store';
 import {
   TARGET_PHASER_VERSION,
+  clampFrame,
+  findAnimation,
   findAsset,
+  frameGridOf,
+  type AnimationClip,
   type GameObjectNode,
   type ImageAsset,
   type Project,
@@ -157,11 +161,116 @@ function buildAssetTable(used: Map<string, UsedAsset>, indent: string): string {
   return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
 }
 
-/** The body of `preload()`, or '' when the scene uses no images. */
+/**
+ * The body of `preload()`, or '' when the scene uses no images.
+ *
+ * A sheet loads through `load.spritesheet` with the document's own four
+ * numbers, so the frames the exported game cuts are the frames the editor drew.
+ * A plain image still loads through `load.image`, unchanged — emitting every
+ * image as a one-frame sheet would work and would make every shape-only-plus-
+ * image export differ from what it was for no gain.
+ */
 function buildPreloadBody(used: Map<string, UsedAsset>): string {
   return [...used.values()]
-    .map(({ key }) => `    this.load.image(${str(key)}, ASSETS[${str(key)}]);`)
+    .map(({ asset, key }) => {
+      const sheet = frameGridOf(asset);
+      if (!sheet) return `    this.load.image(${str(key)}, ASSETS[${str(key)}]);`;
+      return (
+        `    this.load.spritesheet(${str(key)}, ASSETS[${str(key)}], {\n` +
+        `      frameWidth: ${num(sheet.frameWidth)},\n` +
+        `      frameHeight: ${num(sheet.frameHeight)},\n` +
+        `      margin: ${num(sheet.margin)},\n` +
+        `      spacing: ${num(sheet.spacing)},\n` +
+        `    });`
+      );
+    })
     .join('\n');
+}
+
+/**
+ * A clip for each animation the scene actually plays, keyed by the name the
+ * user gave it.
+ *
+ * Only played clips are emitted, for the reason only referenced images are: an
+ * export should carry the scene, not the editor's whole workbench. Keys are the
+ * clip names de-duplicated — an animation key is a plain string rather than an
+ * identifier, so the user's own "walk" survives verbatim, but two clips sharing
+ * a name would have Phaser's manager warn and keep only the first.
+ */
+interface UsedAnimation {
+  clip: AnimationClip;
+  key: string;
+  /** The texture key its frames are read from. */
+  textureKey: string;
+}
+
+function collectAnimations(
+  project: Project,
+  scene: SceneDoc,
+  assets: Map<string, UsedAsset>,
+): Map<string, UsedAnimation> {
+  const used = new Map<string, UsedAnimation>();
+  const keys = new Set<string>();
+
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'sprite' && node.props.animationId && !used.has(node.props.animationId)) {
+        const clip = findAnimation(project, node.props.animationId);
+        // A sprite can name a clip that is not in the table, or one whose sheet
+        // is not in this scene, only in a hand-edited file: the editor removes
+        // the references itself, and the parser drops a clip whose asset is
+        // gone. Either way there is nothing to emit.
+        const entry = clip ? assets.get(clip.assetId) : undefined;
+        if (clip && entry) {
+          used.set(clip.id, {
+            clip,
+            key: uniqueKey(clip.name, keys),
+            textureKey: entry.key,
+          });
+        }
+      }
+      walk(node.children);
+    }
+  };
+  walk(scene.children);
+  return used;
+}
+
+/**
+ * A name not already used, kept as the user wrote it wherever possible.
+ *
+ * Unlike `toIdentifier` this does not have to produce valid JavaScript — an
+ * animation key is a string literal — so the only thing it enforces is
+ * uniqueness, and a blank name still needs *something* to be called.
+ */
+function uniqueKey(name: string, used: Set<string>): string {
+  const base = name.trim() || 'animation';
+  let candidate = base;
+  let n = 2;
+  while (used.has(candidate)) candidate = `${base} ${n++}`;
+  used.add(candidate);
+  return candidate;
+}
+
+/** The `anims.create` calls, which have to run before anything plays one. */
+function buildAnimationLines(used: Map<string, UsedAnimation>): string[] {
+  const lines: string[] = [];
+  for (const { clip, key, textureKey } of used.values()) {
+    lines.push('this.anims.create({');
+    lines.push(`  key: ${str(key)},`);
+    // `generateFrameNumbers` with an explicit list rather than a start and an
+    // end: the document stores a list, and a list is what expresses a sequence
+    // that repeats or runs backwards — a ping-pong is [0, 1, 2, 1].
+    lines.push(
+      `  frames: this.anims.generateFrameNumbers(${str(textureKey)}, ` +
+        `{ frames: [${clip.frames.join(', ')}] }),`,
+    );
+    lines.push(`  frameRate: ${num(clip.frameRate)},`);
+    lines.push(`  repeat: ${num(clip.repeat)},`);
+    lines.push('});');
+    lines.push('');
+  }
+  return lines;
 }
 
 /**
@@ -170,7 +279,11 @@ function buildPreloadBody(used: Map<string, UsedAsset>): string {
  * Null means "emit nothing for this node" — currently only a sprite with no
  * image chosen, which has no valid constructor call to make.
  */
-function constructorFor(node: GameObjectNode, used: Map<string, UsedAsset>): string | null {
+function constructorFor(
+  node: GameObjectNode,
+  used: Map<string, UsedAsset>,
+  animations: Map<string, UsedAnimation>,
+): string | null {
   const { x, y } = node.transform;
 
   switch (node.type) {
@@ -181,7 +294,20 @@ function constructorFor(node: GameObjectNode, used: Map<string, UsedAsset>): str
     case 'sprite': {
       const entry = node.props.assetId ? used.get(node.props.assetId) : undefined;
       if (!entry) return null;
-      return `this.add.image(${num(x)}, ${num(y)}, ${str(entry.key)})`;
+      // A Sprite only when the node actually animates: an Image cannot `play`,
+      // and a Sprite that never does is a heavier object and a reader's
+      // question about what it is for. The editor makes the opposite choice and
+      // draws every sprite node as a Sprite, because there the node has to be
+      // able to start animating the moment the user gives it a clip.
+      if (node.props.animationId && animations.has(node.props.animationId)) {
+        return `this.add.sprite(${num(x)}, ${num(y)}, ${str(entry.key)})`;
+      }
+      // Frame 0 is `add.image`'s own default, so a plain image emits exactly
+      // the call it always did.
+      const frame = clampFrame(entry.asset, node.props.frame);
+      return frame === 0
+        ? `this.add.image(${num(x)}, ${num(y)}, ${str(entry.key)})`
+        : `this.add.image(${num(x)}, ${num(y)}, ${str(entry.key)}, ${num(frame)})`;
     }
     case 'container':
       return `this.add.container(${num(x)}, ${num(y)})`;
@@ -200,7 +326,7 @@ function constructorFor(node: GameObjectNode, used: Map<string, UsedAsset>): str
  * Only the modifiers that differ from Phaser's defaults, so the generated code
  * stays readable instead of restating `setScale(1, 1)` on every object.
  */
-function modifiersFor(node: GameObjectNode): string[] {
+function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimation>): string[] {
   const out: string[] = [];
   const { rotation, scaleX, scaleY } = node.transform;
 
@@ -218,6 +344,12 @@ function modifiersFor(node: GameObjectNode): string[] {
     if (node.props.flipX || node.props.flipY) {
       out.push(`.setFlip(${node.props.flipX}, ${node.props.flipY})`);
     }
+    // Last of the sprite modifiers, and after the tint and the flip it inherits
+    // — `play` returns the sprite, so this is a chain link like the others.
+    const animation = node.props.animationId
+      ? animations.get(node.props.animationId)
+      : undefined;
+    if (animation) out.push(`.play(${str(animation.key)})`);
   }
 
   if (node.props.alpha !== 1) out.push(`.setAlpha(${num(node.props.alpha)})`);
@@ -238,10 +370,11 @@ function modifiersFor(node: GameObjectNode): string[] {
 function emitNode(
   node: GameObjectNode,
   assets: Map<string, UsedAsset>,
+  animations: Map<string, UsedAnimation>,
   used: Set<string>,
   lines: string[],
 ): string | null {
-  const constructor = constructorFor(node, assets);
+  const constructor = constructorFor(node, assets, animations);
   if (constructor === null) {
     // Say so rather than skipping silently: an object missing from the export
     // with no explanation reads as an exporter bug.
@@ -251,7 +384,7 @@ function emitNode(
   }
 
   const id = toIdentifier(node.name, used);
-  const modifiers = modifiersFor(node);
+  const modifiers = modifiersFor(node, animations);
   const chain = modifiers.length > 0 ? `\n      ${modifiers.join('\n      ')}` : '';
   lines.push(`const ${id} = ${constructor}${chain};`);
   // Carries the editor name through, so objects stay findable at runtime.
@@ -260,7 +393,7 @@ function emitNode(
 
   if (node.type === 'container' && node.children.length > 0) {
     const childIds = node.children
-      .map((child) => emitNode(child, assets, used, lines))
+      .map((child) => emitNode(child, assets, animations, used, lines))
       .filter((childId): childId is string => childId !== null);
     // Added after the children are built, and in document order: a container's
     // list order is its draw order, exactly as the scene's array is.
@@ -274,14 +407,28 @@ function emitNode(
 }
 
 /** The body of `create()`, shared verbatim by both outputs. */
-function buildCreateBody(scene: SceneDoc, assets: Map<string, UsedAsset>): string {
+function buildCreateBody(
+  scene: SceneDoc,
+  assets: Map<string, UsedAsset>,
+  animations: Map<string, UsedAnimation>,
+): string {
   const used = new Set<string>(['this']);
   const lines: string[] = [
     `this.cameras.main.setBackgroundColor(${str(scene.backgroundColor)});`,
   ];
 
-  if (scene.children.length > 0) lines.push('');
-  for (const node of scene.children) emitNode(node, assets, used, lines);
+  // Before the objects, because an object's `.play(...)` names one: animations
+  // are registered on the game's manager, and playing a key it has not been
+  // given is a warning and a sprite that never moves.
+  if (animations.size > 0) {
+    lines.push('');
+    lines.push(...buildAnimationLines(animations));
+  }
+
+  // `buildAnimationLines` already ends on a blank, so this is the separator
+  // only when there were no animations to separate from.
+  if (scene.children.length > 0 && lines.at(-1) !== '') lines.push('');
+  for (const node of scene.children) emitNode(node, assets, animations, used, lines);
 
   while (lines.at(-1) === '') lines.pop();
   return lines.map((line) => (line ? `    ${line}` : '')).join('\n');
@@ -314,6 +461,7 @@ export function generateScene(
   const className = toClassName(scene.name);
   const returnType = language === 'ts' ? ': void' : '';
   const assets = collectAssets(project, scene);
+  const animations = collectAnimations(project, scene, assets);
 
   // A scene with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
@@ -330,7 +478,7 @@ export class ${className} extends Phaser.Scene {
   }
 
 ${preload}  create()${returnType} {
-${buildCreateBody(scene, assets)}
+${buildCreateBody(scene, assets, animations)}
   }
 }
 
@@ -356,6 +504,7 @@ export function generateRunnableHtml(
     : TARGET_PHASER_VERSION;
   const cdn = `https://cdn.jsdelivr.net/npm/phaser@${version}/dist/phaser.min.js`;
   const assets = collectAssets(project, scene);
+  const animations = collectAnimations(project, scene, assets);
 
   const table =
     assets.size > 0 ? `${buildAssetTable(assets, '      ')}\n\n` : '';
@@ -383,7 +532,7 @@ ${table}      class ${className} extends Phaser.Scene {
         }
 
 ${preload}        create() {
-${buildCreateBody(scene, assets).replace(/^/gm, '    ')}
+${buildCreateBody(scene, assets, animations).replace(/^/gm, '    ')}
         }
       }
 

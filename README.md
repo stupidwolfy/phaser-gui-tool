@@ -39,6 +39,12 @@ on a desktop.
   button lands it on a fixed step (15° unless you change it under Snapping), and the
   degrees are shown while either is holding it
 - Import your own images and use them as sprites, with tint, flip and alpha
+- Slice an image into a sprite sheet — frame size, margin and spacing — and pick
+  which frame a sprite shows
+- Animate it: build a clip from the frames (`0-3, 7` picks and orders them), set the
+  frame rate and whether it loops, and press ▶ in the toolbar to watch it play on the
+  canvas. Animations are saved with the project and exported as real
+  `this.anims.create(...)` calls, so the sheet and the clip come out the other side
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
 - Group objects: a group moves, rotates, scales and fades everything inside it as one,
   and groups can hold groups. Drag a row onto a group in the scene tree, or set an
@@ -96,6 +102,9 @@ keeps working either way.
 Exported code carries the same bytes in an `ASSETS` object at the top of the file. To
 serve real image files in your own project instead, replace each value in it with a path.
 
+An image sliced into frames is loaded with `this.load.spritesheet(...)` and the same four
+numbers you set in the editor, so the frames your game cuts are the frames you drew with.
+
 ### Saving
 
 Where the File System Access API exists (desktop Chrome and Edge), **Save** writes back to
@@ -105,11 +114,11 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; ten iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; eleven iterations in, it is a
 working editor but a small one.
 
-**Not built yet** — animations and sprite sheets, tilemaps, physics, particles, audio,
-cameras, multiple scenes, and prefabs.
+**Not built yet** — texture atlases, tilemaps, physics, particles, audio, cameras,
+multiple scenes, and prefabs.
 
 **Verified by** a Playwright suite that drives the production build in Chromium at both
 1440×900 and 390×844, and by CI on every pull request. It checks the editing round trip
@@ -151,6 +160,7 @@ tests/
   snapping.spec.ts    a drag landing on a neighbour's edge, an equal gap or the grid
   rotation.spec.ts    the rotate knob, and an angle landing on a neighbour or a step
   guides.spec.ts      placing a guide, dragging it, and a drag agreeing with it
+  animation.spec.ts   slicing a sheet, drawing one frame of it, and playing a clip
   assets.spec.ts      image import, drawing, save/reopen, removal
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite

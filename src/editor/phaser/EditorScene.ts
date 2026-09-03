@@ -7,12 +7,18 @@ import {
   type EditorState,
 } from '../../core/store';
 import {
+  clampFrame,
   containsNode,
+  findAnimation,
+  findAsset,
   findNode,
   findParent,
+  frameGridOf,
   guidesOf,
   worldTransformOf,
+  type AnimationClip,
   type GameObjectNode,
+  type ImageAsset,
   type Project,
 } from '../../core/schema';
 import { decodeImage, decodedImage } from '../../core/assets';
@@ -167,8 +173,30 @@ const MIN_GRID_PIXELS = 6;
 /**
  * Texture keys are namespaced so that `syncTextures` can tell the textures it
  * owns from Phaser's own (`__DEFAULT`, `__MISSING`) and never remove those.
+ *
+ * The frame grid is folded into the key, not merely into the texture's
+ * contents. A Phaser texture's frames are cut once, when it is added, and there
+ * is no API to re-cut one in place — so changing the grid has to build a new
+ * texture and drop the old one. Making the key depend on the grid means the
+ * existing "add what is wanted, remove what is not" diff in `syncTextures`
+ * does exactly that on its own, with no special case for a re-cut: the new key
+ * is missing, so it is added, and the old key is no longer wanted, so it goes.
  */
-const textureKeyForAsset = (assetId: string): string => `asset:${assetId}`;
+const textureKeyForAsset = (asset: ImageAsset): string => {
+  const sheet = frameGridOf(asset);
+  return sheet
+    ? `asset:${asset.id}:${sheet.frameWidth}x${sheet.frameHeight}+${sheet.margin}+${sheet.spacing}`
+    : `asset:${asset.id}`;
+};
+
+/**
+ * Animation keys are namespaced for the same reason, and carry a signature of
+ * the clip for the same reason again: Phaser's `Animation` is built from its
+ * frames at `create` time, so an edited clip is a new animation rather than a
+ * changed one.
+ */
+const animationKeyFor = (clip: AnimationClip, textureKey: string): string =>
+  `anim:${clip.id}:${textureKey}:${clip.frames.join(',')}:${clip.frameRate}:${clip.repeat}`;
 const PLACEHOLDER_TEXTURE = 'editor:no-image';
 /** Side of the stand-in square drawn for a sprite with no image yet. */
 const PLACEHOLDER_SIZE = 96;
@@ -242,7 +270,13 @@ type Renderable =
   | Phaser.GameObjects.Rectangle
   | Phaser.GameObjects.Ellipse
   | Phaser.GameObjects.Text
-  | Phaser.GameObjects.Image
+  // A Sprite rather than an Image: only a Sprite carries an AnimationState, and
+  // a sprite node has to be able to play whether or not it does today. The two
+  // draw identically — Sprite *is* an Image with playback bolted on — so this
+  // costs nothing for the still case. The exporter makes the opposite choice
+  // and emits `add.image` unless the node animates, because there the extra
+  // capability would be a line of generated code that does nothing.
+  | Phaser.GameObjects.Sprite
   | Phaser.GameObjects.Container;
 
 /**
@@ -309,6 +343,30 @@ export class EditorScene extends Phaser.Scene {
   private containerBounds = new Map<string, Phaser.Geom.Rectangle>();
   /** Texture keys this scene created, so shutdown and pruning only touch ours. */
   private assetTextures = new Set<string>();
+  /**
+   * Animation keys this scene registered.
+   *
+   * Animations live on the *game*'s manager, not the scene's — `this.anims` is
+   * a singleton shared by every scene — so they outlive a scene teardown
+   * exactly as textures do, and have to be removed by the same bookkeeping.
+   */
+  private animationKeys = new Set<string>();
+  /**
+   * The animation key each clip currently resolves to, so `applyNode` can find
+   * a sprite's animation without recomputing the signature per sprite.
+   */
+  private animationForClip = new Map<string, string>();
+  /**
+   * The document and the preview flag for the sync in progress.
+   *
+   * Held here rather than threaded down through `syncNodes` because they are
+   * the same for every node in a pass, while the arguments that pass does
+   * thread — the node, its parent, its index — are the ones that differ per
+   * node. A sprite needs both: its texture and its animation are looked up in
+   * the project's asset and animation tables, which are not on the node.
+   */
+  private previewing = false;
+  private syncing: Project = useEditorStore.getState().project;
   /** Data URLs currently being decoded, so a slow image is only decoded once. */
   private decoding = new Set<string>();
   /** False after SHUTDOWN, so an in-flight decode can't touch a dead scene. */
@@ -585,6 +643,11 @@ export class EditorScene extends Phaser.Scene {
       // user had ever imported.
       for (const key of this.assetTextures) this.textures.remove(key);
       this.assetTextures.clear();
+      // Animations belong to the game's manager, exactly as textures belong to
+      // the game's texture manager, so they leak the same way if left behind.
+      for (const key of this.animationKeys) this.anims.remove(key);
+      this.animationKeys.clear();
+      this.animationForClip.clear();
     });
   }
 
@@ -636,13 +699,18 @@ export class EditorScene extends Phaser.Scene {
     const wanted = new Set<string>();
 
     for (const asset of project.assets) {
-      const key = textureKeyForAsset(asset.id);
+      const key = textureKeyForAsset(asset);
       wanted.add(key);
       if (this.textures.exists(key)) continue;
 
       const image = decodedImage(asset.dataUrl);
       if (image) {
-        this.textures.addImage(key, image);
+        const sheet = frameGridOf(asset);
+        // The grid is handed to Phaser's own sprite-sheet parser rather than
+        // cut here, so the frames the editor draws are the very frames
+        // `load.spritesheet` will cut from the same numbers in exported code.
+        if (sheet) this.textures.addSpriteSheet(key, image, { ...sheet });
+        else this.textures.addImage(key, image);
         this.assetTextures.add(key);
       } else if (!this.decoding.has(asset.dataUrl)) {
         this.decoding.add(asset.dataUrl);
@@ -664,10 +732,62 @@ export class EditorScene extends Phaser.Scene {
   }
 
   /** The texture a sprite should be drawn with, falling back to the placeholder. */
-  private textureKeyFor(assetId: string | null): string {
-    if (!assetId) return PLACEHOLDER_TEXTURE;
-    const key = textureKeyForAsset(assetId);
+  private textureKeyFor(project: Project, assetId: string | null): string {
+    const asset = findAsset(project, assetId);
+    if (!asset) return PLACEHOLDER_TEXTURE;
+    const key = textureKeyForAsset(asset);
     return this.textures.exists(key) ? key : PLACEHOLDER_TEXTURE;
+  }
+
+  /**
+   * Brings the game's animation manager in line with the document's clips.
+   *
+   * The same diff `syncTextures` runs, for the same reason and with the same
+   * signature trick: an `Animation` is built from its frames when it is
+   * created, so an edited clip is a different animation rather than a changed
+   * one, and the key carries enough of the clip that editing it makes the old
+   * key unwanted and the new one missing.
+   *
+   * A clip whose texture has not decoded yet is simply skipped. The decode
+   * re-runs the whole sync when it lands, which is the same path that gets its
+   * sprites off the placeholder.
+   */
+  private syncAnimations(project: Project): void {
+    const wanted = new Set<string>();
+    this.animationForClip.clear();
+
+    for (const clip of project.animations) {
+      const asset = findAsset(project, clip.assetId);
+      if (!asset) continue;
+      const textureKey = textureKeyForAsset(asset);
+      if (!this.textures.exists(textureKey)) continue;
+
+      // Frames are clamped against the texture actually loaded, not against the
+      // document's idea of the grid: `generateFrameNumbers` on a frame the
+      // texture does not have produces an animation that renders nothing.
+      const texture = this.textures.get(textureKey);
+      const frames = clip.frames.filter((frame) => texture.has(String(frame)));
+      if (frames.length === 0) continue;
+
+      const key = animationKeyFor(clip, textureKey);
+      this.animationForClip.set(clip.id, key);
+      wanted.add(key);
+      if (this.anims.exists(key)) continue;
+
+      this.anims.create({
+        key,
+        frames: frames.map((frame) => ({ key: textureKey, frame })),
+        frameRate: clip.frameRate,
+        repeat: clip.repeat,
+      });
+      this.animationKeys.add(key);
+    }
+
+    for (const key of this.animationKeys) {
+      if (wanted.has(key)) continue;
+      this.anims.remove(key);
+      this.animationKeys.delete(key);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1794,6 +1914,11 @@ export class EditorScene extends Phaser.Scene {
     // Before the nodes: a sprite created this pass needs its texture to already
     // exist, or Phaser falls back to its own missing-texture green square.
     this.syncTextures(state.project);
+    // And after the textures, because an animation is built from a texture's
+    // frames — but still before the nodes, which play what it registers.
+    this.syncAnimations(state.project);
+    this.previewing = state.previewAnimations;
+    this.syncing = state.project;
 
     const seen = new Set<string>();
     this.syncNodes(scene.children, null, seen);
@@ -1914,7 +2039,7 @@ export class EditorScene extends Phaser.Scene {
         object = this.add.text(0, 0, node.props.text).setOrigin(0.5);
         break;
       case 'sprite':
-        object = this.add.image(0, 0, this.textureKeyFor(node.props.assetId));
+        object = this.add.sprite(0, 0, this.textureKeyFor(this.syncing, node.props.assetId));
         break;
       case 'container':
         // Sized in applyNode from whatever ends up inside it; a container needs
@@ -1957,15 +2082,40 @@ export class EditorScene extends Phaser.Scene {
         break;
       }
       case 'sprite': {
-        const image = object as Phaser.GameObjects.Image;
-        const key = this.textureKeyFor(node.props.assetId);
-        // Swapping the image changes the object's size, which the hit area
-        // below then follows — the same reason text needs it as you type.
-        if (image.texture.key !== key) image.setTexture(key);
-        image.setAlpha(node.props.alpha);
+        const sprite = object as Phaser.GameObjects.Sprite;
+        const project = this.syncing;
+        const key = this.textureKeyFor(project, node.props.assetId);
+        const asset = findAsset(project, node.props.assetId);
+        const frame = clampFrame(asset, node.props.frame);
+
+        const clip = findAnimation(project, node.props.animationId);
+        const animation = clip ? this.animationForClip.get(clip.id) : undefined;
+
+        if (this.previewing && animation) {
+          // `true` is ignoreIfPlaying: without it every store change — a
+          // selection, a nudge of some other object — would restart the
+          // animation from frame 0, so nothing would ever visibly advance.
+          sprite.play(animation, true);
+        } else {
+          if (sprite.anims.isPlaying) sprite.stop();
+          // Resolved against the texture actually loaded, not against the
+          // document's grid. Those disagree for as long as a decode is in
+          // flight — the sprite is on the single-frame placeholder while its
+          // node still says frame 3 — and Phaser warns and drops to a missing
+          // texture for a frame that is not there. The decode re-runs this
+          // whole sync when it lands, which is what puts the real frame up.
+          const drawn = this.textures.get(key).has(String(frame)) ? frame : 0;
+          // Swapping the image or the frame changes the object's size, which
+          // the hit area below then follows — the same reason text needs it as
+          // you type.
+          if (sprite.texture.key !== key) sprite.setTexture(key, drawn);
+          else sprite.setFrame(drawn);
+        }
+
+        sprite.setAlpha(node.props.alpha);
         // Multiply is the default tint mode, so white is exactly "no tint".
-        image.setTint(hexToNumber(node.props.tint));
-        image.setFlip(node.props.flipX, node.props.flipY);
+        sprite.setTint(hexToNumber(node.props.tint));
+        sprite.setFlip(node.props.flipX, node.props.flipY);
         break;
       }
       case 'container': {
