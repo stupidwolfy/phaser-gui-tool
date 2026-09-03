@@ -248,7 +248,7 @@ test('clearing the guides is one undo step, and does nothing when there are none
   expect(scene.guides).toHaveLength(2);
 });
 
-test('guides survive a save and an open, without a schema bump', async ({
+test('guides survive a save and an open, on a version they did not bump', async ({
   editor,
 }, testInfo) => {
   await oneRectangleAndAGuide(editor);
@@ -259,11 +259,18 @@ test('guides survive a save and an open, without a schema bump', async ({
   const saved = await editor.saveToFile();
   const file = JSON.parse(saved.contents);
 
-  // Asserted in the artefact, not only in a comment: a v3 build passes `scenes`
-  // through verbatim and reads none of these fields, so a file with guides
-  // opens, draws identically and even carries them back out on a re-save. The
-  // day that stops being true, this fails and the bump becomes deliberate.
-  expect(file.schemaVersion).toBe(3);
+  // Asserted in the artefact, not only in a comment: an older build passes
+  // `scenes` through verbatim and reads none of these fields, so a file with
+  // guides opens, draws identically and even carries them back out on a
+  // re-save. That is why guides needed no bump, and it is still true.
+  //
+  // The number moved to 4 all the same, for a reason of its own: sprite sheets
+  // and animations live on the asset table and the project, both of which
+  // *are* rebuilt field by field, so an older build drops them silently. This
+  // literal is here to keep every such bump a deliberate act — when it fails,
+  // the question to answer is whether the new field is a guide (passed through,
+  // no bump) or a sheet (rebuilt, bump), not merely to update the number.
+  expect(file.schemaVersion).toBe(4);
   expect(file.scenes[0].guides).toEqual([
     { id: expect.any(String), axis: 'x', position: GUIDE_X },
     { id: expect.any(String), axis: 'y', position: 200 },
