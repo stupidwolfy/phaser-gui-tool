@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import { cloneWithNewIds, createNode, newProject } from './defaults';
+import { DEFAULT_FRAME_RATE, cloneWithNewIds, createNode, newProject } from './defaults';
 import {
   alignDeltas,
   boundsOf,
@@ -11,19 +11,26 @@ import {
   type Rect,
 } from './bounds';
 import {
+  clampFrame,
   composeTransform,
   containsNode,
+  findAsset,
   findNode,
   findParent,
+  frameCountOf,
+  frameGridOf,
   guidesOf,
   localTransformIn,
   newId,
   worldTransformOf,
+  type AnimationClip,
+  type FrameGrid,
   type GameObjectNode,
   type ImageAsset,
   type NodeType,
   type Project,
   type SceneDoc,
+  type SpriteProps,
   type Transform,
 } from './schema';
 
@@ -165,6 +172,20 @@ export interface EditorState {
    */
   guidesVisible: boolean;
   setGuidesVisible: (guidesVisible: boolean) => void;
+
+  /**
+   * Whether animated sprites actually play on the canvas.
+   *
+   * Editor state, never saved, and off by default — the same family as
+   * `snapEnabled` and `lockAspect`. A canvas that animates by itself is a
+   * canvas whose objects are never where you last looked, which makes placing
+   * one by eye a matter of timing; and the frame a still sprite shows is a
+   * document field the user is editing, so it has to be the frame on screen
+   * while they edit it. Preview is therefore something asked for, and the one
+   * moment the canvas stops mirroring the document exactly.
+   */
+  previewAnimations: boolean;
+  setPreviewAnimations: (previewAnimations: boolean) => void;
   /**
    * Scales a node, honouring `lockAspect`. Both the inspector's Scale fields
    * and the canvas corner handle go through here so the lock cannot mean one
@@ -204,6 +225,26 @@ export interface EditorState {
    * saved file, so the document can never be in that state by any action here.
    */
   removeAsset: (id: string) => void;
+
+  /**
+   * Cuts an image into frames, or (with null) puts it back to being one
+   * picture.
+   *
+   * On the asset rather than on a sprite, because the grid is a property of the
+   * image. Re-cutting clamps the frames of every sprite and clip that reads it;
+   * un-cutting removes those clips, since there is no longer a sequence for
+   * their indices to point into. All of it is one undo step.
+   */
+  setAssetSheet: (assetId: string, sheet: FrameGrid | null) => void;
+  /**
+   * Creates a clip over every frame of the sprite's sheet and plays it on that
+   * sprite, in one step. There is no bare `addAnimation`: a clip nothing plays
+   * cannot be seen, so creating one and assigning it are the same act.
+   */
+  addAnimationFor: (nodeId: string) => void;
+  updateAnimation: (id: string, patch: Partial<Omit<AnimationClip, 'id' | 'assetId'>>) => void;
+  /** Removes a clip and stops every sprite playing it, in one undo step. */
+  removeAnimation: (id: string) => void;
 
   // -- editing ---------------------------------------------------------------
   /**
@@ -376,23 +417,54 @@ function removeNode(nodes: GameObjectNode[], id: string): GameObjectNode[] {
     );
 }
 
-/** Points every sprite using `assetId` back at nothing. See `removeAsset`. */
-function clearAssetReferences(nodes: GameObjectNode[], assetId: string): GameObjectNode[] {
+/**
+ * Rewrites every sprite in the tree through `patch`, which returns the props to
+ * merge or null to leave that sprite alone.
+ *
+ * One traversal for the four things that reach across the document into
+ * sprites — removing an image, removing an animation, and re-cutting or
+ * un-cutting a sheet. Each of those has to touch every scene, and each has to
+ * preserve array identity where nothing changed, because identity is the signal
+ * `editProject` reads for "nothing happened" and therefore for "no undo step".
+ * Written once, that invariant is kept once.
+ */
+function mapSprites(
+  nodes: GameObjectNode[],
+  patch: (props: SpriteProps, id: string) => Partial<SpriteProps> | null,
+): GameObjectNode[] {
   let changed = false;
   const next = nodes.map((node) => {
-    const children =
-      node.children.length === 0 ? node.children : clearAssetReferences(node.children, assetId);
-    if (node.type === 'sprite' && node.props.assetId === assetId) {
-      changed = true;
-      return { ...node, props: { ...node.props, assetId: null }, children };
+    const children = node.children.length === 0 ? node.children : mapSprites(node.children, patch);
+    // Narrowed inside the branch rather than through a `props` local: spreading
+    // a partial patch over the union widens `props` past the branch `type`
+    // picked, which is the same cast `updateProps` needs and does not need here.
+    if (node.type === 'sprite') {
+      const props = patch(node.props, node.id);
+      if (props) {
+        changed = true;
+        return { ...node, props: { ...node.props, ...props }, children };
+      }
     }
     if (children === node.children) return node;
     changed = true;
     return { ...node, children };
   });
-  // Identity is the signal editProject reads for "nothing happened", so an
-  // untouched branch has to come back as the very same array.
   return changed ? next : nodes;
+}
+
+/** The same, across every scene in the project. */
+function mapProjectSprites(
+  project: Project,
+  patch: (props: SpriteProps, id: string) => Partial<SpriteProps> | null,
+): Project {
+  let changed = false;
+  const scenes = project.scenes.map((scene) => {
+    const children = mapSprites(scene.children, patch);
+    if (children === scene.children) return scene;
+    changed = true;
+    return { ...scene, children };
+  });
+  return changed ? { ...project, scenes } : project;
 }
 
 /**
@@ -456,6 +528,21 @@ function originsFor(
     const node = findNode(children, id);
     return node ? [{ id, transform: { ...node.transform } }] : [];
   });
+}
+
+/**
+ * An animation name not already taken, since the name is the animation *key* in
+ * exported code and two clips sharing one would have Phaser's manager warn and
+ * keep only the first. The exporter de-duplicates as a backstop; doing it here
+ * as well means the name the user sees in the editor is the name their game
+ * plays, rather than a silently renamed one.
+ */
+function uniqueAnimationName(project: Project, base: string): string {
+  const taken = new Set(project.animations.map((clip) => clip.name));
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base} ${n}`)) n += 1;
+  return `${base} ${n}`;
 }
 
 /** How far a duplicate or a paste lands from its source, in scene pixels. */
@@ -660,6 +747,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     gridSize: DEFAULT_GRID_SIZE,
     angleStep: DEFAULT_ANGLE_STEP,
     guidesVisible: true,
+    previewAnimations: false,
 
     setLockAspect: (lockAspect) => set({ lockAspect }),
     setMultiSelect: (multiSelect) => set({ multiSelect }),
@@ -679,6 +767,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         angleStep: Math.max(1, Math.min(180, Math.round(angleStep) || DEFAULT_ANGLE_STEP)),
       }),
     setGuidesVisible: (guidesVisible) => set({ guidesVisible }),
+    setPreviewAnimations: (previewAnimations) => set({ previewAnimations }),
 
     scaleNode: (id, axis, value) => {
       const state = get();
@@ -775,14 +864,138 @@ export const useEditorStore = create<EditorState>((set, get) => {
       editProject((project) => ({ ...project, assets: [...project.assets, asset] })),
 
     removeAsset: (id) =>
-      editProject((project) => ({
-        ...project,
-        assets: project.assets.filter((asset) => asset.id !== id),
-        scenes: project.scenes.map((scene) => ({
-          ...scene,
-          children: clearAssetReferences(scene.children, id),
-        })),
-      })),
+      editProject((project) => {
+        // The clips that read this sheet go with it: an animation over frames
+        // of an image that is gone has nothing left to mean, and leaving it
+        // behind would put a dangling clip in the file the parser then refuses
+        // on the next open. One undo step covers the image, the clips and every
+        // sprite that pointed at either.
+        const orphaned = new Set(
+          project.animations.filter((clip) => clip.assetId === id).map((clip) => clip.id),
+        );
+        return mapProjectSprites(
+          {
+            ...project,
+            assets: project.assets.filter((asset) => asset.id !== id),
+            animations: project.animations.filter((clip) => !orphaned.has(clip.id)),
+          },
+          (props) =>
+            props.assetId === id
+              ? { assetId: null, frame: 0, animationId: null }
+              : props.animationId && orphaned.has(props.animationId)
+                ? { animationId: null }
+                : null,
+        );
+      }),
+
+    setAssetSheet: (assetId, sheet) =>
+      editProject((project) => {
+        const asset = findAsset(project, assetId);
+        if (!asset) return project;
+
+        const next: ImageAsset = { ...asset };
+        if (sheet) next.sheet = sheet;
+        else delete next.sheet;
+
+        // Clips are indices into a grid, so re-cutting one can leave a clip
+        // naming frames that no longer exist, and un-cutting removes the grid
+        // they were indices into at all. Dropping the clips outright on a
+        // re-cut would throw away a walk cycle over a one-pixel margin
+        // correction, so they are clamped instead, and only an un-cut — where
+        // there is no longer a sequence to clamp to — removes them.
+        const count = frameCountOf(next);
+        const removed = new Set(
+          sheet
+            ? []
+            : project.animations.filter((clip) => clip.assetId === assetId).map((c) => c.id),
+        );
+        const animations = project.animations.flatMap((clip) => {
+          if (clip.assetId !== assetId) return clip;
+          if (removed.has(clip.id)) return [];
+          const frames = [...new Set(clip.frames.map((frame) => Math.min(frame, count - 1)))];
+          return { ...clip, frames };
+        });
+
+        return mapProjectSprites(
+          {
+            ...project,
+            assets: project.assets.map((entry) => (entry.id === assetId ? next : entry)),
+            animations,
+          },
+          (props) => {
+            if (props.assetId !== assetId) return null;
+            const frame = clampFrame(next, props.frame);
+            const animationId =
+              props.animationId && removed.has(props.animationId) ? null : props.animationId;
+            return frame === props.frame && animationId === props.animationId
+              ? null
+              : { frame, animationId };
+          },
+        );
+      }),
+
+    addAnimationFor: (nodeId) => {
+      const state = get();
+      const node = findNode(activeScene(state.project).children, nodeId);
+      if (!node || node.type !== 'sprite' || !node.props.assetId) return;
+      const asset = findAsset(state.project, node.props.assetId);
+      // Only a sheet has a sequence to animate. A plain image is one frame, and
+      // a one-frame animation is a still picture with a frame rate.
+      if (!asset || !frameGridOf(asset)) return;
+
+      const clip: AnimationClip = {
+        id: newId(),
+        name: uniqueAnimationName(state.project, 'Animation'),
+        assetId: asset.id,
+        // Every frame, in order: the sheet the user has just cut is almost
+        // always exactly the sequence they cut it for, and trimming it is far
+        // easier than typing it out.
+        frames: Array.from({ length: frameCountOf(asset) }, (_, index) => index),
+        frameRate: DEFAULT_FRAME_RATE,
+        repeat: -1,
+      };
+
+      // Creating it and playing it are one act, and so one undo step: an
+      // animation nothing plays is invisible, so a user who pressed the button
+      // and saw nothing change would reasonably conclude it had not worked.
+      editProject((project) =>
+        mapProjectSprites(
+          { ...project, animations: [...project.animations, clip] },
+          (_props, id) => (id === nodeId ? { animationId: clip.id } : null),
+        ),
+      );
+    },
+
+    updateAnimation: (id, patch) =>
+      editProject((project) => {
+        const clip = project.animations.find((entry) => entry.id === id);
+        if (!clip) return project;
+
+        const count = frameCountOf(findAsset(project, clip.assetId));
+        const frames = patch.frames
+          ?.filter((frame) => Number.isFinite(frame) && frame >= 0 && frame < count)
+          .map((frame) => Math.floor(frame));
+        // An empty list is not a clip Phaser can create, and the field this
+        // arrives from is a text box the user can empty mid-edit. Keeping the
+        // frames it had is the only answer that does not lose the sequence.
+        const next: AnimationClip = {
+          ...clip,
+          ...patch,
+          frames: frames && frames.length > 0 ? frames : clip.frames,
+        };
+        return {
+          ...project,
+          animations: project.animations.map((entry) => (entry.id === id ? next : entry)),
+        };
+      }),
+
+    removeAnimation: (id) =>
+      editProject((project) =>
+        mapProjectSprites(
+          { ...project, animations: project.animations.filter((clip) => clip.id !== id) },
+          (props) => (props.animationId === id ? { animationId: null } : null),
+        ),
+      ),
 
     addNode: (type) => {
       const state = get();
@@ -1145,6 +1358,26 @@ export function countAssetUses(project: Project, assetId: string): number {
   const walk = (nodes: GameObjectNode[]) => {
     for (const node of nodes) {
       if (node.type === 'sprite' && node.props.assetId === assetId) count += 1;
+      walk(node.children);
+    }
+  };
+  for (const scene of project.scenes) walk(scene.children);
+  return count;
+}
+
+/**
+ * How many sprites in the whole project play a clip.
+ *
+ * Shown beside the clip's fields, because those fields are shared: an animation
+ * belongs to the project rather than to the sprite whose panel is editing it,
+ * so a frame rate changed here changes it everywhere. Saying so is cheaper than
+ * the surprise.
+ */
+export function countAnimationUses(project: Project, animationId: string): number {
+  let count = 0;
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'sprite' && node.props.animationId === animationId) count += 1;
       walk(node.children);
     }
   };

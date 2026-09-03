@@ -292,6 +292,42 @@ export class EditorPage {
   }
 
   /**
+   * Cuts the selected sprite's image into square frames of `frameSize`.
+   *
+   * The controls live in the sprite's own inspector section, so the sprite has
+   * to be selected already — which it is, since adding an object selects it and
+   * importing an image needs the same panel open.
+   */
+  async sliceSheet(frameSize: number): Promise<void> {
+    await this.openPanel('inspect');
+    const box = this.checkbox('Sliced into frames');
+    if (!(await box.isChecked())) await box.click();
+    await this.setField('Frame W', frameSize);
+    await this.setField('Frame H', frameSize);
+    await this.settle();
+  }
+
+  /** Creates a clip over every frame and plays it on the selected sprite. */
+  async addAnimation(): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect')
+      .getByRole('button', { name: /^New animation from all/ })
+      .click();
+    await this.settle();
+  }
+
+  /**
+   * The toolbar's play toggle, which only exists once the project holds an
+   * animation — so this is called after `addAnimation`, never before.
+   */
+  async setPreview(on: boolean): Promise<void> {
+    await this.closePanels();
+    const button = this.page.getByRole('button', { name: 'Play animations' });
+    if (((await button.getAttribute('aria-pressed')) === 'true') !== on) await button.click();
+    await this.settle();
+  }
+
+  /**
    * Where the rotate knob is, in page coordinates, for an object centred on
    * `pivot` whose own half-height is `halfHeight` scene units.
    *

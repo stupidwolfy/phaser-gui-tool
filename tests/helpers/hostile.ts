@@ -1,4 +1,5 @@
 import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
+import { stripPng } from './png';
 
 /**
  * A project made of everything a project file should not contain.
@@ -11,6 +12,11 @@ import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
  */
 export function hostileProject(): Project {
   const breakout = '</script><script>window.__pwned = "yes";</script>';
+  // A real four-frame sheet, because the export path for one runs Phaser's own
+  // sprite-sheet parser and `generateFrameNumbers` against the actual bytes —
+  // a stub data URL would be dropped by `parseAssets` and take the sprite, the
+  // clip and this whole path out of the export with it.
+  const sheet = `data:image/png;base64,${stripPng(8, ['#ff0000', '#00ff00', '#0000ff', '#ffff00']).toString('base64')}`;
 
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -18,7 +24,35 @@ export function hostileProject(): Project {
     name: `${breakout}</title><img src=x onerror="window.__pwned='title'">`,
     // Reaches the CDN URL, so it must be validated rather than interpolated.
     phaserVersion: '4.2.1"></script><script>window.__pwned="cdn"</script>',
-    assets: [],
+    assets: [
+      {
+        id: 'sheet-1',
+        // The asset name becomes the *texture key* in exported code, through
+        // `toIdentifier` — a path neither the scene name nor an object name
+        // takes, since those become a class name and a variable.
+        name: `${breakout} sheet.png`,
+        mimeType: 'image/png',
+        dataUrl: sheet,
+        width: 32,
+        height: 8,
+        sheet: { frameWidth: 8, frameHeight: 8, margin: 0, spacing: 0 },
+      },
+    ],
+    animations: [
+      {
+        id: 'anim-1',
+        // The clip name becomes the animation *key*, which is a string literal
+        // rather than an identifier — so it reaches the output with nothing but
+        // `str()` between it and the page, in both `anims.create` and `.play`.
+        name: `${breakout} walk`,
+        assetId: 'sheet-1',
+        // Out of order and repeating, so the emitted frame list is not merely a
+        // range that a start/end pair would also have produced.
+        frames: [0, 2, 1, 2],
+        frameRate: 8,
+        repeat: -1,
+      },
+    ],
     activeSceneId: 'scene-1',
     scenes: [
       {
@@ -104,6 +138,43 @@ export function hostileProject(): Project {
                 children: [],
               },
             ],
+          },
+          {
+            id: 'f',
+            name: `${breakout} player`,
+            type: 'sprite',
+            visible: true,
+            transform: { x: 150, y: 420, rotation: 0, scaleX: 4, scaleY: 4 },
+            props: {
+              assetId: 'sheet-1',
+              alpha: 1,
+              tint: '#ffffff',
+              flipX: false,
+              flipY: false,
+              frame: 0,
+              animationId: 'anim-1',
+            },
+            children: [],
+          },
+          {
+            id: 'g',
+            // The same sheet, still, on a non-zero frame: the other half of the
+            // sprite export — `add.image(..., frame)` rather than
+            // `add.sprite(...).play(...)`. Both have to survive the toolchains.
+            name: 'still frame',
+            type: 'sprite',
+            visible: true,
+            transform: { x: 850, y: 420, rotation: 0, scaleX: 4, scaleY: 4 },
+            props: {
+              assetId: 'sheet-1',
+              alpha: 1,
+              tint: '#ffffff',
+              flipX: false,
+              flipY: false,
+              frame: 3,
+              animationId: null,
+            },
+            children: [],
           },
           {
             id: 'd',

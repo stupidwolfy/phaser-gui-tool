@@ -9,6 +9,16 @@ import {
   type Transform,
 } from './schema';
 
+/**
+ * Frames per second a new animation starts at, and what the parser falls back
+ * to for a clip whose rate is missing or nonsensical.
+ *
+ * Twelve rather than Phaser's own default of 24: a hand-drawn sprite sheet is
+ * usually a handful of frames, and 24fps through six of them is a quarter of a
+ * second of animation, which reads as a flicker rather than as a walk.
+ */
+export const DEFAULT_FRAME_RATE = 12;
+
 export const DEFAULT_SCENE_WIDTH = 960;
 export const DEFAULT_SCENE_HEIGHT = 540;
 
@@ -56,8 +66,17 @@ export function createNode(
         name: name ?? 'Sprite',
         // No asset yet: a new sprite is a placeholder you then point at an
         // image, rather than an add button that opens a file dialog you might
-        // not have an image ready for.
-        props: { assetId: null, alpha: 1, tint: '#ffffff', flipX: false, flipY: false },
+        // not have an image ready for. Frame 0 and no animation is what a plain
+        // image is, so a sprite that never meets a sheet never leaves it.
+        props: {
+          assetId: null,
+          alpha: 1,
+          tint: '#ffffff',
+          flipX: false,
+          flipY: false,
+          frame: 0,
+          animationId: null,
+        },
       };
     case 'container':
       return {
@@ -125,6 +144,7 @@ export function newProject(name = 'Untitled Project'): Project {
     name,
     phaserVersion: TARGET_PHASER_VERSION,
     assets: [],
+    animations: [],
     scenes: [scene],
     activeSceneId: scene.id,
   };

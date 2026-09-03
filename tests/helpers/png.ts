@@ -26,6 +26,11 @@ export function solidPng(width: number, height: number, hex: string): Buffer {
     }
   }
 
+  return encodePng(width, height, raw);
+}
+
+/** The PNG container around already-filtered RGBA rows. */
+function encodePng(width: number, height: number, raw: Buffer): Buffer {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
@@ -64,4 +69,34 @@ function crc32(buffer: Buffer): number {
   let c = 0xffffffff;
   for (const byte of buffer) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * A horizontal strip of solid-colour frames — a sprite sheet whose frames can
+ * be told apart on the canvas by colour alone.
+ *
+ * The animation tests are pixel tests like every other canvas test here, and
+ * the thing they have to see is *which frame* is drawn. A sheet of shapes could
+ * not answer that from a colour centroid; one band per frame can, and the test
+ * gets to state the answer it expects as a hex string.
+ */
+export function stripPng(frameSize: number, hexes: string[]): Buffer {
+  const width = frameSize * hexes.length;
+  const height = frameSize;
+  const raw = Buffer.alloc(height * (1 + width * 4));
+
+  for (let y = 0; y < height; y += 1) {
+    const start = y * (1 + width * 4);
+    raw[start] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const [r, g, b] = rgb(hexes[Math.floor(x / frameSize)]);
+      const i = start + 1 + x * 4;
+      raw[i] = r;
+      raw[i + 1] = g;
+      raw[i + 2] = b;
+      raw[i + 3] = 255;
+    }
+  }
+
+  return encodePng(width, height, raw);
 }
