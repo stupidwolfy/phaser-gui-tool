@@ -557,6 +557,20 @@ export class EditorScene extends Phaser.Scene {
   private pinchDistance = 0;
   /** Once the user has zoomed or panned, stop re-framing the view for them. */
   private cameraTouched = false;
+
+  /**
+   * Which scene the last sync drew, so that switching to another one re-frames
+   * the camera.
+   *
+   * A switch is the one store change that replaces every object on screen at
+   * once, and the camera it leaves behind belongs to the scene that is gone —
+   * a pan over the corner of a 1920-wide level lands somewhere off the edge of
+   * a 480-wide menu, on a canvas that is now empty for no visible reason. The
+   * diff in `syncFromStore` handles the objects themselves with no help; this
+   * is the one thing it cannot see, because both scenes are equally the
+   * document's.
+   */
+  private drawnSceneId: string | null = null;
   /**
    * A drag Phaser started that we are choosing not to honour — a touch landing
    * on an object that wasn't selected yet. See DRAG_START.
@@ -1932,6 +1946,8 @@ export class EditorScene extends Phaser.Scene {
 
   private syncFromStore(state: EditorState): void {
     const scene = activeScene(state.project);
+    const switched = this.drawnSceneId !== null && this.drawnSceneId !== scene.id;
+    this.drawnSceneId = scene.id;
     this.cameras.main.setBackgroundColor(scene.backgroundColor);
 
     this.sceneFrame.setPosition(0, 0).setSize(scene.width, scene.height);
@@ -1964,6 +1980,10 @@ export class EditorScene extends Phaser.Scene {
     }
 
     this.publishMeasuredBounds();
+
+    // After the objects, not before: `zoomToFit` frames the scene rectangle,
+    // and this way the frame it settles on is the one the user sees drawn.
+    if (switched) this.zoomToFit();
   }
 
   /**

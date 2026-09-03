@@ -4,6 +4,7 @@ import {
   useActiveScene,
   useEditorStore,
   usePrefabs,
+  useScenes,
   useSelectionNodes,
 } from '../core/store';
 import {
@@ -238,7 +239,10 @@ function AlignSection({ count }: { count: number }) {
 
 function SceneInspector() {
   const scene = useActiveScene();
+  const sceneCount = useScenes().length;
   const updateScene = useEditorStore((s) => s.updateScene);
+  const duplicateScene = useEditorStore((s) => s.duplicateScene);
+  const removeScene = useEditorStore((s) => s.removeScene);
 
   return (
     <div className="panel">
@@ -269,6 +273,33 @@ function SceneInspector() {
         value={scene.backgroundColor}
         onChange={(backgroundColor) => updateScene({ backgroundColor })}
       />
+
+      {/* Here rather than in the switcher row, which is a row of things you tap
+          to change scenes: a delete button among them is one thumb-width from
+          the chip beside it. These act on the scene whose fields are directly
+          above them, which is also what makes them unambiguous with no chip to
+          point at. */}
+      <div className="field-row">
+        <button
+          className="btn btn--block"
+          onClick={duplicateScene}
+          title="Copy this scene, objects and all, into a new one"
+        >
+          Duplicate scene
+        </button>
+        <button
+          className="btn btn--block btn--danger"
+          disabled={sceneCount < 2}
+          onClick={() => removeScene(scene.id)}
+          title={
+            sceneCount < 2
+              ? 'A project needs at least one scene'
+              : 'Delete this scene and everything in it'
+          }
+        >
+          Delete scene
+        </button>
+      </div>
 
       <SnappingSection />
     </div>

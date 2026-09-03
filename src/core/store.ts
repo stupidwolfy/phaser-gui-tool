@@ -5,6 +5,7 @@ import {
   cloneWithNewIds,
   createInstanceNode,
   createNode,
+  createScene,
   newProject,
 } from './defaults';
 import {
@@ -208,6 +209,44 @@ export interface EditorState {
   resetProject: () => void;
   markSaved: (fileName: string) => void;
   renameProject: (name: string) => void;
+
+  // -- scenes ----------------------------------------------------------------
+  /**
+   * Switches which scene the editor is looking at.
+   *
+   * A document edit like any other, not an editor preference: `activeSceneId`
+   * is saved with the file, so a project reopens on the scene it was left on.
+   * That it is undoable falls out of the same fact, and is what makes undo
+   * legible across a switch — an edit made in another scene is undone *with*
+   * the jump back to the scene it happened in, rather than silently somewhere
+   * the user cannot see.
+   *
+   * Nothing here clears the selection: `editProject` prunes it against the
+   * scene that is now active, and no id from the old one survives that. The
+   * invariant does the work, as it does for a delete.
+   */
+  setActiveScene: (id: string) => void;
+  /** Adds an empty scene and switches to it, in one undo step. */
+  addScene: () => void;
+  /**
+   * Copies the active scene — objects, guides and all, with fresh ids — and
+   * switches to the copy.
+   *
+   * New ids because two scenes sharing a node id would have `findNode` answer
+   * with whichever it reached first, and the renderer keys display objects by
+   * that id. A scene is the one place a duplicate is a whole document subtree
+   * rather than a node, but it is `cloneWithNewIds` doing the work either way.
+   */
+  duplicateScene: () => void;
+  /**
+   * Removes a scene, and switches to a neighbour when it was the active one.
+   *
+   * Refused for the last scene: a project with no scenes has nothing to draw,
+   * no active scene for every panel that reads one, and `parseProject` rejects
+   * the file it would save. "Delete the only scene" means "empty it", which the
+   * tree's own row buttons already do.
+   */
+  removeScene: (id: string) => void;
 
   // -- selection -------------------------------------------------------------
   /** Replaces the selection with one node, or clears it. */
@@ -799,6 +838,24 @@ function withActiveScene(project: Project, fn: (scene: SceneDoc) => SceneDoc): P
   };
 }
 
+/**
+ * A scene name no scene in the project has, starting from `base`.
+ *
+ * Names are free text and nothing enforces uniqueness — two scenes may end up
+ * called the same thing, and the exporter de-duplicates the class name and the
+ * Phaser key it makes from them. What this stops is the editor *offering* a
+ * duplicate: a switcher row with two identical chips is a row where neither
+ * chip says which scene it is.
+ */
+function unusedSceneName(project: Project, base?: string): string {
+  const taken = new Set(project.scenes.map((scene) => scene.name));
+  const stem = base ?? `Scene ${project.scenes.length + 1}`;
+  let candidate = stem;
+  let n = 2;
+  while (taken.has(candidate)) candidate = `${stem} ${n++}`;
+  return candidate;
+}
+
 export function activeScene(project: Project): SceneDoc {
   return (
     project.scenes.find((scene) => scene.id === project.activeSceneId) ??
@@ -971,6 +1028,62 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     renameProject: (name) =>
       set((state) => ({ project: { ...state.project, name }, dirty: true })),
+
+    setActiveScene: (id) =>
+      editProject((project) =>
+        project.activeSceneId === id || !project.scenes.some((scene) => scene.id === id)
+          ? project
+          : { ...project, activeSceneId: id },
+      ),
+
+    addScene: () =>
+      editProject((project) => {
+        const scene = createScene(unusedSceneName(project));
+        return {
+          ...project,
+          scenes: [...project.scenes, scene],
+          activeSceneId: scene.id,
+        };
+      }),
+
+    duplicateScene: () =>
+      editProject((project) => {
+        const current = activeScene(project);
+        const copy: SceneDoc = {
+          ...current,
+          id: newId(),
+          name: unusedSceneName(project, `${current.name} copy`),
+          children: current.children.map(cloneWithNewIds),
+          // Guides are copied with fresh ids for the reason the nodes are: two
+          // guides sharing one would have `moveGuide` and `removeGuide` reach
+          // whichever scene's array they were handed first.
+          guides: guidesOf(current).map((guide) => ({ ...guide, id: newId() })),
+        };
+        const index = project.scenes.indexOf(current);
+        const scenes = [...project.scenes];
+        // Beside the scene it came from rather than at the end: the switcher
+        // lists them in document order, and a copy that appears somewhere else
+        // in that row is a copy the user has to go looking for.
+        scenes.splice(index + 1, 0, copy);
+        return { ...project, scenes, activeSceneId: copy.id };
+      }),
+
+    removeScene: (id) =>
+      editProject((project) => {
+        if (project.scenes.length < 2) return project;
+        const index = project.scenes.findIndex((scene) => scene.id === id);
+        if (index === -1) return project;
+        const scenes = project.scenes.filter((scene) => scene.id !== id);
+        // The neighbour, and the one before it when the last was removed —
+        // where the user was looking, rather than back at the start of the row.
+        const fallback = scenes[Math.min(index, scenes.length - 1)];
+        return {
+          ...project,
+          scenes,
+          activeSceneId:
+            project.activeSceneId === id ? fallback.id : project.activeSceneId,
+        };
+      }),
 
     select: (id) => get().selectMany(id ? [id] : []),
 
@@ -1713,6 +1826,9 @@ export function countPrefabUses(project: Project, prefabId: string): number {
   for (const scene of project.scenes) walk(scene.children);
   return count;
 }
+
+/** Every scene in the project, in document order. A stable array reference. */
+export const useScenes = (): SceneDoc[] => useEditorStore((s) => s.project.scenes);
 
 /** The prefab library. A stable array reference, so no `useShallow` is needed. */
 export const usePrefabs = (): Prefab[] => useEditorStore((s) => s.project.prefabs);

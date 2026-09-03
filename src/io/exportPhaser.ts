@@ -20,11 +20,15 @@ import {
  * A pure function of the document — no editor state reaches it, which is the
  * payoff for keeping Phaser a renderer rather than the source of truth.
  *
- * The two outputs share `buildCreateBody`: the statements that construct the
- * objects are identical JavaScript in both, and only the wrapper differs (a
- * TypeScript module you import, or a self-contained page you can open). Keeping
- * one generator means the runnable preview can never drift from the file you
- * ship.
+ * The two outputs share `buildCreateBody` and `buildSceneClass`: the statements
+ * that construct the objects, and the class around them, are identical
+ * JavaScript in both, and only the wrapper differs (a TypeScript module you
+ * import, or a self-contained page you can open). Keeping one generator means
+ * the runnable preview can never drift from the file you ship.
+ *
+ * Both emit the *whole project* — one class per scene, over one shared image
+ * table and one shared set of prefab factories, which is how the document holds
+ * them too.
  */
 
 /**
@@ -105,6 +109,46 @@ function toClassName(name: string): string {
 }
 
 /**
+ * Each scene's class name and Phaser key, both made unique.
+ *
+ * Scene names are free text and the editor does not force them apart across a
+ * whole project, so two scenes may well be called the same thing — and each
+ * name reaches the output twice over, as a class declaration and as the string
+ * handed to `super()`. A repeat is fatal in both: two `class Main` in one module
+ * will not parse, and two scenes registered under one key has Phaser's manager
+ * refuse the second and a `scene.start` reach whichever it kept.
+ *
+ * The class names come out of the *module's* identifier set before anything
+ * else draws from it, the rule the prefab factories already follow and for the
+ * same reason: a prefab called "main scene" must not bind the name a class
+ * declaration up the file has already taken.
+ */
+interface UsedScene {
+  scene: SceneDoc;
+  className: string;
+  /** What `super(...)` registers it as, and what `scene.start` names. */
+  key: string;
+}
+
+function collectScenes(project: Project, moduleNames: Set<string>): UsedScene[] {
+  const keys = new Set<string>();
+  return project.scenes.map((scene) => ({
+    scene,
+    className: uniqueClassName(scene.name, moduleNames),
+    key: uniqueKey(scene.name, keys),
+  }));
+}
+
+function uniqueClassName(name: string, used: Set<string>): string {
+  const base = toClassName(name);
+  let candidate = base;
+  let n = 2;
+  while (used.has(candidate)) candidate = `${base}${n++}`;
+  used.add(candidate);
+  return candidate;
+}
+
+/**
  * A factory function name for each prefab the scene actually places, in use
  * order.
  *
@@ -126,7 +170,7 @@ interface UsedPrefab {
 
 function collectPrefabs(
   project: Project,
-  scene: SceneDoc,
+  scenes: SceneDoc[],
   moduleNames: Set<string>,
 ): Map<string, UsedPrefab> {
   const used = new Map<string, UsedPrefab>();
@@ -147,7 +191,11 @@ function collectPrefabs(
       walk(node.children);
     }
   };
-  walk(scene.children);
+  // Every scene, into one table: the factories are module-level, so two scenes
+  // placing the same prefab share one function rather than emitting a copy
+  // each. That is the same "one definition, many placements" property inside a
+  // file that the prefab itself is, one level up.
+  for (const scene of scenes) walk(scene.children);
   return used;
 }
 
@@ -166,7 +214,21 @@ function emittedNodes(
   scene: SceneDoc,
   prefabs: Map<string, UsedPrefab>,
 ): GameObjectNode[][] {
-  return [scene.children, ...[...prefabs.values()].map((entry) => entry.prefab.children)];
+  const bodies: GameObjectNode[][] = [scene.children];
+  const seen = new Set<string>();
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      const id = node.type === 'instance' ? node.props.prefabId : null;
+      const entry = id ? prefabs.get(id) : undefined;
+      if (entry && !seen.has(entry.prefab.id)) {
+        seen.add(entry.prefab.id);
+        bodies.push(entry.prefab.children);
+      }
+      walk(node.children);
+    }
+  };
+  walk(scene.children);
+  return bodies;
 }
 
 /**
@@ -184,7 +246,7 @@ interface UsedAsset {
 
 function collectAssets(
   project: Project,
-  scene: SceneDoc,
+  scenes: SceneDoc[],
   prefabs: Map<string, UsedPrefab>,
 ): Map<string, UsedAsset> {
   const used = new Map<string, UsedAsset>();
@@ -207,7 +269,14 @@ function collectAssets(
       walk(node.children);
     }
   };
-  for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+  // One table for the whole file, keyed across every scene: the `ASSETS` const
+  // is module-level, so two scenes using one image must agree on its key. Two
+  // *different* images sharing a file name are exactly the case that decides
+  // it — collected per scene they would each take the key "coin" in their own
+  // pass and overwrite each other in the shared literal.
+  for (const scene of scenes) {
+    for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+  }
   return used;
 }
 
@@ -235,14 +304,18 @@ function buildAssetTable(used: Map<string, UsedAsset>, indent: string): string {
 /**
  * The body of `preload()`, or '' when the scene uses no images.
  *
+ * Filtered to what *this* scene draws, out of a table built for the file: a
+ * menu that loads the whole game's artwork is a menu that waits for it.
+ *
  * A sheet loads through `load.spritesheet` with the document's own four
  * numbers, so the frames the exported game cuts are the frames the editor drew.
  * A plain image still loads through `load.image`, unchanged — emitting every
  * image as a one-frame sheet would work and would make every shape-only-plus-
  * image export differ from what it was for no gain.
  */
-function buildPreloadBody(used: Map<string, UsedAsset>): string {
+function buildPreloadBody(used: Map<string, UsedAsset>, ids: ReadonlySet<string>): string {
   return [...used.values()]
+    .filter(({ asset }) => ids.has(asset.id))
     .map(({ asset, key }) => {
       const sheet = frameGridOf(asset);
       if (!sheet) return `    this.load.image(${str(key)}, ASSETS[${str(key)}]);`;
@@ -277,7 +350,7 @@ interface UsedAnimation {
 
 function collectAnimations(
   project: Project,
-  scene: SceneDoc,
+  scenes: SceneDoc[],
   assets: Map<string, UsedAsset>,
   prefabs: Map<string, UsedPrefab>,
 ): Map<string, UsedAnimation> {
@@ -304,8 +377,42 @@ function collectAnimations(
       walk(node.children);
     }
   };
-  for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+  // Across every scene, so that the key a clip gets is the key it has in the
+  // whole file — an animation is registered on the game's manager, which no
+  // more belongs to one scene than the texture manager does.
+  for (const scene of scenes) {
+    for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+  }
   return used;
+}
+
+/**
+ * What one scene draws out of those file-wide tables: the images it has to
+ * preload, and the clips it has to register before anything plays them.
+ *
+ * Split from the collection rather than folded into it because the two answer
+ * different questions. The tables decide what each thing is *called*, which has
+ * to be settled once for the file; this decides what belongs in one scene's
+ * `preload` and `create`, and a scene that registered a clip over a texture it
+ * never loaded would throw in `generateFrameNumbers` before drawing anything.
+ */
+function usedIn(
+  scene: SceneDoc,
+  prefabs: Map<string, UsedPrefab>,
+): { assets: Set<string>; animations: Set<string> } {
+  const assets = new Set<string>();
+  const animations = new Set<string>();
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'sprite') {
+        if (node.props.assetId) assets.add(node.props.assetId);
+        if (node.props.animationId) animations.add(node.props.animationId);
+      }
+      walk(node.children);
+    }
+  };
+  for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+  return { assets, animations };
 }
 
 /**
@@ -324,22 +431,38 @@ function uniqueKey(name: string, used: Set<string>): string {
   return candidate;
 }
 
-/** The `anims.create` calls, which have to run before anything plays one. */
-function buildAnimationLines(used: Map<string, UsedAnimation>): string[] {
+/**
+ * The `anims.create` calls, which have to run before anything plays one.
+ *
+ * Guarded by `anims.exists`, because an animation belongs to the *game* while
+ * `create()` belongs to a scene and may run more than once against it: two
+ * scenes playing the same clip both need it registered, and a scene restarted
+ * — the ordinary way a game returns to its menu — runs this a second time. An
+ * unguarded second `anims.create` under a key the manager already has is
+ * refused with a warning, so the guard costs a line and buys a clean console
+ * in both cases.
+ */
+function buildAnimationLines(
+  used: Map<string, UsedAnimation>,
+  ids: ReadonlySet<string>,
+): string[] {
   const lines: string[] = [];
   for (const { clip, key, textureKey } of used.values()) {
-    lines.push('this.anims.create({');
-    lines.push(`  key: ${str(key)},`);
+    if (!ids.has(clip.id)) continue;
+    lines.push(`if (!this.anims.exists(${str(key)})) {`);
+    lines.push('  this.anims.create({');
+    lines.push(`    key: ${str(key)},`);
     // `generateFrameNumbers` with an explicit list rather than a start and an
     // end: the document stores a list, and a list is what expresses a sequence
     // that repeats or runs backwards — a ping-pong is [0, 1, 2, 1].
     lines.push(
-      `  frames: this.anims.generateFrameNumbers(${str(textureKey)}, ` +
+      `    frames: this.anims.generateFrameNumbers(${str(textureKey)}, ` +
         `{ frames: [${clip.frames.join(', ')}] }),`,
     );
-    lines.push(`  frameRate: ${num(clip.frameRate)},`);
-    lines.push(`  repeat: ${num(clip.repeat)},`);
-    lines.push('});');
+    lines.push(`    frameRate: ${num(clip.frameRate)},`);
+    lines.push(`    repeat: ${num(clip.repeat)},`);
+    lines.push('  });');
+    lines.push('}');
     lines.push('');
   }
   return lines;
@@ -567,7 +690,11 @@ function buildFactories(
 }
 
 /** The body of `create()`, shared verbatim by both outputs. */
-function buildCreateBody(scene: SceneDoc, ctx: EmitContext): string {
+function buildCreateBody(
+  scene: SceneDoc,
+  ctx: EmitContext,
+  plays: ReadonlySet<string>,
+): string {
   const { animations } = ctx;
   // Seeded with the factory names as well as `this`: the instance calls are in
   // this scope, so an object named "create coin" bound here would shadow the
@@ -583,9 +710,10 @@ function buildCreateBody(scene: SceneDoc, ctx: EmitContext): string {
   // Before the objects, because an object's `.play(...)` names one: animations
   // are registered on the game's manager, and playing a key it has not been
   // given is a warning and a sprite that never moves.
-  if (animations.size > 0) {
+  const registrations = buildAnimationLines(animations, plays);
+  if (registrations.length > 0) {
     lines.push('');
-    lines.push(...buildAnimationLines(animations));
+    lines.push(...registrations);
   }
 
   // `buildAnimationLines` already ends on a blank, so this is the separator
@@ -604,7 +732,77 @@ const header = (project: Project) =>
 export type SceneLanguage = 'ts' | 'js';
 
 /**
- * A Scene class module to drop into an existing Phaser project.
+ * Everything both outputs need to emit the whole project once.
+ *
+ * The tables are file-wide and the classes are per scene, and the order here is
+ * what keeps that from tangling: class names are allocated first, out of the
+ * module's identifier set, then the prefab factory names out of the same set,
+ * and only then the things that are string keys rather than identifiers. A
+ * factory that had taken `Main` before the class declaration did would produce
+ * a module that does not parse.
+ */
+interface Emission {
+  scenes: UsedScene[];
+  ctx: EmitContext;
+  /**
+   * The scene the editor is on. It is the module's default export and the
+   * scene the runnable page starts, because it is the one the user was looking
+   * at when they pressed the button — and it is document state, saved with the
+   * file, so the same project exports the same way for anyone who opens it.
+   */
+  boot: UsedScene;
+}
+
+function prepare(project: Project): Emission {
+  const moduleNames = new Set<string>();
+  const scenes = collectScenes(project, moduleNames);
+  const prefabs = collectPrefabs(project, project.scenes, moduleNames);
+  const assets = collectAssets(project, project.scenes, prefabs);
+  const animations = collectAnimations(project, project.scenes, assets, prefabs);
+  const current = activeScene(project);
+  return {
+    scenes,
+    ctx: { assets, animations, prefabs, receiver: 'this' },
+    boot: scenes.find((entry) => entry.scene.id === current.id) ?? scenes[0],
+  };
+}
+
+/**
+ * One Scene class, at zero indent.
+ *
+ * Shared by the module and the runnable page for the reason `buildCreateBody`
+ * is: the class around the body is as much of the output as the body itself,
+ * and a second copy of it here is a second place for the two to drift. The page
+ * shifts the whole block right rather than passing an indent in, so there is
+ * one layout to get right instead of one per method.
+ */
+function buildSceneClass(
+  entry: UsedScene,
+  ctx: EmitContext,
+  language: SceneLanguage,
+  exported: boolean,
+): string {
+  const returnType = language === 'ts' ? ': void' : '';
+  const usage = usedIn(entry.scene, ctx.prefabs);
+  const preload =
+    usage.assets.size > 0
+      ? `  preload()${returnType} {\n${buildPreloadBody(ctx.assets, usage.assets)}\n  }\n\n`
+      : '';
+
+  return `${exported ? 'export ' : ''}class ${entry.className} extends Phaser.Scene {
+  constructor() {
+    super(${str(entry.key)});
+  }
+
+${preload}  create()${returnType} {
+${buildCreateBody(entry.scene, ctx, usage.animations)}
+  }
+}`;
+}
+
+/**
+ * The Scene classes as a module to drop into an existing Phaser project — one
+ * class per scene in the project, in document order.
  *
  * The `create()` body is plain JavaScript in both languages, which is what lets
  * the runnable page embed it verbatim; the two differ only in annotations —
@@ -613,63 +811,48 @@ export type SceneLanguage = 'ts' | 'js';
  * three implicit `any`s under the `--strict` the exported `.ts` is compiled
  * with.
  *
+ * Every scene is emitted, not only the one on screen: a game's scenes are
+ * registered together and start each other by key, so an export that carried
+ * one of them would be a game with nowhere to go. The images and the prefab
+ * factories are shared across them exactly as they are shared in the document,
+ * which is most of the point — two levels built from one set of prefabs export
+ * as one copy of each.
+ *
  * Both are ES modules that import Phaser, matching how a bundler-based project
  * consumes them. The script-tag flavour, where Phaser is a global and there are
  * no imports, is what the runnable HTML export already produces, so the three
  * outputs cover the three real cases without overlapping.
  */
-export function generateScene(
-  project: Project,
-  language: SceneLanguage = 'ts',
-  scene = activeScene(project),
-): string {
-  const className = toClassName(scene.name);
-  const returnType = language === 'ts' ? ': void' : '';
-  // Factory names come out of the module's identifier set before anything else
-  // draws from it, so a later object binding is the one that gets renamed.
-  const moduleNames = new Set<string>([className]);
-  const prefabs = collectPrefabs(project, scene, moduleNames);
-  const assets = collectAssets(project, scene, prefabs);
-  const animations = collectAnimations(project, scene, assets, prefabs);
-  const ctx: EmitContext = { assets, animations, prefabs, receiver: 'this' };
+export function generateScene(project: Project, language: SceneLanguage = 'ts'): string {
+  const { scenes, ctx, boot } = prepare(project);
 
-  // A scene with no images emits no ASSETS const and no preload() at all, so
+  // A project with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
-  const table = assets.size > 0 ? `\n${buildAssetTable(assets, '')}\n` : '';
-  // Likewise: a scene that places no prefab emits no factories, so every
+  const table = ctx.assets.size > 0 ? `\n${buildAssetTable(ctx.assets, '')}\n` : '';
+  // Likewise: a project that places no prefab emits no factories, so every
   // project that predates them exports byte for byte what it always did.
   const factories =
-    prefabs.size > 0 ? `\n${buildFactories(ctx, language, '')}\n` : '';
-  const preload =
-    assets.size > 0 ? `  preload()${returnType} {\n${buildPreloadBody(assets)}\n  }\n\n` : '';
+    ctx.prefabs.size > 0 ? `\n${buildFactories(ctx, language, '')}\n` : '';
+  const classes = scenes
+    .map((entry) => buildSceneClass(entry, ctx, language, true))
+    .join('\n\n');
 
   return `${header(project)}
 import Phaser from 'phaser';
 ${table}${factories}
-export class ${className} extends Phaser.Scene {
-  constructor() {
-    super(${str(scene.name)});
-  }
+${classes}
 
-${preload}  create()${returnType} {
-${buildCreateBody(scene, ctx)}
-  }
-}
-
-export default ${className};
+export default ${boot.className};
 `;
 }
 
 /**
- * A self-contained page that runs the scene. Phaser comes from a CDN pinned to
- * the version the project records, so an old project keeps working against the
- * Phaser it was built for.
+ * A self-contained page that runs the project. Phaser comes from a CDN pinned
+ * to the version the project records, so an old project keeps working against
+ * the Phaser it was built for.
  */
-export function generateRunnableHtml(
-  project: Project,
-  scene = activeScene(project),
-): string {
-  const className = toClassName(scene.name);
+export function generateRunnableHtml(project: Project): string {
+  const { scenes, ctx, boot } = prepare(project);
   // phaserVersion comes from the project file, so it is not trustworthy input
   // for a URL. Anything that is not a plain version falls back to the version
   // this editor targets.
@@ -677,22 +860,30 @@ export function generateRunnableHtml(
     ? project.phaserVersion
     : TARGET_PHASER_VERSION;
   const cdn = `https://cdn.jsdelivr.net/npm/phaser@${version}/dist/phaser.min.js`;
-  const moduleNames = new Set<string>([className]);
-  const prefabs = collectPrefabs(project, scene, moduleNames);
-  const assets = collectAssets(project, scene, prefabs);
-  const animations = collectAnimations(project, scene, assets, prefabs);
-  const ctx: EmitContext = { assets, animations, prefabs, receiver: 'this' };
 
   const table =
-    assets.size > 0 ? `${buildAssetTable(assets, '      ')}\n\n` : '';
+    ctx.assets.size > 0 ? `${buildAssetTable(ctx.assets, '      ')}\n\n` : '';
   // The JavaScript flavour of the factories: this page has no type annotations
   // anywhere, and Phaser is a global here rather than an import.
   const factories =
-    prefabs.size > 0 ? `${buildFactories(ctx, 'js', '      ')}\n\n` : '';
-  const preload =
-    assets.size > 0
-      ? `        preload() {\n${buildPreloadBody(assets).replace(/^/gm, '    ')}\n        }\n\n`
-      : '';
+    ctx.prefabs.size > 0 ? `${buildFactories(ctx, 'js', '      ')}\n\n` : '';
+  const classes = scenes
+    .map((entry) =>
+      buildSceneClass(entry, ctx, 'js', false).replace(/^(?!$)/gm, '      '),
+    )
+    .join('\n\n')
+    .trimStart();
+
+  // Phaser starts the first scene in the list and registers the rest, so the
+  // scene the editor was showing goes first and the others are there for it to
+  // `scene.start`. A single-scene project passes the class itself, which is
+  // what it always emitted.
+  const registered =
+    scenes.length > 1
+      ? `[${[boot, ...scenes.filter((entry) => entry !== boot)]
+          .map((entry) => entry.className)
+          .join(', ')}]`
+      : boot.className;
 
   /**
    * The whole script, escaped in one pass at the end rather than fragment by
@@ -707,26 +898,18 @@ export function generateRunnableHtml(
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${factories}      class ${className} extends Phaser.Scene {
-        constructor() {
-          super(${str(scene.name)});
-        }
-
-${preload}        create() {
-${buildCreateBody(scene, ctx).replace(/^/gm, '    ')}
-        }
-      }
+${table}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,
-        width: ${num(scene.width)},
-        height: ${num(scene.height)},
-        backgroundColor: ${str(scene.backgroundColor)},
+        width: ${num(boot.scene.width)},
+        height: ${num(boot.scene.height)},
+        backgroundColor: ${str(boot.scene.backgroundColor)},
         scale: {
           mode: Phaser.Scale.FIT,
           autoCenter: Phaser.Scale.CENTER_BOTH,
         },
-        scene: ${className},
+        scene: ${registered},
       });`;
 
   return `<!doctype html>
@@ -736,7 +919,7 @@ ${buildCreateBody(scene, ctx).replace(/^/gm, '    ')}
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${escapeHtml(project.name)}</title>
     <style>
-      html, body { margin: 0; height: 100%; background: ${cssColor(scene.backgroundColor)}; }
+      html, body { margin: 0; height: 100%; background: ${cssColor(boot.scene.backgroundColor)}; }
       body { display: grid; place-items: center; }
       canvas { display: block; }
     </style>
@@ -751,7 +934,15 @@ ${buildCreateBody(scene, ctx).replace(/^/gm, '    ')}
 `;
 }
 
-/** File name for an export, derived from the scene rather than the project. */
+/**
+ * File name for an export, derived from the scene being edited rather than from
+ * the project.
+ *
+ * Still the scene rather than the project now that the file holds every scene:
+ * that scene is the module's default export and the page's boot scene, so the
+ * name says which game the file starts, and a single-scene project — which is
+ * most of them — keeps the name it always had.
+ */
 export function exportFileName(project: Project, extension: string): string {
   const scene = activeScene(project);
   return `${toClassName(scene.name)}${extension}`;

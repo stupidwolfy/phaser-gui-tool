@@ -270,6 +270,43 @@ export function hostileProject(): Project {
           },
         ],
       },
+      {
+        id: 'scene-2',
+        // Deliberately the *same name* as the scene above. A name reaches the
+        // output twice over — as a class declaration and as the key handed to
+        // `super()` — and a repeat is fatal in both: two `class Main` in one
+        // module will not parse, and two scenes under one key has Phaser keep
+        // the first and lose the second. Nothing in the editor stops a user
+        // calling two scenes the same thing, so the exporter has to.
+        name: `Main ${breakout} Scene`,
+        width: 960,
+        height: 540,
+        backgroundColor: '#101820',
+        children: [
+          {
+            id: 'k',
+            // The same sheet and the same clip as the first scene's player.
+            // Both scenes therefore preload the one texture and register the
+            // one animation, which is what the `anims.exists` guard is for —
+            // an animation belongs to the game, not to the scene that got
+            // there first.
+            name: `${breakout} second player`,
+            type: 'sprite',
+            visible: true,
+            transform: { x: 480, y: 270, rotation: 0, scaleX: 4, scaleY: 4 },
+            props: {
+              assetId: 'sheet-1',
+              alpha: 1,
+              tint: '#ffffff',
+              flipX: false,
+              flipY: false,
+              frame: 0,
+              animationId: 'anim-1',
+            },
+            children: [],
+          },
+        ],
+      },
     ],
   };
 }

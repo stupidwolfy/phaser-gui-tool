@@ -27,7 +27,9 @@ this in the scene". Iteration 11 (shipped) made an image more than one picture: 
 grid on the asset, animation clips on the project, and a canvas that plays them on
 request. Iteration 12 (shipped) made a piece of layout reusable: prefab definitions on the
 project, an `instance` node that draws one, and an export that emits a factory function
-per prefab rather than a copy per placement. See the README for the user-facing feature
+per prefab rather than a copy per placement. Iteration 13 (shipped) made the `scenes`
+array hold more than one: a switcher, and an export that emits every scene rather than the
+one on screen. See the README for the user-facing feature
 list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -457,6 +459,84 @@ plus its own transform, name, visibility and alpha.
 - **The clip's field is labelled "Prefab name" for the reason the clip's is "Animation
   name".** The object's own Name field is a few rows up the same panel, and this one is the
   definition's, shared by every instance — and the factory function's name in exported code.
+
+## Scenes
+
+`project.scenes` has been an array since the first iteration and `activeSceneId` has
+always named one entry of it; iteration 13 let a second entry exist. Almost nothing had to
+change for that, which is the point of the shape — `activeScene`, `withActiveScene` and
+`useActiveScene` were already the only readers.
+
+- **Switching scenes is a document edit, not an editor preference.** `activeSceneId` is
+  saved with the file, so a project reopens on the scene it was left on, and the switch is
+  undoable because it is part of the document. That is what makes undo legible across one:
+  an edit made in another scene is undone *with* the jump back to the scene it happened
+  in, rather than silently somewhere the user cannot see. It also means switching marks
+  the file dirty, which is honest — the saved bytes differ.
+- **Nothing clears the selection on a switch.** `editProject` prunes it against the scene
+  that is now active and no id from the old one survives that, exactly as for a delete.
+  The invariant does the work; a `select(null)` here would be a second place to remember.
+- **The renderer needed one line.** `syncFromStore` reads `activeScene` and diffs display
+  objects against it, so a switch destroys every object of the old scene and builds the
+  new one with the machinery that was already there. The one thing the diff cannot see is
+  the *camera*: it belongs to the scene that is gone, so `drawnSceneId` notices the change
+  and re-fits. A pan over the corner of a 1920-wide level is off the edge of a 480-wide
+  menu, on a canvas that would then be empty for no visible reason.
+- **`SCHEMA_VERSION` did not bump, and this is the guides case rather than the prefabs
+  one.** The rule is "would a deployed older build break on this file", and a v5 build
+  does not: `parseProject` passes `scenes` through verbatim and validates `activeSceneId`
+  against that array, so an old build opens a two-scene file on the same scene, draws it
+  identically, and carries the other one back out on a re-save. Nothing is dropped and
+  nothing is undefined. `scenes.spec.ts` asserts the 5 in the saved artefact so a future
+  bump is a deliberate act. **This stays contingent on `parseProject` not reconstructing
+  the scenes field by field**, exactly as the guides decision is.
+- **The switcher is in the scene panel; duplicate and delete are in the inspector.** The
+  scene panel is on screen at all times while `SceneInspector` appears only with an empty
+  selection, so a switcher there would mean deselecting before every switch — the argument
+  that already put the prefab list in that panel. The two destructive actions go the other
+  way on purpose: they are about the scene you are *in*, they sit under its own name and
+  size fields, and a delete button in a row of chips you tap to switch is a delete button
+  one thumb-width from the wrong target.
+- **A chip's accessible name is `Switch to <name>`, not the scene's name.** The mobile tab
+  bar's labels are single common words matched *exactly*, so a scene a user calls "Scene"
+  would otherwise put a second button reading exactly "Scene" on the page — the trap the
+  prefab buttons' `+ ` prefix exists for, arriving by a different route because a chip has
+  no prefix to give it.
+- **The switcher row hides itself for a one-scene project**, since there is nothing to
+  switch to, but `+ Scene` stays: it is the only way to reach the second one.
+- **`removeScene` refuses the last scene.** A project with no scenes has no active scene
+  for every panel that reads one, nothing to draw, and `parseProject` rejects the file it
+  would save. "Delete the only scene" means "empty it", which the tree's row buttons do.
+- **`duplicateScene` gives the copy fresh node *and* guide ids.** Two scenes sharing a node
+  id would have `findNode` answer with whichever it reached first, and the renderer keys
+  display objects by that id.
+- **The export emits every scene, and the tables are file-wide.** A game's scenes are
+  registered together and start each other by key, so an export carrying only the one on
+  screen would be a game with nowhere to go. `prepare` builds the class names, the prefab
+  factories, the `ASSETS` table and the animation keys once for the whole file — a
+  second scene drawing the same sheet adds nothing to any of them, which is the same "one
+  definition, many placements" property a prefab has, one level up. `usedIn` then answers
+  what *one* scene has to preload and register: a menu that loads the whole game's artwork
+  is a menu that waits for it, and a scene that registered a clip over a texture it never
+  loaded would throw in `generateFrameNumbers` before drawing anything.
+- **Scene names are de-duplicated twice over.** A name reaches the output as a class
+  declaration *and* as the key handed to `super()`, and a repeat is fatal in both: two
+  `class Main` in one module will not parse, and two scenes under one key has Phaser's
+  manager keep the first and lose the second. Class names come out of the module's
+  identifier set before the prefab factories draw from it, the rule the factories already
+  followed for object bindings.
+- **`anims.create` is guarded by `anims.exists`.** An animation belongs to the *game* while
+  `create()` belongs to a scene and may run more than once against it — two scenes playing
+  one clip, or a scene restarted, which is the ordinary way a game returns to its menu.
+  This is the one place a single-scene export changed shape, and it was already wrong
+  there.
+- **The scene being edited is the module's default export and the page's boot scene**,
+  with the rest registered after it. It is the scene the user was looking at when they
+  pressed the button, and it is document state, so the same project exports the same way
+  for anyone who opens it.
+- **Nothing in the editor starts one scene from another.** That is a line of game logic
+  rather than a piece of layout, and the document has no place to put it that would not be
+  the beginning of a scripting model.
 
 ## Selection
 
@@ -910,6 +990,7 @@ tests/
   guides.spec.ts            placing a guide, dragging it, and a drag agreeing with it
   animation.spec.ts         slicing a sheet, drawing one frame, playing a clip
   prefabs.spec.ts           saving a prefab, placing it twice, editing it once
+  scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
@@ -1091,7 +1172,7 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 Texture atlases (the asset table holds whole images cut on a regular grid; an atlas is
 named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
-than more of this one), tilemaps, physics, particles, audio, cameras, and multiple scenes.
+than more of this one), tilemaps, physics, particles, audio, and cameras.
 
 Prefabs shipped in iteration 12, with two deliberate holes left in them: **a definition
 may not contain an instance**, and there are no **per-instance overrides**. The first is
@@ -1104,8 +1185,8 @@ that.
 
 Alignment and distribution shipped in iteration 6, snapping in iteration 7, equal spacing
 and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9,
-persistent guides in iteration 10, sprite sheets with animations in iteration 11, and
-prefabs in iteration 12. The
+persistent guides in iteration 10, sprite sheets with animations in iteration 11, prefabs
+in iteration 12, and multiple scenes in iteration 13. The
 boxes the geometry family needs are in `src/core/bounds.ts`,
 which any further geometry tool can read. That family is complete in the sense that
 mattered — the user can now author a line of their own — and what is left of it is more of

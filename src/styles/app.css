@@ -207,6 +207,22 @@ select {
   min-width: 0;
   padding: 0 6px;
   font-size: 13px;
+  /* The row's grid gives every button an equal share of the column, and the
+     labels in it are free user text — a scene or a prefab called something
+     long would otherwise spill out of its own chip rather than be cut off in
+     it, since `.btn` is `nowrap`. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The scene the tree below is showing. Lit like the Multi toggle and for the
+   same reason — it is a state the rest of the panel is read against, not an
+   action — and the name is allowed to ellipsis rather than widen the grid,
+   since it is only ever a handful of scenes deciding the column count. */
+.btn--add.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 /* A sticky mode, not an action: it stays lit while it is on, because the rows
@@ -597,6 +613,14 @@ select {
 }
 
 .field-row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The row also carries pairs of buttons — duplicate and delete a scene — and a
+   `.btn--block` is 100% wide, so without this the two of them shrink by
+   whatever the browser decides rather than taking half each. */
+.field-row > .btn {
   flex: 1;
   min-width: 0;
 }

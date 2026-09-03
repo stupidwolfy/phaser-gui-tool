@@ -152,22 +152,39 @@ export function cloneWithNewIds(node: GameObjectNode): GameObjectNode {
 }
 
 /**
- * A new project is never empty — an empty canvas gives a first-time visitor
- * nothing to click, and no way to tell the editor from a broken page.
+ * A scene with nothing in it.
+ *
+ * The starting size, colour and shape of a scene live here rather than in the
+ * store's `addScene`, so that the scene a new project opens on and the scene
+ * the user adds later are the same object built by the same function — the
+ * second one differing only in being empty, which is the one thing that is
+ * genuinely different about it. See `newProject` for why the first is not.
  */
-export function newProject(name = 'Untitled Project'): Project {
-  const scene: SceneDoc = {
+export function createScene(name: string, children: GameObjectNode[] = []): SceneDoc {
+  return {
     id: newId(),
-    name: 'MainScene',
+    name,
     width: DEFAULT_SCENE_WIDTH,
     height: DEFAULT_SCENE_HEIGHT,
     backgroundColor: '#1d2330',
-    children: [
-      createNode('rectangle', 480, 320, 'Platform'),
-      createNode('ellipse', 300, 190, 'Ball'),
-      createNode('text', 480, 110, 'Title'),
-    ],
+    children,
   };
+}
+
+/**
+ * A new project is never empty — an empty canvas gives a first-time visitor
+ * nothing to click, and no way to tell the editor from a broken page.
+ *
+ * A scene the user adds to an existing project is empty, and deliberately: by
+ * then they have already seen what an object looks like, and three example
+ * objects to delete is work rather than a welcome.
+ */
+export function newProject(name = 'Untitled Project'): Project {
+  const scene = createScene('MainScene', [
+    createNode('rectangle', 480, 320, 'Platform'),
+    createNode('ellipse', 300, 190, 'Ball'),
+    createNode('text', 480, 110, 'Title'),
+  ]);
 
   return {
     schemaVersion: SCHEMA_VERSION,

@@ -56,6 +56,10 @@ on a desktop.
   prefab from it. Deleting a prefab detaches its instances rather than deleting the
   objects, and exported code gets one factory function per prefab, called once per
   placement
+- Build a game out of several **scenes**: `+ Scene` in the scene panel adds one, the
+  chips beside it switch between them, and the inspector duplicates or deletes the one
+  you are in. Images, animations and prefabs are shared by all of them; the project
+  reopens on the scene you left it on
 - Duplicate, copy and paste objects, keeping their styling
 - Change draw order with the inspector's Arrange buttons, or by dragging rows in the
   scene tree (the first row is the object furthest back; inside a group, the same applies
@@ -64,9 +68,10 @@ on a desktop.
   step
 - Save and open `.phaser.json` project files from your device, with an autosaved draft in
   the browser so a closed tab doesn't lose your work
-- Export the scene as real Phaser code: a Scene class in TypeScript or JavaScript, or a
-  self-contained runnable HTML page — images included, so an export needs no files
-  alongside it
+- Export the project as real Phaser code: a Scene class per scene in TypeScript or
+  JavaScript, or a self-contained runnable HTML page — images included, so an export needs
+  no files alongside it. The scene you are editing is the module's default export and the
+  one the page starts; the rest are registered alongside it, ready for `scene.start`
 - Three panels on desktop, canvas plus bottom sheets on a phone
 
 ### Keyboard
@@ -121,11 +126,13 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; twelve iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; thirteen iterations in, it is a
 working editor but a small one.
 
-**Not built yet** — texture atlases, tilemaps, physics, particles, audio, cameras and
-multiple scenes. Prefabs are in, with two limits: a prefab cannot contain another prefab,
+**Not built yet** — texture atlases, tilemaps, physics, particles, audio and cameras.
+Scenes are in, with one limit: nothing in the editor starts one scene from another, since
+that is a line of game logic rather than a piece of layout — the export registers them all
+and leaves `this.scene.start('Level 2')` to you. Prefabs are in, with two limits: a prefab cannot contain another prefab,
 and an instance cannot override part of what it draws — detach it and edit the copy.
 
 **Verified by** a Playwright suite that drives the production build in Chromium at both
