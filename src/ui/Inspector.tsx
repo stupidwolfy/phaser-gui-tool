@@ -1,5 +1,13 @@
-import { useActiveScene, useEditorStore, useSelectionNodes } from '../core/store';
+import { useState } from 'react';
 import {
+  countPrefabUses,
+  useActiveScene,
+  useEditorStore,
+  usePrefabs,
+  useSelectionNodes,
+} from '../core/store';
+import {
+  containsInstance,
   containsNode,
   findAsset,
   findParent,
@@ -41,8 +49,11 @@ function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
   const duplicateSelection = useEditorStore((s) => s.duplicateSelection);
   const deleteSelection = useEditorStore((s) => s.deleteSelection);
   const setSelectionVisible = useEditorStore((s) => s.setSelectionVisible);
+  const createPrefabFromSelection = useEditorStore((s) => s.createPrefabFromSelection);
 
   const anyVisible = nodes.some((node) => node.visible);
+  // A definition may not place a prefab of its own — see `prefabChildrenOf`.
+  const nestsPrefab = containsInstance(nodes);
 
   return (
     <div className="panel">
@@ -71,6 +82,18 @@ function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
           {anyVisible ? 'Hide' : 'Show'}
         </button>
       </div>
+      <button
+        className="btn btn--block"
+        disabled={nestsPrefab}
+        onClick={createPrefabFromSelection}
+        title={
+          nestsPrefab
+            ? 'A prefab cannot contain another prefab yet'
+            : 'Reuse these objects, linked, anywhere in the project'
+        }
+      >
+        Save as prefab
+      </button>
 
       <AlignSection count={nodes.length} />
 
@@ -396,6 +419,164 @@ function GuidesSection() {
   );
 }
 
+/**
+ * The prefab controls on an ordinary object: save it as a new prefab, and — for
+ * a group — push it into an existing one.
+ *
+ * That second half is the whole reason there is no prefab editing *mode*. A
+ * group's own frame is exactly an instance's frame, so its children's
+ * transforms transfer with no arithmetic at all — which makes "detach an
+ * instance, edit it with every tool that already exists, push it back" a
+ * complete round trip, and a mode only a second place to do the same thing.
+ *
+ * Saving is offered for every type, not only for groups: one object is a
+ * selection of one, and `createPrefabFromSelection` wraps whatever it is given
+ * the same way. Replacing is not, because a definition comes from a node's
+ * children and a rectangle has none — the answer for a single object is to
+ * detach the instance, which gives back a group.
+ */
+function NodePrefabSection({ node }: { node: GameObjectNode }) {
+  const prefabs = usePrefabs();
+  const createPrefabFromSelection = useEditorStore((s) => s.createPrefabFromSelection);
+  const updatePrefabFrom = useEditorStore((s) => s.updatePrefabFrom);
+  const [target, setTarget] = useState('');
+
+  const nestsPrefab = containsInstance(node.children);
+  const chosen = prefabs.find((prefab) => prefab.id === target);
+  const replaceable = node.type === 'container' && prefabs.length > 0;
+
+  return (
+    <>
+      <div className="panel__section">Prefab</div>
+      {nestsPrefab ? (
+        <p className="hint">
+          This group places a prefab of its own, and a prefab cannot contain another one
+          yet.
+        </p>
+      ) : (
+        <>
+          <button className="btn btn--block" onClick={createPrefabFromSelection}>
+            Save as prefab
+          </button>
+          {replaceable && (
+            <>
+              <SelectField
+                label="Update"
+                value={target}
+                options={[
+                  { value: '', label: 'Choose a prefab…' },
+                  ...prefabs.map((prefab) => ({ value: prefab.id, label: prefab.name })),
+                ]}
+                onChange={setTarget}
+              />
+              <button
+                className="btn btn--block"
+                disabled={!chosen}
+                onClick={() => chosen && updatePrefabFrom(chosen.id, node.id)}
+              >
+                {chosen ? `Replace ${chosen.name} with this group` : 'Replace a prefab'}
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * The panel for a placed prefab.
+ *
+ * What it edits is deliberately split in two: the fields above this belong to
+ * the *instance* — where it is, how big, what it is called — and the ones here
+ * belong to the *definition*, shared with every other placement. The use count
+ * is what makes that difference visible before the user finds it out.
+ *
+ * There are no controls for the contents, because an instance has none of its
+ * own: they are read from the definition every time it is drawn, which is what
+ * makes one edit reach every placement. Detach is the way to get editable
+ * objects, and it says so.
+ */
+function InstanceSection({ node }: { node: GameObjectNode }) {
+  const prefabs = usePrefabs();
+  const uses = useEditorStore((s) =>
+    node.type === 'instance' && node.props.prefabId
+      ? countPrefabUses(s.project, node.props.prefabId)
+      : 0,
+  );
+  const updateProps = useEditorStore((s) => s.updateProps);
+  const renamePrefab = useEditorStore((s) => s.renamePrefab);
+  const removePrefab = useEditorStore((s) => s.removePrefab);
+  const detachInstance = useEditorStore((s) => s.detachInstance);
+
+  if (node.type !== 'instance') return null;
+  const prefab = prefabs.find((entry) => entry.id === node.props.prefabId);
+
+  return (
+    <>
+      {prefab ? (
+        <p className="hint">
+          {uses === 1
+            ? 'The only instance of this prefab. Editing it changes this one.'
+            : `One of ${uses} instances — editing the prefab changes all of them.`}
+        </p>
+      ) : (
+        <p className="hint">
+          This prefab is no longer in the project, so there is nothing to draw. Point it at
+          another one, or delete it.
+        </p>
+      )}
+
+      <SelectField
+        label="Prefab"
+        value={node.props.prefabId ?? ''}
+        options={[
+          { value: '', label: prefab ? 'None' : 'Missing — choose one' },
+          ...prefabs.map((entry) => ({ value: entry.id, label: entry.name })),
+        ]}
+        onChange={(prefabId) => updateProps(node.id, { prefabId: prefabId || null })}
+      />
+
+      {prefab && (
+        /* "Prefab name", not "Name": the object's own Name field is a few rows
+           up this same panel, and this one is the definition's, shared by every
+           instance — and the factory function's name in exported code. */
+        <TextField
+          label="Prefab name"
+          value={prefab.name}
+          onChange={(name) => renamePrefab(prefab.id, name)}
+        />
+      )}
+
+      <NumberField
+        label="Alpha"
+        value={node.props.alpha}
+        step={0.05}
+        min={0}
+        max={1}
+        onChange={(alpha) => updateProps(node.id, { alpha })}
+      />
+
+      <button
+        className="btn btn--block"
+        onClick={() => detachInstance(node.id)}
+        title="Turn this into an ordinary group you can edit"
+      >
+        Detach into a group
+      </button>
+      {prefab && (
+        <button
+          className="btn btn--block btn--danger"
+          onClick={() => removePrefab(prefab.id)}
+          title={`Detaches ${uses} instance${uses === 1 ? '' : 's'} and removes the prefab`}
+        >
+          Delete prefab
+        </button>
+      )}
+    </>
+  );
+}
+
 /** Heading for the per-type section, which is the only thing that differs. */
 const SECTION_TITLE: Record<GameObjectNode['type'], string> = {
   rectangle: 'Shape',
@@ -403,6 +584,7 @@ const SECTION_TITLE: Record<GameObjectNode['type'], string> = {
   text: 'Text',
   sprite: 'Image',
   container: 'Group',
+  instance: 'Prefab',
 };
 
 /** The value the parent picker uses for "not in a group at all". */
@@ -596,6 +778,10 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
           nowhere else to live. */}
       <AlignSection count={1} />
 
+      {/* An instance's own prefab controls live in the per-type section below,
+          under the heading `SECTION_TITLE` already gives it. */}
+      {node.type !== 'instance' && <NodePrefabSection node={node} />}
+
       <div className="panel__section">Transform</div>
       <div className="field-row">
         <NumberField
@@ -744,6 +930,8 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
           />
         </>
       )}
+
+      {node.type === 'instance' && <InstanceSection node={node} />}
 
       {node.type === 'text' && (
         <>

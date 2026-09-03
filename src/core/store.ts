@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import { DEFAULT_FRAME_RATE, cloneWithNewIds, createNode, newProject } from './defaults';
+import {
+  DEFAULT_FRAME_RATE,
+  cloneWithNewIds,
+  createInstanceNode,
+  createNode,
+  newProject,
+} from './defaults';
 import {
   alignDeltas,
   boundsOf,
@@ -13,21 +19,25 @@ import {
 import {
   clampFrame,
   composeTransform,
+  containsInstance,
   containsNode,
   findAsset,
   findNode,
   findParent,
+  findPrefab,
   frameCountOf,
   frameGridOf,
   guidesOf,
   localTransformIn,
   newId,
+  prefabChildrenOf,
   worldTransformOf,
   type AnimationClip,
   type FrameGrid,
   type GameObjectNode,
   type ImageAsset,
   type NodeType,
+  type Prefab,
   type Project,
   type SceneDoc,
   type SpriteProps,
@@ -245,6 +255,39 @@ export interface EditorState {
   updateAnimation: (id: string, patch: Partial<Omit<AnimationClip, 'id' | 'assetId'>>) => void;
   /** Removes a clip and stops every sprite playing it, in one undo step. */
   removeAnimation: (id: string) => void;
+
+  // -- prefabs ---------------------------------------------------------------
+  /**
+   * Turns the selection into a prefab definition and leaves an instance of it
+   * in the selection's place, on the `groupSelection` model: the frontmost
+   * selected object anchors it, so nothing moves on the canvas.
+   */
+  createPrefabFromSelection: () => void;
+  /** Places an instance, landing in the group you are working in as an add does. */
+  placePrefab: (prefabId: string) => void;
+  /**
+   * Overwrites a definition from a group in the scene — the round trip that
+   * makes editing a prefab possible without a mode of its own: detach an
+   * instance, edit it with every tool that already exists, then push it back.
+   *
+   * Refused when it would make the prefab contain itself, for the reason
+   * `moveNode` refuses a cycle: the guard belongs where every caller passes.
+   */
+  updatePrefabFrom: (prefabId: string, nodeId: string) => void;
+  /**
+   * Replaces an instance with a real group holding a copy of the definition's
+   * contents. Its transform, name and visibility survive, and so does its id,
+   * so the object stays selected across the change.
+   */
+  detachInstance: (id: string) => void;
+  renamePrefab: (id: string, name: string) => void;
+  /**
+   * Removes a definition, detaching every instance of it first and in the same
+   * undo step. `removeAsset` sets the rule: no action here may leave a dangling
+   * reference in the document, and refusing instead would leave the user with a
+   * prefab they cannot delete and no way to find what still uses it.
+   */
+  removePrefab: (id: string) => void;
 
   // -- editing ---------------------------------------------------------------
   /**
@@ -468,6 +511,88 @@ function mapProjectSprites(
 }
 
 /**
+ * Rewrites every node in a tree through `patch`, which returns a replacement or
+ * null to leave that node alone.
+ *
+ * `mapSprites`' sibling, and separate from it on purpose: that one merges a
+ * props patch into one node type, this one replaces whole nodes of any type,
+ * which is what detaching an instance is. Both keep array identity where
+ * nothing changed, because identity is the signal `editProject` reads for "no
+ * undo step".
+ *
+ * Children are rewritten before the node itself, so a patch sees the subtree it
+ * is about to replace already up to date.
+ */
+function mapNodes(
+  nodes: GameObjectNode[],
+  patch: (node: GameObjectNode) => GameObjectNode | null,
+): GameObjectNode[] {
+  let changed = false;
+  const next = nodes.map((node) => {
+    const children = node.children.length === 0 ? node.children : mapNodes(node.children, patch);
+    const current =
+      children === node.children ? node : ({ ...node, children } as GameObjectNode);
+    const replaced = patch(current);
+    if (replaced || current !== node) changed = true;
+    return replaced ?? current;
+  });
+  return changed ? next : nodes;
+}
+
+/**
+ * The same, across every scene *and* every prefab definition.
+ *
+ * The definitions are walked too because an instance can live inside one: a
+ * chest prefab that contains a coin prefab is a normal thing to build, and
+ * deleting the coin has to reach that instance as surely as it reaches the ones
+ * sitting in a scene.
+ */
+function mapProjectNodes(
+  project: Project,
+  patch: (node: GameObjectNode) => GameObjectNode | null,
+): Project {
+  let changed = false;
+
+  const scenes = project.scenes.map((scene) => {
+    const children = mapNodes(scene.children, patch);
+    if (children === scene.children) return scene;
+    changed = true;
+    return { ...scene, children };
+  });
+
+  const prefabs = project.prefabs.map((prefab) => {
+    const children = mapNodes(prefab.children, patch);
+    if (children === prefab.children) return prefab;
+    changed = true;
+    return { ...prefab, children };
+  });
+
+  return changed ? { ...project, scenes, prefabs } : project;
+}
+
+/**
+ * An instance turned into an ordinary group holding its own copy of what the
+ * prefab draws.
+ *
+ * The children are cloned with fresh ids so the group and the definition can
+ * never alias — editing the detached copy must not reach back into the prefab,
+ * which is the entire difference between a detached group and an instance. The
+ * node's own id is kept, so a detach does not clear the selection.
+ */
+function detachedNode(project: Project, node: GameObjectNode): GameObjectNode {
+  const children = prefabChildrenOf(project, node).map(cloneWithNewIds);
+  return {
+    id: node.id,
+    name: node.name,
+    type: 'container',
+    visible: node.visible,
+    transform: node.transform,
+    props: { alpha: node.type === 'instance' ? node.props.alpha : 1 },
+    children,
+  };
+}
+
+/**
  * The selected nodes that an edit should act on, in document order, with
  * anything already covered by another selected node left out.
  *
@@ -539,6 +664,20 @@ function originsFor(
  */
 function uniqueAnimationName(project: Project, base: string): string {
   const taken = new Set(project.animations.map((clip) => clip.name));
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base} ${n}`)) n += 1;
+  return `${base} ${n}`;
+}
+
+/**
+ * A prefab name not already taken, for the reason an animation name is: the
+ * name becomes the factory function's identifier in exported code, and two
+ * prefabs sharing one would have the exporter silently rename the second. The
+ * name the user reads in the editor should be the one their game is built from.
+ */
+function uniquePrefabName(project: Project, base: string): string {
+  const taken = new Set(project.prefabs.map((prefab) => prefab.name));
   if (!taken.has(base)) return base;
   let n = 2;
   while (taken.has(`${base} ${n}`)) n += 1;
@@ -640,6 +779,26 @@ function openContainerId(state: EditorState): string | null {
   return findParent(children, node.id)?.id ?? null;
 }
 
+/**
+ * The project with `fn` applied to its active scene, by identity when the scene
+ * came back unchanged.
+ *
+ * Split out of `editScene` so that an action which edits the scene *and* the
+ * prefab library — creating a prefab from the selection is exactly that — can
+ * do both inside one `editProject` call and cost one undo step. Calling
+ * `editScene` and then `editProject` would cost two, and Ctrl+Z would half-undo
+ * it.
+ */
+function withActiveScene(project: Project, fn: (scene: SceneDoc) => SceneDoc): Project {
+  const current = activeScene(project);
+  const next = fn(current);
+  if (next === current) return project;
+  return {
+    ...project,
+    scenes: project.scenes.map((scene) => (scene.id === current.id ? next : scene)),
+  };
+}
+
 export function activeScene(project: Project): SceneDoc {
   return (
     project.scenes.find((scene) => scene.id === project.activeSceneId) ??
@@ -682,15 +841,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
   /** The same, narrowed to the scene the user is looking at. */
   const editScene = (fn: (scene: SceneDoc) => SceneDoc) =>
-    editProject((project) => {
-      const current = activeScene(project);
-      const next = fn(current);
-      if (next === current) return project;
-      return {
-        ...project,
-        scenes: project.scenes.map((scene) => (scene.id === current.id ? next : scene)),
-      };
-    });
+    editProject((project) => withActiveScene(project, fn));
 
   /**
    * Moves the selection by a world-space delta per node, worked out from what
@@ -996,6 +1147,164 @@ export const useEditorStore = create<EditorState>((set, get) => {
           (props) => (props.animationId === id ? { animationId: null } : null),
         ),
       ),
+
+    createPrefabFromSelection: () => {
+      const state = get();
+      const scene = activeScene(state.project);
+      const ids = selectionRoots(scene.children, state.selectedIds);
+      if (ids.length === 0) return;
+      // A definition may not itself place a prefab: see `prefabChildrenOf`.
+      if (containsInstance(ids.flatMap((id) => findNode(scene.children, id) ?? []))) return;
+
+      // The frontmost selected object anchors the instance, exactly as it
+      // anchors a group: the instance takes its place in the draw order, its
+      // parent and its position, and every selected node is recomputed against
+      // that, so nothing moves on the canvas.
+      const anchor = ids[ids.length - 1];
+      const anchorNode = findNode(scene.children, anchor);
+      if (!anchorNode) return;
+      const parentId = findParent(scene.children, anchor)?.id ?? null;
+
+      const at: Transform = {
+        x: Math.round(anchorNode.transform.x),
+        y: Math.round(anchorNode.transform.y),
+        rotation: 0,
+        scaleX: 1,
+        scaleY: 1,
+      };
+      // Unrotated and unscaled, so composing it onto the parent and inverting
+      // that per child is an exact translation.
+      const instanceWorld = composeTransform(
+        worldTransformOf(scene.children, parentId),
+        at,
+      );
+      const definition = ids.flatMap((id) => {
+        const node = findNode(scene.children, id);
+        if (!node) return [];
+        return [
+          cloneWithNewIds({
+            ...node,
+            transform: tidyTransform(
+              localTransformIn(instanceWorld, worldTransformOf(scene.children, id)),
+            ),
+          } as GameObjectNode),
+        ];
+      });
+
+      const prefab: Prefab = {
+        id: newId(),
+        name: uniquePrefabName(
+          state.project,
+          ids.length === 1 ? anchorNode.name : 'Prefab',
+        ),
+        // Fresh ids: the definition's nodes and the scene's must never be the
+        // same objects, or editing one would reach into the other.
+        children: definition,
+      };
+      const instance = createInstanceNode(prefab, at.x, at.y);
+
+      editProject((project) => ({
+        ...withActiveScene(project, (s) => {
+          const siblings = parentId
+            ? (findNode(s.children, parentId)?.children ?? [])
+            : s.children;
+          const index = siblings.findIndex((node) => node.id === anchor);
+          // Originals out before the instance goes in, and the anchor's index
+          // adjusted for the selected siblings ahead of it — `groupSelection`'s
+          // trap, for the same reason: `removeNode` recurses by id.
+          const ahead = siblings
+            .slice(0, index)
+            .filter((node) => ids.includes(node.id)).length;
+          return {
+            ...s,
+            children: insertNode(
+              ids.reduce(removeNode, s.children),
+              parentId,
+              instance,
+              index - ahead,
+            ),
+          };
+        }),
+        prefabs: [...project.prefabs, prefab],
+      }));
+      get().select(instance.id);
+    },
+
+    placePrefab: (prefabId) => {
+      const state = get();
+      const prefab = findPrefab(state.project, prefabId);
+      if (!prefab) return;
+      const scene = activeScene(state.project);
+      const parentId = openContainerId(state);
+      // `addNode`'s placement rule, and for its reasons.
+      const node = parentId
+        ? createInstanceNode(prefab, 0, 0)
+        : createInstanceNode(
+            prefab,
+            Math.round(scene.width / 2),
+            Math.round(scene.height / 2),
+          );
+      editScene((s) => ({ ...s, children: insertNode(s.children, parentId, node) }));
+      get().select(node.id);
+    },
+
+    updatePrefabFrom: (prefabId, nodeId) =>
+      editProject((project) => {
+        const node = findNode(activeScene(project).children, nodeId);
+        // A group only. Its frame *is* the instance's frame, so its children's
+        // transforms transfer with no arithmetic at all — which is the whole
+        // reason this round trip is one line rather than a rebasing pass.
+        if (!node || node.type !== 'container') return project;
+        if (!findPrefab(project, prefabId)) return project;
+        if (containsInstance(node.children)) return project;
+        const children = node.children.map(cloneWithNewIds);
+        return {
+          ...project,
+          prefabs: project.prefabs.map((prefab) =>
+            prefab.id === prefabId ? { ...prefab, children } : prefab,
+          ),
+        };
+      }),
+
+    detachInstance: (id) =>
+      editProject((project) =>
+        withActiveScene(project, (scene) => {
+          const node = findNode(scene.children, id);
+          if (!node || node.type !== 'instance') return scene;
+          return { ...scene, children: mapNode(scene.children, id, () => detachedNode(project, node)) };
+        }),
+      ),
+
+    renamePrefab: (id, name) =>
+      editProject((project) => {
+        const prefab = findPrefab(project, id);
+        // Not de-duplicated on rename, as a clip's name is not: forcing
+        // uniqueness mid-typing fights the user, and the exporter's own
+        // `used` set is the backstop that keeps the generated code valid.
+        if (!prefab || prefab.name === name) return project;
+        return {
+          ...project,
+          prefabs: project.prefabs.map((p) => (p.id === id ? { ...p, name } : p)),
+        };
+      }),
+
+    removePrefab: (id) =>
+      editProject((project) => {
+        if (!findPrefab(project, id)) return project;
+        // Detached first, and against the project that still holds the
+        // definition, so every instance keeps drawing what it drew. Dropping
+        // the definition alone would leave dangling references in a saved file;
+        // `removeAsset` settled that this must never happen by any action here.
+        const detached = mapProjectNodes(project, (node) =>
+          node.type === 'instance' && node.props.prefabId === id
+            ? detachedNode(project, node)
+            : null,
+        );
+        return {
+          ...detached,
+          prefabs: detached.prefabs.filter((prefab) => prefab.id !== id),
+        };
+      }),
 
     addNode: (type) => {
       const state = get();
@@ -1384,6 +1693,29 @@ export function countAnimationUses(project: Project, animationId: string): numbe
   for (const scene of project.scenes) walk(scene.children);
   return count;
 }
+
+/**
+ * How many instances of a prefab the project holds.
+ *
+ * Shown beside the prefab's own controls for the reason the clip's count is:
+ * the definition is shared, so an edit here is an edit everywhere, and saying
+ * how many places that is costs less than the surprise. It is also what makes
+ * "Delete prefab" honest about how much it is about to detach.
+ */
+export function countPrefabUses(project: Project, prefabId: string): number {
+  let count = 0;
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'instance' && node.props.prefabId === prefabId) count += 1;
+      walk(node.children);
+    }
+  };
+  for (const scene of project.scenes) walk(scene.children);
+  return count;
+}
+
+/** The prefab library. A stable array reference, so no `useShallow` is needed. */
+export const usePrefabs = (): Prefab[] => useEditorStore((s) => s.project.prefabs);
 
 /**
  * Every selected object, in document order and without anything already

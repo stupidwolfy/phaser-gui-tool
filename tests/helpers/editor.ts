@@ -197,6 +197,26 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * Places an instance of a prefab from the scene panel's library.
+   *
+   * Every button there carries the `+ ` prefix, and the locator relies on it:
+   * a prefab a user names "Scene" would otherwise be a button reading exactly
+   * "Scene", which is the mobile tab bar's own label matched exactly.
+   */
+  async placePrefab(name: string): Promise<void> {
+    await this.openPanel('scene');
+    await this.panel('scene').getByRole('button', { name: `+ ${name}` }).click();
+    await this.settle();
+  }
+
+  /** Turns the current selection into a prefab, from the inspector. */
+  async saveAsPrefab(): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByRole('button', { name: 'Save as prefab' }).click();
+    await this.settle();
+  }
+
   async selectInTree(name: string): Promise<void> {
     await this.openPanel('scene');
     await this.panel('scene').getByRole('button', { name, exact: true }).click();
@@ -372,6 +392,18 @@ export class EditorPage {
    */
   field(label: string): Locator {
     return this.labelled(label).locator('input.field__input');
+  }
+
+  /** A `SelectField`'s `<select>`, which carries the same class as an input. */
+  choice(label: string): Locator {
+    return this.labelled(label).locator('select.field__input');
+  }
+
+  /** Picks an option by its visible label. */
+  async setChoice(label: string, option: string): Promise<void> {
+    await this.openPanel('inspect');
+    await this.choice(label).selectOption({ label: option });
+    await this.settle();
   }
 
   /** A checkbox field, whose input carries a different class. */

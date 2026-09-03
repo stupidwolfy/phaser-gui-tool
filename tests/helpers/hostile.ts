@@ -53,6 +53,50 @@ export function hostileProject(): Project {
         repeat: -1,
       },
     ],
+    prefabs: [
+      {
+        id: 'prefab-1',
+        // The prefab name becomes a *factory function* name in exported code,
+        // through `toIdentifier('create ' + name)` — a fifth path, and the one
+        // whose output is called from inside `create()`, so a collision here
+        // would call an object instead of a function rather than merely
+        // producing an odd variable name.
+        name: `${breakout} coin`,
+        children: [
+          {
+            id: 'p1',
+            name: breakout,
+            type: 'rectangle',
+            visible: true,
+            transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { width: 60, height: 60, fill: '#7ee787', alpha: 1 },
+            children: [],
+          },
+          {
+            id: 'p2',
+            // A sprite *inside* a definition, which is what proves the asset
+            // collection descends into prefab bodies. Without the descent this
+            // exports the "no image chosen" comment for an image that is
+            // chosen — a plausible-looking export that draws nothing — and
+            // every other assertion here still passes.
+            name: 'scene',
+            type: 'sprite',
+            visible: true,
+            transform: { x: 40, y: 0, rotation: 0, scaleX: 2, scaleY: 2 },
+            props: {
+              assetId: 'sheet-1',
+              alpha: 1,
+              tint: '#ffffff',
+              flipX: false,
+              flipY: false,
+              frame: 1,
+              animationId: null,
+            },
+            children: [],
+          },
+        ],
+      },
+    ],
     activeSceneId: 'scene-1',
     scenes: [
       {
@@ -174,6 +218,39 @@ export function hostileProject(): Project {
               frame: 3,
               animationId: null,
             },
+            children: [],
+          },
+          {
+            id: 'h',
+            // Two instances of one prefab, which is the whole point of the
+            // factory emit: one function, two calls. This one is turned and
+            // scaled so `modifiersFor` runs over an instance as well.
+            name: `${breakout} coin A`,
+            type: 'instance',
+            visible: true,
+            transform: { x: 300, y: 300, rotation: 21.5, scaleX: 1.5, scaleY: 1.5 },
+            props: { prefabId: 'prefab-1', alpha: 0.8 },
+            children: [],
+          },
+          {
+            id: 'i',
+            name: 'coin B',
+            type: 'instance',
+            visible: true,
+            transform: { x: 600, y: 200, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { prefabId: 'prefab-1', alpha: 1 },
+            children: [],
+          },
+          {
+            id: 'j',
+            // A dangling reference, which only a hand-edited file can hold —
+            // and the other branch of `constructorFor` returning null, so the
+            // stand-in comment is emitted for something other than a sprite.
+            name: 'gone',
+            type: 'instance',
+            visible: true,
+            transform: { x: 100, y: 100, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { prefabId: 'nope', alpha: 1 },
             children: [],
           },
           {

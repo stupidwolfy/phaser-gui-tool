@@ -43,14 +43,27 @@
  * said so — and the sheet a sprite was showing one frame of is suddenly drawn
  * whole. Guides survived an old build precisely because scenes are the one
  * thing passed through verbatim; these do not, so this bumps.
+ *
+ * v5 — prefabs — bumps for both halves of the rule at once, which is why it is
+ * not a judgement call. `project.prefabs` is another field `parseProject` names
+ * one at a time, so a v4 build drops the whole library on open and re-saves
+ * without it; and an `instance` node is a type a v4 build has no
+ * `createDisplayObject` case for, so it leaves the object undefined and
+ * crashes, exactly as `container` did to v2. Either alone would bump this.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
 
 /** Object kinds the editor can currently place. Grows one entry at a time. */
-export type NodeType = 'rectangle' | 'ellipse' | 'text' | 'sprite' | 'container';
+export type NodeType =
+  | 'rectangle'
+  | 'ellipse'
+  | 'text'
+  | 'sprite'
+  | 'container'
+  | 'instance';
 
 /**
  * An imported image, held in the document as a data URL.
@@ -254,12 +267,34 @@ export interface TextProps {
   alpha: number;
 }
 
+/**
+ * A placed copy of a prefab.
+ *
+ * It holds a reference and nothing else: the contents are read from
+ * `project.prefabs` every time the node is drawn or exported, so a definition
+ * edited once is edited everywhere, in every scene, with no propagation pass to
+ * write and nothing that can drift out of step. That is the whole design — an
+ * instance that stored its own copy of the children would be a duplicate with
+ * extra bookkeeping.
+ *
+ * What it does own is what makes one placement different from another: its
+ * transform, name and visibility, which live on the node like every other
+ * node's, plus the alpha below, which multiplies down the subtree the way a
+ * container's does.
+ */
+export interface InstanceProps {
+  /** Null when the definition it named is gone; the canvas draws an empty box. */
+  prefabId: string | null;
+  alpha: number;
+}
+
 export interface NodePropsByType {
   rectangle: RectangleProps;
   ellipse: EllipseProps;
   text: TextProps;
   sprite: SpriteProps;
   container: ContainerProps;
+  instance: InstanceProps;
 }
 
 /**
@@ -376,6 +411,30 @@ export function guidesOf(scene: SceneDoc): SceneGuide[] {
   );
 }
 
+/**
+ * A reusable object graph, named and stored once for the whole project.
+ *
+ * Project-level for the reason the animations are: a prefab is a thing the
+ * project knows how to build, not something a scene owns, and two scenes share
+ * one without either being the owner. What a scene holds is an `instance` node
+ * pointing at this by id.
+ *
+ * `children` is a list rather than a single root node so that "these three
+ * things" is expressible without inventing a wrapper the user did not ask for.
+ * An instance draws them inside its own container, which is where the grouping
+ * actually comes from.
+ */
+export interface Prefab {
+  id: string;
+  /**
+   * Free text, and the factory function's name in exported code — so it goes
+   * through the same `toIdentifier` de-duplication object names do rather than
+   * being trusted to be a usable identifier, or to be unique.
+   */
+  name: string;
+  children: GameObjectNode[];
+}
+
 export interface Project {
   schemaVersion: number;
   name: string;
@@ -396,6 +455,14 @@ export interface Project {
    * a walk into every asset.
    */
   animations: AnimationClip[];
+  /**
+   * Prefab definitions, shared across every scene as the assets and clips are.
+   *
+   * The single copy is the point: an `instance` node in a scene stores only an
+   * id into this table, so editing an entry here changes every placement of it
+   * everywhere at once. Nothing propagates, because nothing was ever copied.
+   */
+  prefabs: Prefab[];
   scenes: SceneDoc[];
   activeSceneId: string;
 }
@@ -412,6 +479,63 @@ export function findAnimation(
   id: string | null | undefined,
 ): AnimationClip | undefined {
   return id ? project.animations.find((clip) => clip.id === id) : undefined;
+}
+
+export function findPrefab(
+  project: Project,
+  id: string | null | undefined,
+): Prefab | undefined {
+  return id ? project.prefabs.find((prefab) => prefab.id === id) : undefined;
+}
+
+/** Whether this subtree places a prefab anywhere inside it. */
+export function containsInstance(nodes: GameObjectNode[]): boolean {
+  return nodes.some(
+    (node) => node.type === 'instance' || containsInstance(node.children),
+  );
+}
+
+/**
+ * The children an instance node draws, or an empty list.
+ *
+ * The only place `InstanceProps.prefabId` is ever dereferenced — the job
+ * `guidesOf` does for a scene's guides and `frameGridOf` does for an asset's
+ * sheet. Being the single reader means no caller can check "is the prefab
+ * there" and forget "are its children an array", and the dangling case has one
+ * answer instead of one per call site.
+ *
+ * A missing definition draws an empty instance rather than throwing, the
+ * treatment a sprite whose image is gone already gets: one unreadable reference
+ * should not cost the user the rest of the scene.
+ *
+ * **It also strips any instance out of what it returns, recursively, and that
+ * is the whole of the cycle story.** A prefab containing an instance of itself
+ * is two id strings and an infinite recursion in the renderer and the exporter
+ * both, and a hand-edited file can hold one whatever the store refuses to
+ * build. Answering with a tree that contains no instances at all means nothing
+ * downstream needs a depth cap, a visited set or a termination argument — the
+ * recursion is finite because the data handed to it is. The store refuses to
+ * *create* a nested definition for the same reason, so this only ever fires on
+ * a file the editor did not write.
+ *
+ * The definition's own array comes back by identity when there was nothing to
+ * strip, which is every sync of every well-formed project.
+ */
+export function prefabChildrenOf(
+  project: Project,
+  node: GameObjectNode,
+): GameObjectNode[] {
+  if (node.type !== 'instance') return [];
+  const prefab = findPrefab(project, node.props.prefabId);
+  if (!Array.isArray(prefab?.children)) return [];
+  return withoutInstances(prefab.children);
+}
+
+function withoutInstances(nodes: GameObjectNode[]): GameObjectNode[] {
+  if (!containsInstance(nodes)) return nodes;
+  return nodes
+    .filter((node) => node.type !== 'instance')
+    .map((node) => ({ ...node, children: withoutInstances(node.children) }));
 }
 
 /** The clips that read a given sheet, which is what a sprite may choose from. */

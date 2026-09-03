@@ -264,13 +264,20 @@ test('guides survive a save and an open, on a version they did not bump', async 
   // guides opens, draws identically and even carries them back out on a
   // re-save. That is why guides needed no bump, and it is still true.
   //
-  // The number moved to 4 all the same, for a reason of its own: sprite sheets
-  // and animations live on the asset table and the project, both of which
-  // *are* rebuilt field by field, so an older build drops them silently. This
-  // literal is here to keep every such bump a deliberate act — when it fails,
-  // the question to answer is whether the new field is a guide (passed through,
-  // no bump) or a sheet (rebuilt, bump), not merely to update the number.
-  expect(file.schemaVersion).toBe(4);
+  // The number has moved twice all the same, each time for a reason of its own.
+  // v4: sprite sheets and animations live on the asset table and the project,
+  // both of which *are* rebuilt field by field, so an older build drops them
+  // silently. v5: prefabs answer the question below with *both* halves at once
+  // — `parseProject` names `prefabs` one field at a time, so a v4 build drops
+  // the whole library on open and re-saves without it, and a v4 build also has
+  // no `'instance'` case in `createDisplayObject`, so it leaves the object
+  // undefined and crashes on the nodes. Either alone would have bumped it.
+  //
+  // This literal is here to keep every such bump a deliberate act — when it
+  // fails, the question to answer is whether the new field is a guide (passed
+  // through, no bump) or a sheet (rebuilt, bump), not merely to update the
+  // number.
+  expect(file.schemaVersion).toBe(5);
   expect(file.scenes[0].guides).toEqual([
     { id: expect.any(String), axis: 'x', position: GUIDE_X },
     { id: expect.any(String), axis: 'y', position: 200 },

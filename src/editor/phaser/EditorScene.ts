@@ -15,6 +15,7 @@ import {
   findParent,
   frameGridOf,
   guidesOf,
+  prefabChildrenOf,
   worldTransformOf,
   type AnimationClip,
   type GameObjectNode,
@@ -329,9 +330,19 @@ function hitTestFor(node: GameObjectNode) {
 export class EditorScene extends Phaser.Scene {
   static readonly KEY = 'editor';
 
+  /**
+   * Every drawn object, keyed by its *display key* rather than its node id.
+   *
+   * For a scene node the two are the same string. They differ only for what an
+   * instance draws: a prefab's child ids are shared by every placement of it,
+   * so the key is the instance's key plus the child's id (`syncNodes`), and two
+   * instances of one prefab cannot collide.
+   */
   private displayObjects = new Map<string, Renderable>();
   /**
-   * Each container's bounds in its own local space, keyed by node id.
+   * Each container's bounds in its own local space, keyed by display key — a
+   * container inside a prefab definition is drawn once per instance, and each
+   * of those needs its own box.
    *
    * A Phaser Container has no size of its own, and its origin is not the centre
    * of its contents, so nothing downstream — the selection outline, the hit
@@ -341,6 +352,15 @@ export class EditorScene extends Phaser.Scene {
    * everything inside it has been laid out.
    */
   private containerBounds = new Map<string, Phaser.Geom.Rectangle>();
+
+  /**
+   * The display keys belonging to real document nodes, rebuilt every sync.
+   *
+   * A prefab's contents are drawn but are not in the document, so they are the
+   * one thing on screen that no node id names. This is how the measured-bounds
+   * publish tells the two apart.
+   */
+  private documentKeys = new Set<string>();
   /** Texture keys this scene created, so shutdown and pruning only touch ours. */
   private assetTextures = new Set<string>();
   /**
@@ -1170,6 +1190,11 @@ export class EditorScene extends Phaser.Scene {
    * The scene rectangle is in for the case with no other objects at all:
    * centring the first object of a new project is the most common alignment
    * there is, and it has nothing else to line up against.
+   *
+   * A prefab's contents drop out on their own: their display keys name no
+   * document node, so `findNode` returns nothing for them. That is the right
+   * answer rather than a lucky one — an instance snaps as one object, because
+   * one object is what it is.
    */
   private snapTargetsFor(moving: readonly string[], project: Project): Rect[] {
     const roots = activeScene(project).children;
@@ -1921,7 +1946,12 @@ export class EditorScene extends Phaser.Scene {
     this.syncing = state.project;
 
     const seen = new Set<string>();
-    this.syncNodes(scene.children, null, seen);
+    // The keys that name an actual document node, which is what
+    // `publishMeasuredBounds` may publish and nothing else. Filled by
+    // `syncNodes` rather than derived from the key's shape, so the separator
+    // that builds a derived key stays a detail of one function.
+    this.documentKeys = new Set<string>();
+    this.syncNodes(scene.children, null, seen, '');
 
     for (const [id, object] of this.displayObjects) {
       if (seen.has(id)) continue;
@@ -1952,6 +1982,10 @@ export class EditorScene extends Phaser.Scene {
   private publishMeasuredBounds(): void {
     const boxes = new Map<string, Rect>();
     for (const [id, object] of this.displayObjects) {
+      // A prefab's contents are not document nodes: nothing can select, align,
+      // distribute or snap to one on its own, so a box under a derived key
+      // would be an entry no caller could ever have a node id for.
+      if (!this.documentKeys.has(id)) continue;
       const bounds = this.worldBoundsOf(object);
       boxes.set(id, {
         x: bounds.x,
@@ -1975,30 +2009,43 @@ export class EditorScene extends Phaser.Scene {
     nodes: GameObjectNode[],
     parent: Phaser.GameObjects.Container | null,
     seen: Set<string>,
+    prefix: string,
   ): void {
     nodes.forEach((node, index) => {
-      seen.add(node.id);
-      let object = this.displayObjects.get(node.id);
+      const key = prefix + node.id;
+      seen.add(key);
+      if (prefix === '') this.documentKeys.add(key);
+      let object = this.displayObjects.get(key);
 
       // A node whose type changed has to be rebuilt, not updated.
       if (object && object.getData('nodeType') !== node.type) {
         object.destroy();
-        this.displayObjects.delete(node.id);
+        this.displayObjects.delete(key);
         object = undefined;
       }
 
       if (!object) {
-        object = this.createDisplayObject(node);
-        this.displayObjects.set(node.id, object);
+        object = this.createDisplayObject(node, key, prefix === '');
+        this.displayObjects.set(key, object);
       }
 
       this.reparent(object, parent, index);
 
       if (node.type === 'container') {
-        this.syncNodes(node.children, object as Phaser.GameObjects.Container, seen);
+        this.syncNodes(node.children, object as Phaser.GameObjects.Container, seen, prefix);
+      } else if (node.type === 'instance') {
+        // Drawn from the definition, never from `node.children` — an instance
+        // has none, and a hand-edited file that gives it some is describing
+        // nodes no tree row and no export would ever mention.
+        this.syncNodes(
+          prefabChildrenOf(this.syncing, node),
+          object as Phaser.GameObjects.Container,
+          seen,
+          `${key}/`,
+        );
       }
 
-      this.applyNode(object, node, index);
+      this.applyNode(object, node, index, key);
     });
   }
 
@@ -2025,7 +2072,24 @@ export class EditorScene extends Phaser.Scene {
     if (parent && parent.getIndex(object) !== index) parent.moveTo(object, index);
   }
 
-  private createDisplayObject(node: GameObjectNode): Renderable {
+  /**
+   * `key` is what `displayObjects` stores the object under, and it goes onto the
+   * object as `nodeId` — for a scene node the two are the same string, and for
+   * a prefab's contents the key is the instance's key plus the child's id, so
+   * two placements of one prefab cannot share an entry.
+   *
+   * `interactive` is false for exactly those derived children, which is what
+   * keeps that difference from mattering anywhere else: with no input on them,
+   * `GAMEOBJECT_DOWN` can never fire for a key that names no node, so a press
+   * on a prefab lands on the instance's own hit area and selects the instance.
+   * An instance is therefore grabbable over its whole box — where a group is
+   * deliberately grabbed by its children — and needs no `dragProxy`.
+   */
+  private createDisplayObject(
+    node: GameObjectNode,
+    key: string,
+    interactive: boolean,
+  ): Renderable {
     let object: Renderable;
 
     switch (node.type) {
@@ -2042,20 +2106,29 @@ export class EditorScene extends Phaser.Scene {
         object = this.add.sprite(0, 0, this.textureKeyFor(this.syncing, node.props.assetId));
         break;
       case 'container':
+      case 'instance':
         // Sized in applyNode from whatever ends up inside it; a container needs
-        // a size at all only because that is how Phaser gives it a hit area.
+        // a size at all only because that is how Phaser gives it a hit area. An
+        // instance is the same object drawing borrowed contents.
         object = this.add.container(0, 0).setSize(EMPTY_GROUP_SIZE, EMPTY_GROUP_SIZE);
         break;
     }
 
-    object.setData('nodeId', node.id);
+    object.setData('nodeId', key);
     object.setData('nodeType', node.type);
-    object.setInteractive(hitAreaFor(object, node), hitTestFor(node));
-    this.input.setDraggable(object);
+    if (interactive) {
+      object.setInteractive(hitAreaFor(object, node), hitTestFor(node));
+      this.input.setDraggable(object);
+    }
     return object;
   }
 
-  private applyNode(object: Renderable, node: GameObjectNode, index: number): void {
+  private applyNode(
+    object: Renderable,
+    node: GameObjectNode,
+    index: number,
+    key: string,
+  ): void {
     const { transform } = node;
 
     // Always mirror the document, including mid-drag. An earlier version skipped
@@ -2118,12 +2191,18 @@ export class EditorScene extends Phaser.Scene {
         sprite.setFlip(node.props.flipX, node.props.flipY);
         break;
       }
-      case 'container': {
+      case 'container':
+      case 'instance': {
         const group = object as Phaser.GameObjects.Container;
         // Alpha on a Container multiplies down onto its children, which is
-        // exactly what "fade the whole group" should mean.
+        // exactly what "fade the whole group" should mean — and what an
+        // instance's alpha should mean over a prefab's contents.
         group.setAlpha(node.props.alpha);
-        this.applyContainerBounds(group, node.id);
+        // Keyed by the display key, not the node id: a container *inside* a
+        // definition is drawn once per instance, and each of those needs its
+        // own box. `localRectOf` reads it back through the same `nodeId` this
+        // key was written to.
+        this.applyContainerBounds(group, key);
         break;
       }
       case 'text': {

@@ -4,6 +4,7 @@ import {
   newId,
   type GameObjectNode,
   type NodeType,
+  type Prefab,
   type Project,
   type SceneDoc,
   type Transform,
@@ -87,6 +88,17 @@ export function createNode(
         // with contents would have to invent what those contents are.
         props: { alpha: 1 },
       };
+    case 'instance':
+      return {
+        ...base,
+        type: 'instance',
+        name: name ?? 'Instance',
+        // Unpointed: `createNode` is reached from the generic add path, and an
+        // instance is normally built by `createInstanceNode` instead, which
+        // has a prefab to name it after. A null id draws an empty box rather
+        // than nothing, which is the same answer a sprite with no image gives.
+        props: { prefabId: null, alpha: 1 },
+      };
     case 'text':
       return {
         ...base,
@@ -101,6 +113,24 @@ export function createNode(
         },
       };
   }
+}
+
+/**
+ * A node that places the given prefab.
+ *
+ * Named after the prefab rather than "Instance": the tree row is the only place
+ * a user sees which prefab this is without opening the inspector, and "Coin" in
+ * five rows says more than "Instance" in five rows. The name is the node's own
+ * from then on — renaming the prefab later does not rewrite it, exactly as
+ * renaming an image does not rename the sprites drawing it.
+ */
+export function createInstanceNode(
+  prefab: Prefab,
+  x: number,
+  y: number,
+): GameObjectNode {
+  const node = createNode('instance', x, y, prefab.name);
+  return { ...node, type: 'instance', props: { prefabId: prefab.id, alpha: 1 } };
 }
 
 /**
@@ -145,6 +175,7 @@ export function newProject(name = 'Untitled Project'): Project {
     phaserVersion: TARGET_PHASER_VERSION,
     assets: [],
     animations: [],
+    prefabs: [],
     scenes: [scene],
     activeSceneId: scene.id,
   };
