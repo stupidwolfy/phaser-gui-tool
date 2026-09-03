@@ -1,7 +1,15 @@
 import { useState, type DragEvent, type MouseEvent } from 'react';
-import { useActiveScene, useEditorStore } from '../core/store';
+import { useActiveScene, useEditorStore, usePrefabs } from '../core/store';
 import { findParent, type GameObjectNode, type NodeType } from '../core/schema';
 
+/**
+ * The object types the add row offers.
+ *
+ * `instance` is deliberately absent, and this is not an oversight: an instance
+ * has to name a prefab, and a `+ Instance` button could only ever produce one
+ * pointing at nothing. Prefabs are placed from `PrefabsSection` below, where
+ * each button already knows which definition it is placing.
+ */
 const ADDABLE: { type: NodeType; label: string }[] = [
   { type: 'rectangle', label: 'Rectangle' },
   { type: 'ellipse', label: 'Ellipse' },
@@ -130,7 +138,50 @@ export function SceneTree() {
       {scene.children.length === 0 && (
         <p className="empty">This scene is empty. Add an object above.</p>
       )}
+
+      <PrefabsSection />
     </div>
+  );
+}
+
+/**
+ * The prefab library, as one placing button per definition.
+ *
+ * It lives in the scene panel rather than in the inspector or a fourth mobile
+ * tab for two reasons. Placing needs no selection, while the inspector's scene
+ * panel only appears when *nothing* is selected — so putting it there would
+ * mean deselecting first every time. And the tab bar holds exactly three tabs;
+ * a fourth costs a `MobileTab`, a sheet, and a quarter of the width of a 390px
+ * bar to say something the always-visible panel can say for free.
+ *
+ * Every button keeps the `+ ` prefix. That is not decoration: the mobile tab
+ * bar's labels are single common words matched exactly, so a prefab a user
+ * names "Scene" would otherwise be a second button reading exactly "Scene".
+ */
+function PrefabsSection() {
+  const prefabs = usePrefabs();
+  const placePrefab = useEditorStore((s) => s.placePrefab);
+
+  // A library nobody has put anything in is not worth a heading: the way to
+  // make a prefab is to select objects, which the inspector then offers.
+  if (prefabs.length === 0) return null;
+
+  return (
+    <>
+      <div className="panel__section">Prefabs</div>
+      <div className="add-row">
+        {prefabs.map((prefab) => (
+          <button
+            key={prefab.id}
+            className="btn btn--add"
+            onClick={() => placePrefab(prefab.id)}
+            title={`Place ${prefab.name}`}
+          >
+            + {prefab.name}
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 

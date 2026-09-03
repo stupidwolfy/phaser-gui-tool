@@ -4,6 +4,7 @@ import {
   type AnimationClip,
   type FrameGrid,
   type ImageAsset,
+  type Prefab,
   type Project,
 } from '../core/schema';
 
@@ -275,6 +276,37 @@ function parseAnimations(raw: unknown, assets: ImageAsset[]): AnimationClip[] {
   return clips;
 }
 
+/**
+ * Rebuilds the prefab library from an opened file.
+ *
+ * The same shape `parseAnimations` has, and the same trade: an entry needs an
+ * id, a name and an array of children to be a prefab at all, and one that is
+ * not is dropped rather than failing the open — a single unreadable definition
+ * should not cost the user the rest of their project.
+ *
+ * The children themselves are passed through unvalidated, exactly as `scenes`
+ * are, and for the same reason: they are nodes, and nothing here has ever
+ * validated a node. `prefabChildrenOf` is the read-site check that makes that
+ * safe, the job `guidesOf` does for a scene's guides.
+ */
+function parsePrefabs(raw: unknown): Prefab[] {
+  if (!Array.isArray(raw)) return [];
+
+  const prefabs: Prefab[] = [];
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const prefab = candidate as Partial<Prefab>;
+    if (typeof prefab.id !== 'string' || !prefab.id) continue;
+    if (!Array.isArray(prefab.children)) continue;
+    prefabs.push({
+      id: prefab.id,
+      name: typeof prefab.name === 'string' ? prefab.name : 'Prefab',
+      children: prefab.children,
+    });
+  }
+  return prefabs;
+}
+
 /** Parses and validates untrusted file contents into a Project. */
 export function parseProject(contents: string): Project {
   let raw: unknown;
@@ -320,6 +352,8 @@ export function parseProject(contents: string): Project {
     assets,
     // Absent before v4, which is a valid project whose sprites are all still.
     animations: parseAnimations(candidate.animations, assets),
+    // Absent before v5, which is a valid project that uses no prefabs.
+    prefabs: parsePrefabs(candidate.prefabs),
     scenes,
     activeSceneId,
   };

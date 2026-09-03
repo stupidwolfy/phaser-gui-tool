@@ -457,6 +457,12 @@ select {
   border: 2px solid var(--text-dim);
 }
 
+/* Filled, where a group is hollow: an instance is a solid thing whose contents
+   live somewhere else, rather than a box holding them. */
+.tree__type[data-type='instance'] {
+  background: #a78bfa;
+}
+
 /* The whole row of a container the pointer is about to drop into. Distinct
    from the before/after edge lines, which mean "reorder" rather than "put it
    in here" — telling those two apart is the whole of drag-to-nest. */

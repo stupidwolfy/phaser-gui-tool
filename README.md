@@ -49,6 +49,13 @@ on a desktop.
 - Group objects: a group moves, rotates, scales and fades everything inside it as one,
   and groups can hold groups. Drag a row onto a group in the scene tree, or set an
   object's Parent in the inspector — either way it stays exactly where it was on screen
+- Reuse a piece of layout as a **prefab**: select some objects, **Save as prefab** in the
+  inspector, and place it again from the Prefabs list in the scene panel. Every placement
+  is linked to the one definition, so editing it changes all of them at once — detach an
+  instance into an ordinary group, edit it with the usual tools, then **Replace** the
+  prefab from it. Deleting a prefab detaches its instances rather than deleting the
+  objects, and exported code gets one factory function per prefab, called once per
+  placement
 - Duplicate, copy and paste objects, keeping their styling
 - Change draw order with the inspector's Arrange buttons, or by dragging rows in the
   scene tree (the first row is the object furthest back; inside a group, the same applies
@@ -114,11 +121,12 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; eleven iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; twelve iterations in, it is a
 working editor but a small one.
 
-**Not built yet** — texture atlases, tilemaps, physics, particles, audio, cameras,
-multiple scenes, and prefabs.
+**Not built yet** — texture atlases, tilemaps, physics, particles, audio, cameras and
+multiple scenes. Prefabs are in, with two limits: a prefab cannot contain another prefab,
+and an instance cannot override part of what it draws — detach it and edit the copy.
 
 **Verified by** a Playwright suite that drives the production build in Chromium at both
 1440×900 and 390×844, and by CI on every pull request. It checks the editing round trip

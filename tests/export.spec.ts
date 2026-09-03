@@ -17,6 +17,8 @@ const RECT_FILL = '#4f8cff';
 const ELLIPSE_FILL = '#ffb84f';
 /** The fill of the rectangle nested in the hostile project's group. */
 const NESTED_FILL = '#22d3ee';
+/** The fill of the rectangle inside the hostile project's prefab. */
+const PREFAB_FILL = '#7ee787';
 
 interface Run {
   page: Page;
@@ -131,9 +133,46 @@ test('an export of a hostile project runs, and injects nothing', async ({
   // Including the one inside a group, which reaches the canvas only if the
   // nested emit and its `add([...])` both came out right.
   expect((await findColor(run.page, shot, NESTED_FILL)).count).toBeGreaterThan(100);
+  // And the prefab's, twice over: two instances of one definition, so this is
+  // also the assertion that the factory was emitted once and called twice with
+  // both calls landing.
+  expect((await findColor(run.page, shot, PREFAB_FILL)).count).toBeGreaterThan(200);
   expect(run.errors).toEqual([]);
 
   await run.close();
+});
+
+test('a prefab exports as one factory function, called once per instance', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+
+  const declarations = exported.contents.match(/^function create\w*\(/gm) ?? [];
+  expect(declarations).toHaveLength(1);
+  const fn = (declarations[0] ?? '').slice('function '.length, -1);
+  // Two placements, one definition: the whole reason a factory is emitted at
+  // all rather than the instance being expanded inline.
+  expect(exported.contents.split(`${fn}(this, `)).toHaveLength(3);
+  // Annotated, because the exported .ts is compiled under --strict and bare
+  // parameters would be three implicit anys. `export-toolchain.spec` is what
+  // actually proves that; this says why the annotations are there.
+  expect(exported.contents).toContain(`function ${fn}(scene: Phaser.Scene, x: number, y: number)`);
+  // Inside the body the receiver is the scene it was handed, never `this`.
+  expect(exported.contents.slice(exported.contents.indexOf(`function ${fn}(`)))
+    .not.toMatch(/^ {2}const \w+ = this\./m);
+
+  // The sprite inside the definition proves the asset collection descends into
+  // prefab bodies: without that this exports the "no image chosen" stand-in for
+  // an image that is chosen, and the page still boots.
+  expect(exported.contents).not.toContain('no image chosen in the editor');
+
+  // A dangling instance is called out rather than silently dropped, the same
+  // way a sprite with no image is.
+  expect(exported.contents).toContain('the prefab it placed is no longer in the project');
 });
 
 test('a group exports as a container its children are added to', async ({ editor }) => {

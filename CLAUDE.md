@@ -25,7 +25,10 @@ inside it. Iteration 10 (shipped) let the user author a line of their own: guide
 with the document, that a drag agrees with before anything else — and, with them, "centre
 this in the scene". Iteration 11 (shipped) made an image more than one picture: a frame
 grid on the asset, animation clips on the project, and a canvas that plays them on
-request. See the README for the user-facing feature list.
+request. Iteration 12 (shipped) made a piece of layout reusable: prefab definitions on the
+project, an `instance` node that draws one, and an export that emits a factory function
+per prefab rather than a copy per placement. See the README for the user-facing feature
+list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -83,13 +86,18 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
 4. `src/ui/Inspector.tsx` — a properties section.
 5. `src/ui/SceneTree.tsx` — add to `ADDABLE`; add a `.tree__type[data-type=...]` colour
    chip in `src/styles/app.css`.
-6. `src/io/exportPhaser.ts` — a `constructorFor` case. This one fails silently rather
-   than at compile time: an unhandled type exports nothing at all, so check it in the
-   same pass as the `EditorScene` case.
+6. `src/io/exportPhaser.ts` — a `constructorFor` case. That one *is* a compile error under
+   `strict` (the switch stops being exhaustive against a non-nullable return), but
+   `modifiersFor`, `collectAssets`, `collectAnimations` and `emitNode` are not exhaustive,
+   so check them in the same pass as the `EditorScene` case.
 7. `tests/` — the two silent steps are exactly the two the suite covers: add the type to
    `tests/editing.spec.ts` (it draws where the document says, and survives a save and an
    open) and give it a hostile instance in `tests/helpers/hostile.ts`, which puts its
    strings through both export toolchains.
+
+`instance` is the one type not in `editing.spec.ts`, because it is the one type with no
+`ADDABLE` entry to add it with — `prefabs.spec.ts` carries the "it draws, it survives a
+save and an open" duty for it instead. That is a deliberate exception, not a skipped step.
 
 A `container` is the one type that is not purely additive: its children render, so
 `EditorScene.syncNodes` recurses into it and the exporter emits an `add([...])` for it.
@@ -332,6 +340,123 @@ for a top-level node the parent is the scene, so those still read as scene coord
   otherwise whatever group the selection is inside. The second half is what makes filling
   a group work at all: adding selects the new object, so without it every add after the
   first would jump back out to the top level. Paste follows the same rule.
+
+## Prefabs
+
+A prefab is a piece of layout the project knows how to build, stored once and placed as
+often as the user likes. `project.prefabs: Prefab[]` holds the definitions; a scene holds
+`instance` nodes, and **an instance stores a reference and nothing else** — a `prefabId`
+plus its own transform, name, visibility and alpha.
+
+- **The contents are derived, never copied, and that is the whole design.**
+  `prefabChildrenOf` is read at render time and at export time, so a definition edited once
+  is edited everywhere, in every scene. There is no propagation traversal to write, nothing
+  to keep in step, and no way for two placements to disagree — because there was only ever
+  one copy. An instance that stored its own children would be a duplicate with extra
+  bookkeeping, which is what copy/paste already is.
+- **`prefabChildrenOf` is the only reader of `prefabId`**, the job `guidesOf` does for a
+  scene's guides and `frameGridOf` does for an asset's sheet. A missing definition draws an
+  empty instance rather than throwing — the treatment a sprite whose image is gone already
+  gets, because one unreadable reference must not cost the user the rest of the scene.
+- **A definition may not contain an instance, and `prefabChildrenOf` strips any it finds.**
+  That is the entire cycle story: prefab A containing an instance of A is two id strings, an
+  infinite recursion in the renderer and an emit with no valid order in the exporter, and a
+  hand-edited file can hold one whatever the store refuses to build. Answering with a tree
+  that contains no instances at all means **nothing downstream needs a depth cap, a visited
+  set or a termination argument** — the recursion is finite because the data is. A cap was
+  the alternative and is worse: it renders a truncated scene with nothing saying so, and it
+  does not help the exporter at all.
+- **The store refuses to build one too** — `createPrefabFromSelection` and
+  `updatePrefabFrom` both check `containsInstance` — so the strip only ever fires on a file
+  the editor did not write. The inspector disables the button and says why, rather than
+  offering something that silently does nothing.
+- **`SCHEMA_VERSION` bumped to 5, for both halves of the rule at once.** `parseProject`
+  names the project's fields one at a time, so a v4 build drops the whole library on open
+  and re-saves without it — the `animations` case. *And* `createDisplayObject` has no
+  `'instance'` case in a v4 build, so it leaves the object undefined and crashes — the
+  `container` case. Either alone would have bumped it. Guides remain the counter-example.
+- **The renderer keys display objects by a *display key*, not a node id.** A prefab's child
+  ids are shared by every instance of it, so two coins on screen would fight over one map
+  entry. `syncNodes` threads a prefix: `''` for scene nodes, so every existing key is
+  unchanged, and `` `${instanceKey}/` `` for what an instance draws. Prefix concatenation
+  composes to any depth, which is what makes a container nested inside a definition work
+  with no further code. `containerBounds` is keyed the same way — `localRectOf` reads a
+  group's measured box back through `getData('nodeId')`, so a container inside a definition
+  needs its box under its own key or the two instances share one.
+- **`nodeId` on a display object therefore means "the key this object is stored under".**
+  For every scene node the two are the same string, so nothing changed; only a derived child
+  makes them differ.
+- **Derived children are never made interactive, and that is what makes the key
+  redefinition safe.** With no input on them `GAMEOBJECT_DOWN` can never fire for a key that
+  names no node — so a press cannot call `select()` with a string the document has never
+  heard of, which would have silently *cleared* the selection. It also means a press on a
+  prefab lands on the instance's own container hit area: an instance is grabbable over its
+  whole box, where a group is deliberately grabbed by its children, and on touch the first
+  tap selects it rather than something inside it. An instance is easier to move with a thumb
+  than a group is, and `dragProxy` never applies to one.
+- **A prefab's contents drop out of the snap targets and the angle targets on their own.**
+  Both loops resolve each display key through `findNode` and skip what they cannot find.
+  That is the right answer rather than a lucky one — an instance snaps as one object,
+  because one object is what it is. `publishMeasuredBounds` is the one place that needed
+  saying explicitly, through `documentKeys`, because it publishes rather than filters.
+- **Editing a definition is "update this prefab from this group", not a mode.** A group's
+  own frame *is* an instance's frame, so its children's transforms transfer with no
+  arithmetic at all: `updatePrefabFrom` is `node.children.map(cloneWithNewIds)` and nothing
+  else. Detach an instance, edit it with every tool that already exists, push it back. A
+  prefab editing mode would have needed `activeScene`/`editScene` to grow an editing-context
+  notion that every action and every `useActiveScene` consumer flows through, to be a second
+  place to do the same thing.
+- **`detachInstance` keeps the node's id.** The selection therefore survives the change with
+  no `select()` call, and `syncNodes` already rebuilds an object whose `nodeType` changed, so
+  the renderer needs no special case for the flip. A dangling instance detaches to an empty
+  group, which is honest rather than a failure.
+- **`removePrefab` detaches every instance first, in the same undo step.** `removeAsset`
+  settled that the document may never hold a dangling reference by any action in the editor,
+  and here — unlike an image, where there is no local copy of the bytes — detaching keeps
+  everything that was on the canvas. Refusing while in use would be the only action in this
+  codebase that says no because of a count, and would leave the user hunting instances across
+  scenes with no tool for finding them.
+- **`mapProjectNodes` walks the prefab bodies as well as the scenes**, which is
+  `mapProjectSprites`' sibling and keeps the same array-identity discipline for the same
+  reason. It walks definitions because it has to reach an instance nested in one — which a
+  well-formed document does not have, but a file the editor did not write does, and deleting
+  a prefab must clean those up too.
+- **The export is one factory function per placed prefab, and one call per instance.** That
+  is the actual point of a prefab in code: twenty coins is twenty lines, not twenty copies of
+  a coin. `constructorFor`'s `'instance'` case is a call rather than an `add.*`, and because
+  the factory returns the Container, every existing modifier — `.setAngle`, `.setScale`,
+  `.setAlpha`, `.setVisible`, the following `setName` — applies to it exactly as it does to a
+  group.
+- **Factory names are allocated from the *module's* identifier set before anything else
+  draws from it, and every function body's set is seeded with all of them.** Both halves
+  matter. An object named "create coin" inside `create()` would otherwise bind `createCoin`
+  and shadow the function the instance call beside it is trying to reach — it would call the
+  container. Inside a factory body the seed also carries `scene`, `x`, `y` and `root`, since
+  an object in a definition named "scene" would shadow the thing the body adds to.
+- **`collectAssets` and `collectAnimations` descend into the definitions of placed prefabs**,
+  through `emittedNodes`. Without that a prefab full of sprites exports the "no image chosen
+  in the editor" stand-in for images that *are* chosen — an export that looks right, boots,
+  and draws nothing. The hostile project puts a sprite inside its prefab for exactly that
+  assertion.
+- **An instance is a leaf row in the scene tree.** Its contents are in no array the scene
+  holds, so there is nothing there to select, rename, reorder, hide or drag — a read-only
+  subtree would be rows rejecting every interaction the rows above them accept, and on a
+  390px screen it would bury the scene under a prefab's internals. The inspector's use count
+  says the same thing without lying about it.
+- **`instance` is deliberately absent from `ADDABLE`.** It has to name a prefab, and a
+  `+ Instance` button could only produce one pointing at nothing. This is one of the two
+  silent steps in "Adding a Phaser object type", and here the correct answer looks exactly
+  like having forgotten it — hence the comment in the file.
+- **The prefab list lives in the Scene panel, and every button keeps its `+ ` prefix.**
+  The scene panel is always on screen, while the inspector's `SceneInspector` appears only
+  with an empty selection — so putting placement there would mean a deselect first, every
+  time. A fourth mobile tab would cost a `MobileTab`, a sheet, a `SHEET_TITLE` and a quarter
+  of a 390px tab bar. The prefix is not decoration: the tab bar's labels are single common
+  words matched *exactly*, so a prefab a user names "Scene" would otherwise be a second
+  button reading exactly "Scene" — the trap that once took out seventeen mobile tests.
+- **The clip's field is labelled "Prefab name" for the reason the clip's is "Animation
+  name".** The object's own Name field is a few rows up the same panel, and this one is the
+  definition's, shared by every instance — and the factory function's name in exported code.
 
 ## Selection
 
@@ -708,13 +833,29 @@ of the document, which is the payoff for keeping Phaser a renderer.
 
 The three outputs cover the three real cases without overlapping. `.ts` and `.js` are ES
 modules that import Phaser, for a bundler-based project; the runnable page is the
-script-tag flavour where Phaser is a global. TS and JS differ by exactly one token — the
-`: void` return annotation — because everything `buildCreateBody` emits is already plain
-JavaScript, which is the same property that lets the HTML embed the body verbatim.
+script-tag flavour where Phaser is a global. The `create()` body is plain JavaScript in
+both languages, which is what lets the HTML embed it verbatim; the two differ only in
+annotations — the `: void` on the methods, and the parameter and return types on the prefab
+factories. That second one is not a style choice: the exported `.ts` is compiled under
+`tsc --strict` by `export-toolchain.spec.ts`, and a bare `function createCoin(scene, x, y)`
+is three implicit `any`s and three errors. (It *was* one token, before prefabs; the
+property that actually mattered — one generator, so the runnable page cannot drift from
+the file you ship — is unchanged, because both outputs still call the same
+`buildFactories` and the same `emitNode`.)
 
 Both outputs share `buildCreateBody`, so the runnable page can never drift from the
-file you ship. Adding a node type means adding a `constructorFor` case; anything not
-handled there silently exports nothing, so check it alongside the `EditorScene` case.
+file you ship. Adding a node type means adding a `constructorFor` case; under `strict` a
+missing case is a compile error there (the declared return is `string | null` and the
+switch stops being exhaustive), but `modifiersFor`, `collectAssets`, `collectAnimations`
+and `emitNode` are none of them exhaustive over the union, so check those by hand — a
+missed `collectAssets` branch is the one that produces a plausible-looking export drawing
+a missing-texture square.
+
+`EmitContext` carries what the emitter needs beyond the node, and exists for one field:
+`receiver`. The same emit runs inside a Scene method, where objects are added to `this`,
+and inside a prefab factory, where they are added to the `scene` it was handed. One
+generator, two receivers — a second copy of the emitter for the factory case is exactly
+the drift that sharing `buildCreateBody` exists to prevent.
 
 Groups are emitted flat: the container's `const`, then its children's, then one
 `group.add([child, …])`. Nesting the children inside a literal would read worse and would
@@ -768,6 +909,7 @@ tests/
   rotation.spec.ts          the rotate knob, and an angle landing on a neighbour or a step
   guides.spec.ts            placing a guide, dragging it, and a drag agreeing with it
   animation.spec.ts         slicing a sheet, drawing one frame, playing a clip
+  prefabs.spec.ts           saving a prefab, placing it twice, editing it once
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
@@ -780,7 +922,11 @@ tests/
 Adding a node type means adding to `editing.spec.ts` (it draws, it drags, it survives a
 save) and to `helpers/hostile.ts` (any new string that reaches the exporter). The hostile
 project now nests a rectangle inside a hostilely-named group, so both export paths run the
-nested emit and the `add([...])` list, not only the flat one.
+nested emit and the `add([...])` list, not only the flat one — and holds a hostilely-named
+prefab, placed twice plus once danglingly, whose own children include a *sprite*. That
+sprite is not decoration: it is the only thing that fails if `collectAssets` stops
+descending into definitions, and the failure it catches is an export that boots and draws
+a missing-texture square rather than one that errors.
 
 One trap the multi-select suite hit immediately: **adding an object selects it**, so a
 freshly added object is already in the selection and an additive tap on it takes it back
@@ -861,6 +1007,11 @@ Traps, each of which produced a confident wrong answer at some point:
 - **A rotate drag has to pass `select: false`.** On mobile `drag` otherwise taps the start
   point first to satisfy the two-step rule — and the handles are deliberately exempt from
   that rule, so the tap would hide the very thing under test.
+- **An instance is named after its prefab, and its detached contents keep the
+  definition's names.** So a prefab called "Body" made from a rectangle called "Body" gives
+  three tree rows reading "Body" the moment one instance is detached, and
+  `selectInTree` is an exact-name locator. Rename before detaching, or reach the child by
+  row position — `prefabs.spec.ts` does both, and says which and why.
 - **A drag test that asserts where the pointer put something has to turn snapping off.**
   It is on by default, so `editing.spec`'s two "the object lands where I dragged it" tests
   now begin with `setSnapping(false)` — the starter project's own objects were pulling the
@@ -940,14 +1091,21 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 Texture atlases (the asset table holds whole images cut on a regular grid; an atlas is
 named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
-than more of this one), tilemaps, physics, particles, audio, cameras, multiple scenes, and
-prefabs. Prefabs are the natural next thing built on containers, and a group is what a
-prefab instance would be — now that a selection is a set, "make a prefab of these" has
-something to start from.
+than more of this one), tilemaps, physics, particles, audio, cameras, and multiple scenes.
+
+Prefabs shipped in iteration 12, with two deliberate holes left in them: **a definition
+may not contain an instance**, and there are no **per-instance overrides**. The first is
+the cycle argument (see "Prefabs" above) and is a pure loosening later —
+`Prefab.children` is already `GameObjectNode[]`, so nesting is a validation change plus a
+topological order in the exporter, not a format break. The second is a whole override
+model, a three-way merge on every definition edit, and a UI for showing and reverting
+overrides; "detach and edit" covers the case it would serve, and covers it without any of
+that.
 
 Alignment and distribution shipped in iteration 6, snapping in iteration 7, equal spacing
 and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9,
-persistent guides in iteration 10, and sprite sheets with animations in iteration 11. The
+persistent guides in iteration 10, sprite sheets with animations in iteration 11, and
+prefabs in iteration 12. The
 boxes the geometry family needs are in `src/core/bounds.ts`,
 which any further geometry tool can read. That family is complete in the sense that
 mattered — the user can now author a line of their own — and what is left of it is more of

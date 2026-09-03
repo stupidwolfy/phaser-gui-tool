@@ -4,10 +4,12 @@ import {
   clampFrame,
   findAnimation,
   findAsset,
+  findPrefab,
   frameGridOf,
   type AnimationClip,
   type GameObjectNode,
   type ImageAsset,
+  type Prefab,
   type Project,
   type SceneDoc,
 } from '../core/schema';
@@ -103,6 +105,71 @@ function toClassName(name: string): string {
 }
 
 /**
+ * A factory function name for each prefab the scene actually places, in use
+ * order.
+ *
+ * This is what makes an export of twenty coins twenty lines instead of twenty
+ * copies of a coin: the definition is emitted once as a function, and each
+ * instance is a call. Only placed prefabs are emitted, for the reason only
+ * referenced assets are — an export should not carry a definition the user
+ * built and then removed from the scene.
+ *
+ * The names are allocated out of the *module's* identifier set, the same one
+ * every object binding draws from, so a prefab called "coin" and an object
+ * called "create coin" cannot both become `createCoin` and have the instance's
+ * call reach the wrong one.
+ */
+interface UsedPrefab {
+  prefab: Prefab;
+  fn: string;
+}
+
+function collectPrefabs(
+  project: Project,
+  scene: SceneDoc,
+  moduleNames: Set<string>,
+): Map<string, UsedPrefab> {
+  const used = new Map<string, UsedPrefab>();
+
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'instance' && node.props.prefabId && !used.has(node.props.prefabId)) {
+        const prefab = findPrefab(project, node.props.prefabId);
+        // A dangling reference is possible in a hand-edited file, and is what
+        // `constructorFor` turns into a comment rather than a broken call.
+        if (prefab) {
+          used.set(prefab.id, {
+            prefab,
+            fn: toIdentifier(`create ${prefab.name}`, moduleNames),
+          });
+        }
+      }
+      walk(node.children);
+    }
+  };
+  walk(scene.children);
+  return used;
+}
+
+/**
+ * Every node the export will actually emit, scene nodes and the contents of
+ * every placed definition alike.
+ *
+ * `collectAssets` and `collectAnimations` both read this rather than walking
+ * the scene themselves: a prefab full of sprites has to load its textures, and
+ * without the descent those sprites would each export the "no image chosen"
+ * comment for an image that *is* chosen — a plausible-looking export that draws
+ * nothing. Definitions cannot nest (see `prefabChildrenOf`), so one level of
+ * descent is all of them.
+ */
+function emittedNodes(
+  scene: SceneDoc,
+  prefabs: Map<string, UsedPrefab>,
+): GameObjectNode[][] {
+  return [scene.children, ...[...prefabs.values()].map((entry) => entry.prefab.children)];
+}
+
+/**
  * A texture key for each image the scene actually uses, in use order.
  *
  * Only referenced assets are emitted: an export should not carry a megabyte of
@@ -115,7 +182,11 @@ interface UsedAsset {
   key: string;
 }
 
-function collectAssets(project: Project, scene: SceneDoc): Map<string, UsedAsset> {
+function collectAssets(
+  project: Project,
+  scene: SceneDoc,
+  prefabs: Map<string, UsedPrefab>,
+): Map<string, UsedAsset> {
   const used = new Map<string, UsedAsset>();
   const keys = new Set<string>();
 
@@ -136,7 +207,7 @@ function collectAssets(project: Project, scene: SceneDoc): Map<string, UsedAsset
       walk(node.children);
     }
   };
-  walk(scene.children);
+  for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
   return used;
 }
 
@@ -208,6 +279,7 @@ function collectAnimations(
   project: Project,
   scene: SceneDoc,
   assets: Map<string, UsedAsset>,
+  prefabs: Map<string, UsedPrefab>,
 ): Map<string, UsedAnimation> {
   const used = new Map<string, UsedAnimation>();
   const keys = new Set<string>();
@@ -232,7 +304,7 @@ function collectAnimations(
       walk(node.children);
     }
   };
-  walk(scene.children);
+  for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
   return used;
 }
 
@@ -274,23 +346,38 @@ function buildAnimationLines(used: Map<string, UsedAnimation>): string[] {
 }
 
 /**
+ * What the emitter needs to know that is not the node.
+ *
+ * Bundled rather than passed as five parameters because of `receiver`: the same
+ * emit runs once inside a Scene method, where objects are added to `this`, and
+ * once inside a prefab factory, where they are added to the `scene` it was
+ * handed. One generator, two receivers — a second copy of the emitter for the
+ * factory case is exactly the drift that having `buildCreateBody` shared
+ * between the module and the runnable page exists to prevent.
+ */
+interface EmitContext {
+  assets: Map<string, UsedAsset>;
+  animations: Map<string, UsedAnimation>;
+  prefabs: Map<string, UsedPrefab>;
+  /** `'this'` inside a Scene method, `'scene'` inside a factory function. */
+  receiver: string;
+}
+
+/**
  * The `add.*` call for one node, without any trailing modifiers.
  *
- * Null means "emit nothing for this node" — currently only a sprite with no
- * image chosen, which has no valid constructor call to make.
+ * Null means "emit nothing for this node": a sprite with no image chosen, or an
+ * instance whose prefab is gone. Neither has a valid constructor call to make.
  */
-function constructorFor(
-  node: GameObjectNode,
-  used: Map<string, UsedAsset>,
-  animations: Map<string, UsedAnimation>,
-): string | null {
+function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
   const { x, y } = node.transform;
+  const { assets: used, animations, receiver } = ctx;
 
   switch (node.type) {
     case 'rectangle':
-      return `this.add.rectangle(${num(x)}, ${num(y)}, ${num(node.props.width)}, ${num(node.props.height)}, ${hexLiteral(node.props.fill)})`;
+      return `${receiver}.add.rectangle(${num(x)}, ${num(y)}, ${num(node.props.width)}, ${num(node.props.height)}, ${hexLiteral(node.props.fill)})`;
     case 'ellipse':
-      return `this.add.ellipse(${num(x)}, ${num(y)}, ${num(node.props.width)}, ${num(node.props.height)}, ${hexLiteral(node.props.fill)})`;
+      return `${receiver}.add.ellipse(${num(x)}, ${num(y)}, ${num(node.props.width)}, ${num(node.props.height)}, ${hexLiteral(node.props.fill)})`;
     case 'sprite': {
       const entry = node.props.assetId ? used.get(node.props.assetId) : undefined;
       if (!entry) return null;
@@ -300,20 +387,28 @@ function constructorFor(
       // draws every sprite node as a Sprite, because there the node has to be
       // able to start animating the moment the user gives it a clip.
       if (node.props.animationId && animations.has(node.props.animationId)) {
-        return `this.add.sprite(${num(x)}, ${num(y)}, ${str(entry.key)})`;
+        return `${receiver}.add.sprite(${num(x)}, ${num(y)}, ${str(entry.key)})`;
       }
       // Frame 0 is `add.image`'s own default, so a plain image emits exactly
       // the call it always did.
       const frame = clampFrame(entry.asset, node.props.frame);
       return frame === 0
-        ? `this.add.image(${num(x)}, ${num(y)}, ${str(entry.key)})`
-        : `this.add.image(${num(x)}, ${num(y)}, ${str(entry.key)}, ${num(frame)})`;
+        ? `${receiver}.add.image(${num(x)}, ${num(y)}, ${str(entry.key)})`
+        : `${receiver}.add.image(${num(x)}, ${num(y)}, ${str(entry.key)}, ${num(frame)})`;
     }
     case 'container':
-      return `this.add.container(${num(x)}, ${num(y)})`;
+      return `${receiver}.add.container(${num(x)}, ${num(y)})`;
+    case 'instance': {
+      const entry = node.props.prefabId ? ctx.prefabs.get(node.props.prefabId) : undefined;
+      if (!entry) return null;
+      // A call, not an `add.*`: the factory does the adding, and returns the
+      // Container every modifier below then applies to exactly as it would to a
+      // group's.
+      return `${entry.fn}(${receiver}, ${num(x)}, ${num(y)})`;
+    }
     case 'text':
       return (
-        `this.add.text(${num(x)}, ${num(y)}, ${str(node.props.text)}, {\n` +
+        `${receiver}.add.text(${num(x)}, ${num(y)}, ${str(node.props.text)}, {\n` +
         `      fontFamily: ${str(node.props.fontFamily)},\n` +
         `      fontSize: ${str(`${node.props.fontSize}px`)},\n` +
         `      color: ${str(node.props.color)},\n` +
@@ -369,22 +464,21 @@ function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimatio
  */
 function emitNode(
   node: GameObjectNode,
-  assets: Map<string, UsedAsset>,
-  animations: Map<string, UsedAnimation>,
+  ctx: EmitContext,
   used: Set<string>,
   lines: string[],
 ): string | null {
-  const constructor = constructorFor(node, assets, animations);
+  const constructor = constructorFor(node, ctx);
   if (constructor === null) {
     // Say so rather than skipping silently: an object missing from the export
     // with no explanation reads as an exporter bug.
-    lines.push(`// ${node.name}: no image chosen in the editor, so nothing to add.`);
+    lines.push(`// ${commentText(node.name)}: ${missingReason(node)}`);
     lines.push('');
     return null;
   }
 
   const id = toIdentifier(node.name, used);
-  const modifiers = modifiersFor(node, animations);
+  const modifiers = modifiersFor(node, ctx.animations);
   const chain = modifiers.length > 0 ? `\n      ${modifiers.join('\n      ')}` : '';
   lines.push(`const ${id} = ${constructor}${chain};`);
   // Carries the editor name through, so objects stay findable at runtime.
@@ -393,7 +487,7 @@ function emitNode(
 
   if (node.type === 'container' && node.children.length > 0) {
     const childIds = node.children
-      .map((child) => emitNode(child, assets, animations, used, lines))
+      .map((child) => emitNode(child, ctx, used, lines))
       .filter((childId): childId is string => childId !== null);
     // Added after the children are built, and in document order: a container's
     // list order is its draw order, exactly as the scene's array is.
@@ -406,13 +500,82 @@ function emitNode(
   return id;
 }
 
-/** The body of `create()`, shared verbatim by both outputs. */
-function buildCreateBody(
-  scene: SceneDoc,
-  assets: Map<string, UsedAsset>,
-  animations: Map<string, UsedAnimation>,
+/** Why a node emitted nothing, for the comment that stands in its place. */
+function missingReason(node: GameObjectNode): string {
+  return node.type === 'instance'
+    ? 'the prefab it placed is no longer in the project, so nothing to add.'
+    : 'no image chosen in the editor, so nothing to add.';
+}
+
+/**
+ * Free user text on its way into a `//` comment.
+ *
+ * A line comment ends at the first newline, so a name containing one puts
+ * whatever follows it into the generated file *as code*. `escapeForScriptTag`
+ * does not help — a newline inside a comment is perfectly legal HTML and
+ * perfectly legal JavaScript, which is the problem. U+2028/9 terminate a line
+ * for the same purposes and go the same way.
+ */
+function commentText(text: string): string {
+  return text.replace(/[\r\n\u2028\u2029]+/g, ' ');
+}
+
+/**
+ * One factory function per placed prefab, above the class.
+ *
+ * The signature is the one place the two languages differ by more than the
+ * `: void` on the methods: a bare `function createCoin(scene, x, y)` is three
+ * implicit `any`s, and the exported `.ts` is compiled under `--strict`, so it
+ * would not build. The annotations are therefore language-dependent, while the
+ * *body* is the same `emitNode` both outputs already share — which is the
+ * property that actually matters, since it is what stops the runnable page
+ * drifting from the file you ship.
+ *
+ * Every binding inside a factory is function-scoped, so each body gets its own
+ * identifier set — seeded with the parameters, the root, and every factory
+ * name, because an object inside a definition called "scene" or called
+ * "create coin" would otherwise shadow the thing the body is using.
+ */
+function buildFactories(
+  ctx: EmitContext,
+  language: SceneLanguage,
+  indent: string,
 ): string {
-  const used = new Set<string>(['this']);
+  const factoryNames = [...ctx.prefabs.values()].map((entry) => entry.fn);
+  const typed = language === 'ts';
+  const params = typed ? 'scene: Phaser.Scene, x: number, y: number' : 'scene, x, y';
+  const returns = typed ? ': Phaser.GameObjects.Container' : '';
+
+  // The one thing the factory changes about the emit: objects are added to the
+  // scene it was handed, not to a `this` it does not have.
+  const inner: EmitContext = { ...ctx, receiver: 'scene' };
+
+  const blocks = [...ctx.prefabs.values()].map((entry) => {
+    const used = new Set<string>(['scene', 'x', 'y', 'root', ...factoryNames]);
+    const lines: string[] = ['const root = scene.add.container(x, y);', ''];
+    const childIds = entry.prefab.children
+      .map((child) => emitNode(child, inner, used, lines))
+      .filter((childId): childId is string => childId !== null);
+    if (childIds.length > 0) lines.push(`root.add([${childIds.join(', ')}]);`, '');
+    lines.push('return root;');
+
+    const body = lines.map((line) => (line ? `  ${line}` : '')).join('\n');
+    return `function ${entry.fn}(${params})${returns} {\n${body}\n}`;
+  });
+
+  return blocks.join('\n\n').replace(/^(?!$)/gm, indent);
+}
+
+/** The body of `create()`, shared verbatim by both outputs. */
+function buildCreateBody(scene: SceneDoc, ctx: EmitContext): string {
+  const { animations } = ctx;
+  // Seeded with the factory names as well as `this`: the instance calls are in
+  // this scope, so an object named "create coin" bound here would shadow the
+  // function the call beside it is trying to reach.
+  const used = new Set<string>([
+    'this',
+    ...[...ctx.prefabs.values()].map((entry) => entry.fn),
+  ]);
   const lines: string[] = [
     `this.cameras.main.setBackgroundColor(${str(scene.backgroundColor)});`,
   ];
@@ -428,7 +591,7 @@ function buildCreateBody(
   // `buildAnimationLines` already ends on a blank, so this is the separator
   // only when there were no animations to separate from.
   if (scene.children.length > 0 && lines.at(-1) !== '') lines.push('');
-  for (const node of scene.children) emitNode(node, assets, animations, used, lines);
+  for (const node of scene.children) emitNode(node, ctx, used, lines);
 
   while (lines.at(-1) === '') lines.pop();
   return lines.map((line) => (line ? `    ${line}` : '')).join('\n');
@@ -443,10 +606,12 @@ export type SceneLanguage = 'ts' | 'js';
 /**
  * A Scene class module to drop into an existing Phaser project.
  *
- * The two languages differ by exactly one token — the `: void` return
- * annotation — because everything `buildCreateBody` emits is already plain
- * JavaScript. That is the same property that lets the runnable page embed the
- * body verbatim.
+ * The `create()` body is plain JavaScript in both languages, which is what lets
+ * the runnable page embed it verbatim; the two differ only in annotations —
+ * `: void` on the methods, and the parameter and return types on the prefab
+ * factories, which a bare `function createCoin(scene, x, y)` would leave as
+ * three implicit `any`s under the `--strict` the exported `.ts` is compiled
+ * with.
  *
  * Both are ES modules that import Phaser, matching how a bundler-based project
  * consumes them. The script-tag flavour, where Phaser is a global and there are
@@ -460,25 +625,34 @@ export function generateScene(
 ): string {
   const className = toClassName(scene.name);
   const returnType = language === 'ts' ? ': void' : '';
-  const assets = collectAssets(project, scene);
-  const animations = collectAnimations(project, scene, assets);
+  // Factory names come out of the module's identifier set before anything else
+  // draws from it, so a later object binding is the one that gets renamed.
+  const moduleNames = new Set<string>([className]);
+  const prefabs = collectPrefabs(project, scene, moduleNames);
+  const assets = collectAssets(project, scene, prefabs);
+  const animations = collectAnimations(project, scene, assets, prefabs);
+  const ctx: EmitContext = { assets, animations, prefabs, receiver: 'this' };
 
   // A scene with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
   const table = assets.size > 0 ? `\n${buildAssetTable(assets, '')}\n` : '';
+  // Likewise: a scene that places no prefab emits no factories, so every
+  // project that predates them exports byte for byte what it always did.
+  const factories =
+    prefabs.size > 0 ? `\n${buildFactories(ctx, language, '')}\n` : '';
   const preload =
     assets.size > 0 ? `  preload()${returnType} {\n${buildPreloadBody(assets)}\n  }\n\n` : '';
 
   return `${header(project)}
 import Phaser from 'phaser';
-${table}
+${table}${factories}
 export class ${className} extends Phaser.Scene {
   constructor() {
     super(${str(scene.name)});
   }
 
 ${preload}  create()${returnType} {
-${buildCreateBody(scene, assets, animations)}
+${buildCreateBody(scene, ctx)}
   }
 }
 
@@ -503,11 +677,18 @@ export function generateRunnableHtml(
     ? project.phaserVersion
     : TARGET_PHASER_VERSION;
   const cdn = `https://cdn.jsdelivr.net/npm/phaser@${version}/dist/phaser.min.js`;
-  const assets = collectAssets(project, scene);
-  const animations = collectAnimations(project, scene, assets);
+  const moduleNames = new Set<string>([className]);
+  const prefabs = collectPrefabs(project, scene, moduleNames);
+  const assets = collectAssets(project, scene, prefabs);
+  const animations = collectAnimations(project, scene, assets, prefabs);
+  const ctx: EmitContext = { assets, animations, prefabs, receiver: 'this' };
 
   const table =
     assets.size > 0 ? `${buildAssetTable(assets, '      ')}\n\n` : '';
+  // The JavaScript flavour of the factories: this page has no type annotations
+  // anywhere, and Phaser is a global here rather than an import.
+  const factories =
+    prefabs.size > 0 ? `${buildFactories(ctx, 'js', '      ')}\n\n` : '';
   const preload =
     assets.size > 0
       ? `        preload() {\n${buildPreloadBody(assets).replace(/^/gm, '    ')}\n        }\n\n`
@@ -526,13 +707,13 @@ export function generateRunnableHtml(
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}      class ${className} extends Phaser.Scene {
+${table}${factories}      class ${className} extends Phaser.Scene {
         constructor() {
           super(${str(scene.name)});
         }
 
 ${preload}        create() {
-${buildCreateBody(scene, assets, animations).replace(/^/gm, '    ')}
+${buildCreateBody(scene, ctx).replace(/^/gm, '    ')}
         }
       }
 
