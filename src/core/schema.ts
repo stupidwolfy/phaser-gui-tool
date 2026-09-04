@@ -77,9 +77,23 @@
  * on `parseProject` not reconstructing the scenes field by field**, exactly as
  * the guides decision is — if it ever starts to, an old build silently loses
  * every body on every save, which is data loss with no crash. `physics.spec.ts`
- * asserts the 7 in the saved artefact so a future bump is a deliberate act.
+ * asserts the current version in the saved artefact so a future bump is a
+ * deliberate act.
+ *
+ * v8 — audio — is the *other* half of the rule, and the first bump since v4 to
+ * turn on it rather than on a crash. There is no new node type, so a v7 build
+ * has a `createDisplayObject` case for everything in the file and draws it
+ * identically; what it does instead is worse. `parseProject` names the
+ * project's fields one at a time, so a v7 build opening a v8 file drops the
+ * whole `audio` table and writes the file back without it — every imported
+ * sound gone, with nothing having said so. That is the `animations` case
+ * exactly. The scene's own `sounds` list would have survived on its own, riding
+ * in on `scenes` as the guides and the bodies do, which is precisely why it is
+ * not what bumps this: the table it points at is. `audio.spec.ts` asserts the
+ * current version in the saved artefact so a future bump is a deliberate act —
+ * as six other specs now do, which is what makes a bump loud on purpose.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -125,6 +139,72 @@ export interface ImageAsset {
    * many frames their own image has.
    */
   sheet?: FrameGrid;
+}
+
+/**
+ * An imported sound, held in the document as a data URL.
+ *
+ * The `ImageAsset` argument, unchanged: the bytes are in the document because
+ * `JSON.stringify(project)` is the whole of the save, and a path to a file on
+ * disk breaks the moment the project moves. The cost is file size, which
+ * `importAudioFile` bounds far more tightly than it bounds an image — a minute
+ * of ordinary music outweighs a scene's worth of sprites.
+ *
+ * Nothing here is recorded that a decode can answer. `ImageAsset` stores
+ * `width`/`height` because a sprite's size is read on every sync and cannot
+ * wait for one; a duration is shown in a single panel row, so it is derived
+ * through `audio.ts`'s decode cache instead of being a second copy of a number
+ * the file already contains.
+ */
+export interface AudioAsset {
+  id: string;
+  /**
+   * The file name it was imported from — and, with its extension stripped, the
+   * key exported code plays it by. That is why this one is editable where an
+   * image's name is not: a texture key is only ever read by generated code,
+   * while `this.sound.play('jump')` is the one line the user writes by hand.
+   */
+  name: string;
+  /** One of `AUDIO_MIME_TYPES`; unlike an image's, it is not re-encoded. */
+  mimeType: string;
+  dataUrl: string;
+  /**
+   * Seconds, measured by the decode import performs anyway.
+   *
+   * Recorded for `ImageAsset.width`/`height`'s reason: decoding is
+   * asynchronous and a panel row is not, so a duration derived on demand would
+   * have every row read "—" for a moment on every open. It is intrinsic to the
+   * bytes rather than a second opinion about them, which is what separates it
+   * from the fields this schema keeps refusing.
+   */
+  duration: number;
+}
+
+/**
+ * One sound a scene registers, and how it is tuned.
+ *
+ * On the scene rather than on a node, because a sound is not a display object:
+ * it has no transform, no bounds and no name of its own to set, and the scene
+ * tree's whole organizing principle is a transform hierarchy. It sits beside
+ * `guides` and `physics`, which are scene-level document state for the same
+ * kind of reason.
+ *
+ * What is *not* here is when it plays. Registering a sound is layout; deciding
+ * that a coin makes a noise when something touches it is game logic — the
+ * argument that keeps `scene.start` out of the document, and the one
+ * `ParticlesProps` makes when it refuses an `emitting` field. The export emits
+ * a named `const` per entry so that `coinSound.play()`, the one line the user
+ * writes, has something to reach. `autoplay` is the single exception, and it is
+ * one because scene start is not a trigger the user chooses.
+ */
+export interface SceneSound {
+  id: string;
+  audioId: string;
+  loop: boolean;
+  /** Phaser's own 0..1. */
+  volume: number;
+  /** Plays as the scene starts — a level's music, which has no other cue. */
+  autoplay: boolean;
 }
 
 /**
@@ -670,6 +750,11 @@ export interface SceneDoc {
    * `guides` is, and read through `scenePhysicsOf`, never directly.
    */
   physics?: ScenePhysics;
+  /**
+   * The sounds this scene registers. Optional for the reason `guides` is, and
+   * read through `soundsOf`, never directly.
+   */
+  sounds?: SceneSound[];
 }
 
 /**
@@ -724,6 +809,56 @@ export function guidesOf(scene: SceneDoc): SceneGuide[] {
 }
 
 /**
+ * The scene's sounds: defaulted, validated, and resolved against the table.
+ *
+ * The `guidesOf` / `frameGridOf` / `physicsOf` / `tileMapOf` / `prefabChildrenOf`
+ * family, answering three questions at once — is there a list, is each entry
+ * well formed, and does each one name a sound the project still holds. Any of
+ * the three forgotten is an export that does not boot, because
+ * `this.sound.add(undefined)` is not a thing Phaser can be asked for.
+ *
+ * A dangling entry is *dropped* rather than kept and drawn some placeholder
+ * way, which is stricter than the treatment a sprite pointing at a missing
+ * image gets. The difference is the one `parseAnimations` already draws: a
+ * sprite has a placeholder to fall back to and a sound has nothing to be. The
+ * editor cannot produce one either way — `removeAudio` takes the entries with
+ * the file — so this only ever fires on a file the editor did not write, and
+ * dropping here means nothing downstream needs a guard of its own.
+ *
+ * A fresh array every call, exactly as `tileMapOf` and `physicsOf` build a
+ * fresh object — so `useEditorStore((s) => soundsOf(...))` compares unequal on
+ * every store change and loops forever (React error #185). Select the project
+ * and derive outside the selector.
+ */
+export function soundsOf(project: Project, scene: SceneDoc): SceneSound[] {
+  if (!Array.isArray(scene.sounds)) return [];
+
+  const sounds: SceneSound[] = [];
+  for (const candidate of scene.sounds) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const sound = candidate as Partial<SceneSound>;
+    if (typeof sound.id !== 'string' || !sound.id) continue;
+    // The one thing that costs a row rather than being repaired. Everything
+    // else here has a sensible value to fall back to; a reference to a sound
+    // the project does not hold has none, and `this.sound.add(undefined)` is
+    // not something Phaser can be asked for.
+    if (findAudio(project, sound.audioId) === undefined) continue;
+
+    const volume = Number(sound.volume);
+    sounds.push({
+      id: sound.id,
+      audioId: sound.audioId as string,
+      loop: sound.loop === true,
+      // Clamped rather than rejected: one nonsensical number should not cost
+      // the row, which is the treatment `parseSheet` gives a margin.
+      volume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 1,
+      autoplay: sound.autoplay === true,
+    });
+  }
+  return sounds;
+}
+
+/**
  * A reusable object graph, named and stored once for the whole project.
  *
  * Project-level for the reason the animations are: a prefab is a thing the
@@ -759,6 +894,17 @@ export interface Project {
    */
   assets: ImageAsset[];
   /**
+   * Sounds, shared across every scene for the reason the images are: two levels
+   * playing one theme should carry its bytes once, and those bytes are the
+   * largest thing in the file after the images.
+   *
+   * What a scene holds is a `SceneSound` pointing in here by id, which is the
+   * `animations` arrangement rather than the `assets` one — a sound is tuned
+   * per scene (a menu's theme is quieter than a boss fight's) while the file it
+   * plays is the same file.
+   */
+  audio: AudioAsset[];
+  /**
    * Animations, shared across every scene exactly as the assets they read are.
    *
    * A separate table rather than a field on the asset because a clip is
@@ -784,6 +930,13 @@ export function findAsset(
   id: string | null | undefined,
 ): ImageAsset | undefined {
   return id ? project.assets.find((asset) => asset.id === id) : undefined;
+}
+
+export function findAudio(
+  project: Project,
+  id: string | null | undefined,
+): AudioAsset | undefined {
+  return id ? project.audio.find((asset) => asset.id === id) : undefined;
 }
 
 export function findAnimation(

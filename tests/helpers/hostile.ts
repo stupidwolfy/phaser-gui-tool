@@ -1,5 +1,6 @@
 import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
 import { stripPng } from './png';
+import { silentWav } from './wav';
 
 /**
  * A project made of everything a project file should not contain.
@@ -55,6 +56,42 @@ export function hostileProject(): Project {
         width: 32,
         height: 8,
         sheet: { frameWidth: 8, frameHeight: 8, margin: 0, spacing: 0 },
+      },
+    ],
+    audio: [
+      {
+        id: 'sound-1',
+        // The name becomes the *audio cache key* in exported code, through
+        // `toIdentifier` — a sixth interpolation path, and the only one whose
+        // output a human is told to copy into a `play()` call of their own.
+        name: `${breakout} jump.wav`,
+        mimeType: 'audio/wav',
+        // Real bytes, for the reason the sheet is real: the export tests decode
+        // this in a browser, and a stub would be dropped by `parseAudio` and
+        // take the whole audio path out of the export with it.
+        dataUrl: `data:audio/wav;base64,${silentWav(20).toString('base64')}`,
+        duration: 0.02,
+      },
+      {
+        // A plain name, so its key is predictably `jump` — which is what lets
+        // the object named "jump sound" below actually collide with it. A
+        // hostile name cannot do that job: nobody can write down in advance
+        // what `toIdentifier` will make of one.
+        id: 'sound-2',
+        name: 'jump.wav',
+        mimeType: 'audio/wav',
+        dataUrl: `data:audio/wav;base64,${silentWav(20).toString('base64')}`,
+        duration: 0.02,
+      },
+      {
+        // Imported and used by no scene, which is the case that proves only
+        // *registered* sounds are emitted — a deleted-from-every-scene sound
+        // must not ship its bytes, the rule the images already follow.
+        id: 'sound-3',
+        name: 'unused.wav',
+        mimeType: 'audio/wav',
+        dataUrl: `data:audio/wav;base64,${silentWav(20).toString('base64')}`,
+        duration: 0.02,
       },
     ],
     animations: [
@@ -144,6 +181,21 @@ export function hostileProject(): Project {
         // Set here and deliberately absent from the second scene, so both
         // branches of `scenePhysicsOf` reach the exporter in one file.
         physics: { gravityX: -20, gravityY: 480 },
+        // `autoplay` is deliberately false on both. It would add an
+        // AudioContext-resume dependency to two toolchain tests for no
+        // coverage at all — the emitted `.play()` line is one statement, and
+        // `export.spec` asserts its text rather than its sound.
+        sounds: [
+          { id: 'snd-1', audioId: 'sound-1', loop: true, volume: 0.5, autoplay: false },
+          // A second entry on the *same* file, so the binding de-duplication in
+          // `buildSoundLines` runs: two rows would otherwise both bind
+          // `jumpSound` and the module would not parse.
+          { id: 'snd-2', audioId: 'sound-1', loop: false, volume: 1, autoplay: false },
+          { id: 'snd-3', audioId: 'sound-2', loop: false, volume: 0.25, autoplay: false },
+          // Dangling, which only a hand-edited file can hold. `soundsOf` drops
+          // it, so the export must show no trace of it at all.
+          { id: 'snd-4', audioId: 'gone', loop: false, volume: 1, autoplay: false },
+        ],
         children: [
           {
             id: 'a',
@@ -428,6 +480,22 @@ export function hostileProject(): Project {
             visible: true,
             transform: { x: 780, y: 120, rotation: 0, scaleX: 1, scaleY: 1 },
             props: { width: 60, height: 60, fill: '#8b5cf6', alpha: 1 },
+            children: [],
+          },
+          {
+            id: 'q',
+            // Named after a sound handle, so `toIdentifier` collides with one.
+            // The `arcade body` trick one feature over, and it catches the
+            // opposite failure: the sounds are allocated out of `create()`'s
+            // identifier set *before* any object is, so this object must come
+            // out as `jumpSound2` and the handle must keep `jumpSound`. Getting
+            // the order wrong compiles and silently hands a hand-written
+            // `jumpSound.play()` a rectangle.
+            name: 'jump sound',
+            type: 'rectangle',
+            visible: true,
+            transform: { x: 840, y: 120, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { width: 40, height: 40, fill: '#22d3ee', alpha: 1 },
             children: [],
           },
           {

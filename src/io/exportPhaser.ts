@@ -4,12 +4,15 @@ import {
   clampFrame,
   findAnimation,
   findAsset,
+  findAudio,
   findPrefab,
   frameGridOf,
   physicsOf,
   scenePhysicsOf,
+  soundsOf,
   tileMapOf,
   type AnimationClip,
+  type AudioAsset,
   type GameObjectNode,
   type ImageAsset,
   type PhysicsBody,
@@ -323,6 +326,80 @@ function buildAssetTable(used: Map<string, UsedAsset>, indent: string): string {
 }
 
 /**
+ * A cache key for each sound some scene registers, in use order.
+ *
+ * `collectAssets`' sibling, with two differences that each look like an
+ * omission beside it. There is no traversal, because a sound belongs to a
+ * scene rather than to an object; and there is no descent into prefab
+ * definitions, because a definition holds nodes and a sound is not one — where
+ * `collectAssets` not descending was a real bug that exported a prefab full of
+ * sprites with no textures, here there is nowhere for one to hide.
+ *
+ * The keys come out of a `keys` set of its own rather than the images', which
+ * matters and would have read as tidier the other way. Textures and sounds live
+ * in different caches, so a project holding `coin.png` and `coin.wav` should get
+ * `'coin'` twice; one shared set would silently rename whichever came second,
+ * and the key is the string a person types into `this.sound.play(...)` by hand.
+ */
+interface UsedAudio {
+  audio: AudioAsset;
+  key: string;
+}
+
+/**
+ * The key one sound plays by, on its own — for the panel row that shows the
+ * user what to type into a `play()` call.
+ *
+ * Exported so that the row and the export cannot disagree about it. A second
+ * implementation in the UI would be two answers to one question, and this is
+ * the one question in the file whose answer a person copies out by hand.
+ * Without the de-duplication a table does, since a row is shown one at a time.
+ */
+export const audioKeyOf = (name: string): string =>
+  toIdentifier(name.replace(/\.[^.]+$/, ''), new Set());
+
+function collectAudio(project: Project, scenes: SceneDoc[]): Map<string, UsedAudio> {
+  const used = new Map<string, UsedAudio>();
+  const keys = new Set<string>();
+  for (const scene of scenes) {
+    for (const sound of soundsOf(project, scene)) {
+      if (used.has(sound.audioId)) continue;
+      const asset = findAudio(project, sound.audioId);
+      // `soundsOf` has already dropped a row naming a sound the project does
+      // not hold, so this cannot miss — kept because the alternative is a
+      // non-null assertion, and a table built from a document should not need
+      // one.
+      if (asset) {
+        used.set(asset.id, {
+          audio: asset,
+          // Strip the extension first: "jump.wav" should key as "jump".
+          key: toIdentifier(asset.name.replace(/\.[^.]+$/, ''), keys),
+        });
+      }
+    }
+  }
+  return used;
+}
+
+/**
+ * The sound table, `ASSETS`' sibling and a named const for its reason: the one
+ * thing a reader is most likely to want to change — swapping embedded bytes for
+ * real asset paths — should be one object at the top of the file.
+ */
+function buildAudioTable(used: Map<string, UsedAudio>, indent: string): string {
+  const lines = [
+    '/**',
+    ' * Sounds from the editor, embedded so this file needs nothing alongside it.',
+    ' * To serve them as real files instead, replace each value with its path.',
+    ' */',
+    'const AUDIO = {',
+    ...[...used.values()].map(({ audio, key }) => `  ${str(key)}: ${str(audio.dataUrl)},`),
+    '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
  * The body of `preload()`, or '' when the scene uses no images.
  *
  * Filtered to what *this* scene draws, out of a table built for the file: a
@@ -334,8 +411,13 @@ function buildAssetTable(used: Map<string, UsedAsset>, indent: string): string {
  * image as a one-frame sheet would work and would make every shape-only-plus-
  * image export differ from what it was for no gain.
  */
-function buildPreloadBody(used: Map<string, UsedAsset>, ids: ReadonlySet<string>): string {
-  return [...used.values()]
+function buildPreloadBody(
+  used: Map<string, UsedAsset>,
+  ids: ReadonlySet<string>,
+  audio: Map<string, UsedAudio>,
+  audioIds: ReadonlySet<string>,
+): string {
+  const images = [...used.values()]
     .filter(({ asset }) => ids.has(asset.id))
     .map(({ asset, key }) => {
       const sheet = frameGridOf(asset);
@@ -348,8 +430,17 @@ function buildPreloadBody(used: Map<string, UsedAsset>, ids: ReadonlySet<string>
         `      spacing: ${num(sheet.spacing)},\n` +
         `    });`
       );
-    })
-    .join('\n');
+    });
+
+  // After the images, so a project that predates audio emits exactly the
+  // `preload` it always did. One URL per key rather than Phaser's
+  // array-of-fallbacks form: those exist so a game can ship an .ogg beside an
+  // .mp3 for browsers that disagree, and there is one set of bytes here.
+  const sounds = [...audio.values()]
+    .filter((entry) => audioIds.has(entry.audio.id))
+    .map(({ key }) => `    this.load.audio(${str(key)}, AUDIO[${str(key)}]);`);
+
+  return [...images, ...sounds].join('\n');
 }
 
 /**
@@ -416,11 +507,14 @@ function collectAnimations(
  * to be settled once for the file; this decides what belongs in one scene's
  * `preload` and `create`, and a scene that registered a clip over a texture it
  * never loaded would throw in `generateFrameNumbers` before drawing anything.
+ * The sounds are here for the same reason and a sharper version of it: see the
+ * comment on the audio set below.
  */
 function usedIn(
+  project: Project,
   scene: SceneDoc,
   prefabs: Map<string, UsedPrefab>,
-): { assets: Set<string>; animations: Set<string> } {
+): { assets: Set<string>; animations: Set<string>; audio: Set<string> } {
   const assets = new Set<string>();
   const animations = new Set<string>();
   const walk = (nodes: GameObjectNode[]) => {
@@ -443,7 +537,15 @@ function usedIn(
     }
   };
   for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
-  return { assets, animations };
+
+  // A read rather than a traversal, which is the shape of the feature and not a
+  // shortcut: a sound belongs to the scene, so there is no node to walk into.
+  // Getting this half wrong is worse than getting the image half wrong — a
+  // texture a scene never loaded draws a missing-texture square, while
+  // `sound.add` on a key the cache does not hold *throws*, inside `create()`,
+  // before a single object has been added.
+  const audio = new Set(soundsOf(project, scene).map((sound) => sound.audioId));
+  return { assets, animations, audio };
 }
 
 /**
@@ -757,6 +859,12 @@ interface EmitContext {
    * same identifier set and for the same reason as `tilemapFn`.
    */
   bodyFn: string;
+  /**
+   * The sound table, file-wide like `assets` and read by `buildSoundLines`
+   * alone. No `receiver` question attaches to it: the only place a sound is
+   * ever emitted is a Scene's own `create()`.
+   */
+  audio: Map<string, UsedAudio>;
   /** `'this'` inside a Scene method, `'scene'` inside a factory function. */
   receiver: string;
 }
@@ -1051,8 +1159,84 @@ function buildFactories(
   return blocks.join('\n\n').replace(/^(?!$)/gm, indent);
 }
 
+/**
+ * The `sound.add` calls for the sounds this scene registers.
+ *
+ * What this emits is a handle and nothing else, and that is the feature rather
+ * than a limitation of it. *Registering* a sound is layout — it belongs to the
+ * scene the way its background colour and its gravity do — while *when* a sound
+ * plays is game logic, which is the argument that keeps `scene.start` out of
+ * the document. So `jumpSound.play()` stays the one line the user writes, and
+ * this is what that line reaches. `mass` and `immovable` are emitted for
+ * exactly this reason one feature over: the hand-written line is the collider,
+ * and those are the properties it reads.
+ *
+ * `this` is hardcoded rather than taken from `ctx.receiver`, and that is not an
+ * oversight either. `receiver` exists because *one* emitter runs in two places,
+ * inside a Scene method and inside a prefab factory; this one runs in one,
+ * because a sound belongs to a scene and a definition has no scene of its own.
+ * Writing `${ctx.receiver}` would read as though a factory could reach here,
+ * and the day one did, its sound would be added against a key nothing in
+ * `usedIn` had loaded — which throws.
+ *
+ * `sound.get(...) ?? sound.add(...)` is the `anims.exists` guard above by a
+ * different route, and it needs one because the failure it prevents is louder.
+ * `anims.create` on a key the manager already holds is refused with a warning;
+ * `sound.add` on a duplicate key is *accepted*, and answers with a second sound
+ * object — so a scene that runs `create()` twice, which is the ordinary way a
+ * game returns to its menu, would end up with two copies of a looping theme
+ * playing over each other. The `??` form was checked against Phaser 4's real
+ * types before being written: `Scene.sound` is a union of three managers, and
+ * both `get` and `add` synthesise a call across it.
+ */
+function buildSoundLines(
+  project: Project,
+  scene: SceneDoc,
+  audio: Map<string, UsedAudio>,
+  used: Set<string>,
+): string[] {
+  const sounds = soundsOf(project, scene);
+  if (sounds.length === 0) return [];
+
+  const lines: string[] = [
+    '// Sounds from the editor, ready for a line of your own: jumpSound.play().',
+  ];
+
+  for (const sound of sounds) {
+    const entry = audio.get(sound.audioId);
+    // `soundsOf` has already dropped a row whose sound is missing, so every
+    // row here is in the table. There is no "it emitted nothing" comment to
+    // write, which is why `missingReason` needed no audio branch.
+    if (!entry) continue;
+
+    // `<key>Sound` rather than the bare key, out of `create()`'s own identifier
+    // set and before any object draws from it. Both halves matter. Allocating
+    // first is the prefab factories' rule one level down — an object the user
+    // named "jump" must not take a binding a hand-written line is reaching for.
+    // Suffixing is what stops that precedence being a theft: the sound gets
+    // `jumpSound`, the object keeps `jump`, and neither is `jump2` with nothing
+    // saying which is which.
+    const id = toIdentifier(`${entry.key} sound`, used);
+    lines.push(
+      `const ${id} = this.sound.get(${str(entry.key)}) ?? ` +
+        `this.sound.add(${str(entry.key)}, ` +
+        `{ loop: ${sound.loop}, volume: ${num(sound.volume)} });`,
+    );
+    // Its own statement rather than a chain link: `BaseSound.play()` answers
+    // with a boolean rather than the sound, so it is the one `.play` in this
+    // file that cannot be appended to the constructor the way a Sprite's is.
+    // It is also why `autoplay` is not in the config literal above — it is not
+    // a `SoundConfig` key, and an excess property on a fresh object literal
+    // would fail the exported `.ts` under `--strict` while the `.js` passed.
+    if (sound.autoplay) lines.push(`${id}.play();`);
+  }
+  lines.push('');
+  return lines;
+}
+
 /** The body of `create()`, shared verbatim by both outputs. */
 function buildCreateBody(
+  project: Project,
   scene: SceneDoc,
   ctx: EmitContext,
   plays: ReadonlySet<string>,
@@ -1103,8 +1287,20 @@ function buildCreateBody(
     lines.push(...registrations);
   }
 
-  // `buildAnimationLines` already ends on a blank, so this is the separator
-  // only when there were no animations to separate from.
+  // Last in the prologue, because it is the block with nothing below it that
+  // depends on where it sits: a body needs the world above it, and an object's
+  // `.play(...)` needs its clip. What does force it above the objects is the
+  // identifier set — these handles are allocated out of `used` before any
+  // object binding is, so an object named "jump" cannot take a name a
+  // hand-written line elsewhere is reaching for.
+  const sounds = buildSoundLines(project, scene, ctx.audio, used);
+  if (sounds.length > 0) {
+    if (lines.at(-1) !== '') lines.push('');
+    lines.push(...sounds);
+  }
+
+  // The two blocks above each end on a blank, so this is the separator only
+  // when there was neither to separate from.
   if (scene.children.length > 0 && lines.at(-1) !== '') lines.push('');
   for (const node of scene.children) emitNode(node, ctx, used, lines);
 
@@ -1132,6 +1328,20 @@ function buildCreateBody(
  * would be a game whose objects all wear a green box nobody asked for. The
  * gravity lives in `create()` rather than here because it is per scene, and
  * this config is the boot scene's alone.
+ */
+/**
+ * There is no audio note and no audio key in the game config, and beside two
+ * constants that exist only because physics needed both, that absence looks
+ * exactly like a forgotten branch — so this says which.
+ *
+ * `physicsNote` and `arcadeConfig` exist because `this.physics` is undefined
+ * unless the config asks for Arcade, so a scene class using it throws in a
+ * project that does not. `this.sound` is never undefined: Phaser builds a sound
+ * manager for every game — Web Audio, HTML5 Audio, or the No Audio manager that
+ * accepts every call and plays nothing — so `this.load.audio` and
+ * `this.sound.add` are safe in a module dropped into someone else's game with
+ * no config change at all. The `audio: { … }` config keys only *narrow* that
+ * choice, and nothing emitted here needs them.
  */
 const arcadeConfig = (needed: boolean) =>
   needed ? "        physics: { default: 'arcade' },\n" : '';
@@ -1186,13 +1396,16 @@ function prepare(project: Project): Emission {
   // And immediately after it, by that same rule.
   const bodyFn = toIdentifier('arcade body', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
+  // Position among the tables is only about reading order: this draws from no
+  // shared identifier set, so nothing downstream depends on when it runs.
+  const audio = collectAudio(project, project.scenes);
   const animations = collectAnimations(project, project.scenes, assets, prefabs);
   const tilemaps = collectTilemaps(project, project.scenes, prefabs, assets);
   const current = activeScene(project);
   const worlds = project.scenes.map(physicsUsedIn);
   return {
     scenes,
-    ctx: { assets, animations, prefabs, tilemaps, tilemapFn, bodyFn, receiver: 'this' },
+    ctx: { assets, audio, animations, prefabs, tilemaps, tilemapFn, bodyFn, receiver: 'this' },
     boot: scenes.find((entry) => entry.scene.id === current.id) ?? scenes[0],
     physics: {
       any: worlds.some((world) => world.any),
@@ -1211,17 +1424,24 @@ function prepare(project: Project): Emission {
  * one layout to get right instead of one per method.
  */
 function buildSceneClass(
+  project: Project,
   entry: UsedScene,
   ctx: EmitContext,
   language: SceneLanguage,
   exported: boolean,
 ): string {
   const returnType = language === 'ts' ? ': void' : '';
-  const usage = usedIn(entry.scene, ctx.prefabs);
-  const preload =
-    usage.assets.size > 0
-      ? `  preload()${returnType} {\n${buildPreloadBody(ctx.assets, usage.assets)}\n  }\n\n`
-      : '';
+  const usage = usedIn(project, entry.scene, ctx.prefabs);
+  // Gated on the emitted body rather than on the set sizes, which is both the
+  // smaller edit now that there are two kinds of key and the more correct one:
+  // a set can hold an id no table matched — an image or a sound a hand-edited
+  // file names and does not contain — and a size check would then emit an empty
+  // `preload() {}`. That was already true of the images before there was a
+  // second way to get it wrong.
+  const preloadBody = buildPreloadBody(ctx.assets, usage.assets, ctx.audio, usage.audio);
+  const preload = preloadBody
+    ? `  preload()${returnType} {\n${preloadBody}\n  }\n\n`
+    : '';
 
   return `${exported ? 'export ' : ''}class ${entry.className} extends Phaser.Scene {
   constructor() {
@@ -1229,7 +1449,7 @@ function buildSceneClass(
   }
 
 ${preload}  create()${returnType} {
-${buildCreateBody(entry.scene, ctx, usage.animations)}
+${buildCreateBody(project, entry.scene, ctx, usage.animations)}
   }
 }`;
 }
@@ -1263,6 +1483,11 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // A project with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
   const table = ctx.assets.size > 0 ? `\n${buildAssetTable(ctx.assets, '')}\n` : '';
+  // The same rule a fourth time, so a project that predates audio exports byte
+  // for byte what it always did. Immediately after `ASSETS` because the two are
+  // the same kind of thing — embedded bytes a reader swaps for paths — and
+  // before `TILEMAPS`, which is derived from an asset rather than being one.
+  const audio = ctx.audio.size > 0 ? `\n${buildAudioTable(ctx.audio, '')}\n` : '';
   // Same rule again: no tilemaps, no table and no helper, so every project that
   // predates them exports byte for byte what it always did.
   const tiles =
@@ -1280,12 +1505,12 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
     ? `\n${buildBodyHelper(ctx.bodyFn, language, '')}\n`
     : '';
   const classes = scenes
-    .map((entry) => buildSceneClass(entry, ctx, language, true))
+    .map((entry) => buildSceneClass(project, entry, ctx, language, true))
     .join('\n\n');
 
   return `${header(project)}${physicsNote(physics.any)}
 import Phaser from 'phaser';
-${table}${tiles}${bodies}${factories}
+${table}${audio}${tiles}${bodies}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -1309,6 +1534,8 @@ export function generateRunnableHtml(project: Project): string {
 
   const table =
     ctx.assets.size > 0 ? `${buildAssetTable(ctx.assets, '      ')}\n\n` : '';
+  const audio =
+    ctx.audio.size > 0 ? `${buildAudioTable(ctx.audio, '      ')}\n\n` : '';
   const tiles =
     ctx.tilemaps.size > 0
       ? `${buildTilemapTable(ctx.tilemaps, '      ')}\n\n` +
@@ -1323,7 +1550,7 @@ export function generateRunnableHtml(project: Project): string {
     : '';
   const classes = scenes
     .map((entry) =>
-      buildSceneClass(entry, ctx, 'js', false).replace(/^(?!$)/gm, '      '),
+      buildSceneClass(project, entry, ctx, 'js', false).replace(/^(?!$)/gm, '      '),
     )
     .join('\n\n')
     .trimStart();
@@ -1352,7 +1579,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${tiles}${bodies}${factories}      ${classes}
+${table}${audio}${tiles}${bodies}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

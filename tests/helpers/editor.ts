@@ -804,6 +804,38 @@ export class EditorPage {
   }
 
   /** Discards the project and starts a new one. */
+  /**
+   * Imports a sound through the `<input type="file">` path, which is the only
+   * one the audio picker offers.
+   *
+   * Nothing may be selected: the audio panel lives in `SceneInspector`, which
+   * is the inspector shown when the selection is empty — so unlike
+   * `importImage`, this deselects first rather than assuming a node.
+   */
+  async importAudio(file: { name: string; buffer: Buffer }): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    const chooser = this.page.waitForEvent('filechooser');
+    await this.panel('inspect').getByRole('button', { name: 'Import audio…' }).click();
+    await (await chooser).setFiles({
+      name: file.name,
+      mimeType: 'audio/wav',
+      buffer: file.buffer,
+    });
+    // By title, because the row's own text is a duration, a size and a key —
+    // the same reason `importImage` waits on one.
+    await expect(this.panel('inspect').getByTitle(`Use ${file.name}`)).toBeVisible();
+    await this.settle();
+  }
+
+  /** Registers an already-imported sound in the active scene. */
+  async addSceneSound(name: string): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByTitle(`Use ${name}`).click();
+    await this.settle();
+  }
+
   async newProject(): Promise<void> {
     await this.openPanel('file');
     await this.panel('file')

@@ -9,6 +9,7 @@ import {
   type Prefab,
   type Project,
   type SceneDoc,
+  type SceneSound,
   type Transform,
 } from './schema';
 
@@ -193,6 +194,19 @@ export function defaultPhysicsBody(kind: PhysicsBody['kind'] = 'dynamic'): Physi
 }
 
 /**
+ * A scene's registration of a sound, at rest.
+ *
+ * Full volume, no loop and no autoplay: the settings a sound effect wants, and
+ * the ones that make adding one to a scene silent until the user asks for
+ * otherwise. A theme that starts by itself is a deliberate act, not a default —
+ * the same call `createNode` makes when every asset-bearing type starts with no
+ * image, because adding something should never surprise the person who did it.
+ */
+export function defaultSceneSound(audioId: string): SceneSound {
+  return { id: newId(), audioId, loop: false, volume: 1, autoplay: false };
+}
+
+/**
  * A node that places the given prefab.
  *
  * Named after the prefab rather than "Instance": the tree row is the only place
@@ -276,6 +290,7 @@ export function newProject(name = 'Untitled Project'): Project {
     name,
     phaserVersion: TARGET_PHASER_VERSION,
     assets: [],
+    audio: [],
     animations: [],
     prefabs: [],
     scenes: [scene],

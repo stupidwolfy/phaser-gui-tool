@@ -164,7 +164,7 @@ test('the types Arcade cannot simulate offer nothing', async ({ editor }) => {
   }
 });
 
-test('a body and the scene gravity survive a save and an open, at schema 7', async ({
+test('a body and the scene gravity survive a save and an open, at schema 8', async ({
   editor,
 }, testInfo) => {
   await setup(editor);
@@ -186,8 +186,9 @@ test('a body and the scene gravity survive a save and an open, at schema 7', asy
   // Unbumped, and asserted so that a future bump is a deliberate act rather
   // than something that happens to a file — the guides and scenes precedent.
   // A body rides in on `scenes`, which the parser passes through verbatim, so
-  // a deployed older build opens this file and draws it identically.
-  expect(project.schemaVersion).toBe(7);
+  // a deployed older build opens this file and draws it identically. It reads 8
+  // because audio bumped it; physics still did not.
+  expect(project.schemaVersion).toBe(8);
   expect(project.scenes[0].physics).toEqual({ gravityX: 0, gravityY: 600 });
   expect(project.scenes[0].children[0].physics).toMatchObject({
     kind: 'dynamic',

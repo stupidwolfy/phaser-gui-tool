@@ -128,6 +128,12 @@ test('an export of a hostile project runs, and injects nothing', async ({
 
   // It still runs, and the objects are still there: escaping the content is
   // not allowed to cost the export its meaning.
+  //
+  // This is also where the audio path is actually proved, without a single
+  // assertion about sound. The `sound.add` calls sit in the `create()`
+  // prologue, above every object — so a key the scene failed to preload throws
+  // there and *nothing below it is ever added*. Every colour assertion after
+  // this line is therefore a check that the sounds loaded and registered.
   const shot = await run.page.locator('canvas').screenshot();
   expect((await findColor(run.page, shot, RECT_FILL)).count).toBeGreaterThan(100);
   // Including the one inside a group, which reaches the canvas only if the
@@ -374,6 +380,44 @@ test('the exported page runs the physics it was given', async ({ editor, page },
   expect(run.errors).toEqual([]);
 
   await run.close();
+});
+
+test('sounds are tabled once, loaded per scene, and named without collision', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+
+  // One table for the whole file, and only what some scene registers: the
+  // hostile project imports a third sound no scene uses, and its bytes must
+  // not ship — the rule the images already follow.
+  expect(exported.contents).toContain('const AUDIO = {');
+  expect(exported.contents).toContain('"jump": "data:audio/wav;base64,');
+  expect(exported.contents).not.toContain('unused');
+
+  // Per scene, not per file: the second scene registers nothing, so it gets no
+  // `load.audio` at all. Splitting on the class declaration is how to say
+  // "this scene's preload" without parsing the module.
+  const [, first, second] = exported.contents.split(/^export class /m);
+  expect(first).toContain('this.load.audio("jump"');
+  expect(second).not.toContain('this.load.audio');
+
+  // The handle keeps `jumpSound` and the object named "jump sound" is pushed to
+  // `jumpSound2` — the sounds are allocated out of `create()`'s identifier set
+  // before any object draws from it. Getting that order wrong compiles, and
+  // hands a hand-written `jumpSound.play()` a rectangle.
+  expect(first).toContain('const jumpSound = this.sound.get("jump")');
+  expect(first).toContain('const jumpSound2 = this.add.rectangle(');
+
+  // Two rows on one file de-duplicate rather than colliding, and the row whose
+  // sound is no longer in the project leaves no trace: `soundsOf` drops it, so
+  // nothing downstream needs a guard or a stand-in comment.
+  expect(first).toContain('Sound2 = this.sound.get(');
+  expect(exported.contents).not.toContain("'gone'");
+  expect(exported.contents).not.toContain('"gone"');
 });
 
 test('a project with no bodies exports no physics at all', async ({ editor }) => {
