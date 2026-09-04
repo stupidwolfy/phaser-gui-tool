@@ -118,6 +118,37 @@ export function createNode(
           alpha: 1,
         },
       };
+    case 'particles':
+      return {
+        ...base,
+        type: 'particles',
+        name: name ?? 'Particles',
+        // No image, for the reason a sprite has none: adding an object must
+        // never open a file dialog. The numbers are a soft outward puff — a
+        // 360-degree spray that shrinks and fades over a second — so that the
+        // moment any image is chosen and preview is on, something recognisable
+        // happens rather than a single dot or a wall of texture.
+        props: {
+          assetId: null,
+          frame: 0,
+          lifespan: 1000,
+          speedMin: 50,
+          speedMax: 150,
+          angleMin: 0,
+          angleMax: 360,
+          scaleStart: 1,
+          scaleEnd: 0,
+          alphaStart: 1,
+          alphaEnd: 0,
+          quantity: 1,
+          frequency: 50,
+          gravityX: 0,
+          gravityY: 0,
+          tint: '#ffffff',
+          blendMode: 'NORMAL',
+          alpha: 1,
+        },
+      };
     case 'text':
       return {
         ...base,

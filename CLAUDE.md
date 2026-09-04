@@ -31,8 +31,10 @@ per prefab rather than a copy per placement. Iteration 13 (shipped) made the `sc
 array hold more than one: a switcher, and an export that emits every scene rather than the
 one on screen. Iteration 14 (shipped) made a level out of tiles: a `tilemap` node, a
 tileset that is nothing more than an image already sliced into frames, and a paint mode
-that owns the canvas while it is on. See the README for the user-facing feature
-list.
+that owns the canvas while it is on. Iteration 15 (shipped) put motion into the scene
+itself: a `particles` node drawn as a real `ParticleEmitter`, stopped by default and
+running only under the preview toggle the animations already had. See the README for the
+user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -86,14 +88,21 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
    so neither fails the build. Check those two by hand.
 2. `src/core/defaults.ts` — a `createNode` case with sensible starting values.
 3. `src/editor/phaser/EditorScene.ts` — a `createDisplayObject` case and an `applyNode`
-   case.
+   case. Only the first is enforced: `createDisplayObject` assigns `object` and uses it
+   after the switch, so a missing case is a definite-assignment error, while a missing
+   `applyNode` case is **silent**. That makes three silent steps, not the two below.
 4. `src/ui/Inspector.tsx` — a properties section.
 5. `src/ui/SceneTree.tsx` — add to `ADDABLE`; add a `.tree__type[data-type=...]` colour
    chip in `src/styles/app.css`.
 6. `src/io/exportPhaser.ts` — a `constructorFor` case. That one *is* a compile error under
    `strict` (the switch stops being exhaustive against a non-nullable return), but
-   `modifiersFor`, `collectAssets`, `collectAnimations` and `emitNode` are not exhaustive,
-   so check them in the same pass as the `EditorScene` case.
+   `modifiersFor`, `collectAssets`, `usedIn`, `missingReason`, `collectAnimations` and
+   `emitNode` are not exhaustive, so check them in the same pass as the `EditorScene`
+   case. `collectAssets` and `usedIn` are a pair and both are needed: the first decides
+   what a texture is called across the file, the second what *one scene* preloads.
+   `countAssetUses` in `src/core/store.ts` is off this checklist entirely and is the same
+   kind of hand-matched list — miss it and the image-deletion warning under-reports by a
+   whole object type.
 7. `tests/` — the two silent steps are exactly the two the suite covers: add the type to
    `tests/editing.spec.ts` (it draws where the document says, and survives a save and an
    open) and give it a hostile instance in `tests/helpers/hostile.ts`, which puts its
@@ -263,7 +272,9 @@ document state, and the shape of them follows from where each thing actually bel
   export that capability would be a heavier object and a reader's question about what it
   is for, so there the still case stays the `add.image` it always was — frame argument and
   all, since frame 0 is `add.image`'s own default.
-- **Preview is off by default and is editor state.** A canvas that animates by itself is a
+- **Preview is off by default and is editor state**, and since iteration 15 the field is
+  `previewMotion` and governs emitters too — see "Particles".
+- **The original argument for it.** A canvas that animates by itself is a
   canvas whose objects are never where you last looked, which makes placing one by eye a
   matter of timing; and the frame a still sprite shows is a document field the user is
   editing, so it has to be the frame on screen while they edit it. It is the one moment
@@ -271,11 +282,12 @@ document state, and the shape of them follows from where each thing actually bel
 - **`play(key, true)` — ignoreIfPlaying — is not optional.** The scene syncs on every
   store change, so without it a selection or a nudge of some unrelated object restarts
   every animation from frame 0 and nothing ever visibly advances.
-- **The toolbar's ▶ appears only once the project holds an animation.** A 390px toolbar
-  already clips when everything is shown, and a control that can only ever do nothing is
-  worth less than the width it costs — while a project that *does* animate needs it in the
-  toolbar rather than a panel, because on a phone a panel is a sheet over the canvas you
-  are trying to watch.
+- **The toolbar's ▶ appears only once the project holds something that moves** — an
+  animation or, since iteration 15, an emitter (`hasMotionIn`). A 390px toolbar already
+  clips when everything is shown, and a control that can only ever do nothing is worth
+  less than the width it costs — while a project that *does* move needs it in the toolbar
+  rather than a panel, because on a phone a panel is a sheet over the canvas you are
+  trying to watch.
 - **Un-slicing removes the clips; re-cutting only clamps them.** A clip is a list of
   indices into a grid, so removing the grid leaves them indexing nothing — but dropping a
   walk cycle over a one-pixel margin correction would be absurd, so a re-cut clamps
@@ -647,6 +659,105 @@ so what the canvas shows is what the export builds. Two decisions carry the rest
   so `useEditorStore((s) => tileMapOf(...))` is an infinite render loop — React error #185,
   found the first time the suite ran. Select the project and derive outside the selector, or
   reach for `useShallow` the way `useSelectionNodes` does.
+
+## Particles
+
+A `particles` node is a real `Phaser.GameObjects.Particles.ParticleEmitter`, so what the
+canvas throws is what the export builds. It is the first node whose whole point is what it
+does *over time*, and two decisions carry the rest of it.
+
+- **Preview governs emission, on the toggle the animations already had.** The argument is
+  the animation one at its sharpest: a canvas that animates by itself is a canvas whose
+  objects are never where you last looked. An emitter is therefore stopped unless ▶ is on.
+  It rides on the one toggle rather than a second, the call the angle step made when it
+  rode on the grid button — a 390px toolbar that already clips does not get a third motion
+  switch for the same idea. The field is `previewMotion`, not `previewAnimations`: named
+  after one of the two things it governs, it is exactly the setup for a future reader
+  talking themselves into a second flag for the other. The button appears when
+  `hasMotionIn` says the project holds a clip *or* an emitter, and that walks the prefab
+  bodies as well as the scenes, because an emitter placed only inside a prefab still
+  animates the canvas and would otherwise have no way to be stopped.
+- **A stopped emitter still has to be a real object**, which is `PLACEHOLDER_TEXTURE`'s
+  argument a third time and the widest version of it. `editor:emitter` covers "no image
+  chosen", "the image is gone", "the image is still decoding" *and* "chosen, but not
+  running" — one state and one code path rather than four. Its discs are filled, not
+  stroked: a one-pixel line never reaches full strength on screen, so an outlined marker
+  is both hard to see under a thumb and invisible to a colour-centroid assertion.
+- **The display object is a Container holding the marker and the emitter, and the wrapper
+  is not decoration.** A `ParticleEmitter` mixes in Transform, Visible, AlphaSingle,
+  BlendMode, Depth and Texture but **not** ComputedSize and **not** Origin — so it has no
+  `width`, no `height`, and no `displayOriginX` for `InputManager.pointWithinHitArea` to
+  add to every point it tests. That addition yields `NaN`, so a bare emitter can never be
+  hit at all: not selectable, not draggable, not resizable. A Container has all three,
+  which is why `localRectOf`, `hitAreaFor` and `applyHitArea` needed **no case for
+  particles** — a container with no measured bounds already falls through to a centred
+  `width`/`height` box, and `EMITTER_SIZE` is that size. Check this first if Phaser ever
+  gives the emitter ComputedSize; the wrapper could then go.
+- **The wrapper's children are private to the renderer, which is what makes it safe.**
+  `syncNodes` recurses into `container` and `instance` nodes *by node type*, and
+  `applyContainerBounds` runs for those two only — so nothing walks into a particles
+  container, nothing measures it, and `reparent`'s `getIndex(object) === index` assertion
+  never sees it. Putting the marker in a *user's* container instead would have broken that
+  assertion for every sibling after it, and with it "draw order is the array order, at
+  every level".
+- **The marker is shown exactly when the emitter is not.** One field, two controls, never
+  two notions of the same state — the eraser rule from the tile bar, one object over.
+- **`setConfig` in place; no rebuild, and no shape signature.** `setConfig` routes
+  `texture` and `frame` to `setTexture`/`setEmitterFrame` and leaves `emitting` alone, so
+  an emitter can be re-pointed and re-tuned without being replaced. That matters: a
+  rebuild kills every live particle, so nudging Lifespan with preview on would blank the
+  canvas on every keystroke. This is where the tilemap draws its line differently, and
+  deliberately — a Phaser map fixes its dimensions when it parses one, and an emitter
+  fixes nothing.
+- **`setConfig` is cache-guarded, and that is the `play(key, true)` trap by another
+  route.** It calls `resetCounters`, which restarts the flow — and the scene syncs on
+  *every* store change, so applying the config unconditionally would have a selection, or
+  a nudge of some unrelated object, reset every emitter before it had emitted anything.
+  `emitterConfigs` holds the last-applied config per display key and is compared first.
+- **Stopping is `stop(true)` — killing what is in flight, not letting it die out.**
+  Switching preview off has to put the canvas back immediately; particles lingering for a
+  whole lifespan would make the toggle look broken, and would leave a test polling for
+  five seconds to find out.
+- **Running is one condition: preview on *and* a real texture.** Without the second half
+  an emitter with no image would spray 96px markers across the scene — the document says
+  no such thing, and nobody asked for it.
+- **There is no `emitting` prop, and that is the `scene.start` argument.** Whether an
+  emitter runs is the preview toggle's answer in the editor and Phaser's default in an
+  export. A document field would be a second answer to the same question, and an emitter
+  that starts switched off and is triggered later is a line of game logic.
+- **The export is one `add.particles` with its config emitted whole**, defaults included —
+  deliberately unlike `modifiersFor`, which emits only what differs from Phaser's
+  defaults. A chained modifier left out is a line that would have restated a default; the
+  config literal *is* the object, so writing it whole means the generated code says what
+  the document says and every dial is in one place. It needs no module-level helper: an
+  emitter is a single expression, so it stays an `add.*` where a tilemap and an instance
+  could not.
+- **`setAngle` on a `ParticleEmitter` is Transform's, not the emission angle.** It was the
+  emission angle in Phaser 3.55, which would have made the shared `.setAngle` modifier
+  silently wrong — and wrong in a way *no* export assertion would catch. It is
+  `setEmitterAngle` now, and the config's `angle` carries it. `modifiersFor` therefore has
+  no particles branch, and says so in a comment, because here "no branch needed" and
+  "forgot a branch" look identical.
+- **The two traversals split by what they are *about*.** `mapProjectSprites` is for
+  everything about a **clip**, which only a sprite can play; `mapProjectNodes` is for
+  everything about an **image**, which a sprite, an emitter and a tilemap can all point
+  at. Only the second walks the prefab definitions — which closed a real hole in passing:
+  `removeAsset` used to leave a sprite *inside a definition* holding a dangling `assetId`,
+  because the sprite traversal never reached one.
+- **`SCHEMA_VERSION` bumped to 7, on the crash half of the rule and only that half.** A v6
+  build has no `'particles'` case in `createDisplayObject`, so it leaves the object
+  undefined and its renderer crashes — `tilemap` to v5 and `instance` to v4 exactly.
+  Nothing else needs it: a particle texture is an ordinary image, sliced or not, and the
+  emitter's settings ride in on `scenes`, the one part of a file `parseProject` passes
+  through verbatim.
+- **`particles` is in `editing.spec.ts`, where `sprite`, `tilemap` and `instance` are
+  not** — and the marker is what earns it that. Those three draw nothing until an image is
+  imported; an emitter draws with no setup at all, which is the whole reason the marker
+  exists.
+- **The fields are Phaser's own names, and "Scale start" is not "Scale".** The transform's
+  Scale X/Y and the object's own Alpha are a few rows up the same panel, so bare "Scale"
+  and "Alpha" would be ambiguous to a reader and to `labelled()`'s exact-match locator
+  alike — the "Animation name, not Name" rule.
 
 ## Selection
 
@@ -1036,7 +1147,8 @@ the file you ship — is unchanged, because both outputs still call the same
 Both outputs share `buildCreateBody`, so the runnable page can never drift from the
 file you ship. Adding a node type means adding a `constructorFor` case; under `strict` a
 missing case is a compile error there (the declared return is `string | null` and the
-switch stops being exhaustive), but `modifiersFor`, `collectAssets`, `collectAnimations`
+switch stops being exhaustive), but `modifiersFor`, `collectAssets`, `usedIn`,
+`missingReason`, `collectAnimations`
 and `emitNode` are none of them exhaustive over the union, so check those by hand — a
 missed `collectAssets` branch is the one that produces a plausible-looking export drawing
 a missing-texture square.
@@ -1101,6 +1213,7 @@ tests/
   animation.spec.ts         slicing a sheet, drawing one frame, playing a clip
   prefabs.spec.ts           saving a prefab, placing it twice, editing it once
   tilemap.spec.ts           slicing a tileset, painting it, filling and erasing
+  particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
@@ -1118,7 +1231,27 @@ nested emit and the `add([...])` list, not only the flat one — and holds a hos
 prefab, placed twice plus once danglingly, whose own children include a *sprite*. That
 sprite is not decoration: it is the only thing that fails if `collectAssets` stops
 descending into definitions, and the failure it catches is an export that boots and draws
-a missing-texture square rather than one that errors.
+a missing-texture square rather than one that errors. It also holds a hostilely-named
+emitter with a non-default value in all eighteen of its fields, plus one with no image.
+The first carries no free user text to escape and is not there for escaping: it is the
+only place the emitted config literal's *shape* meets `ParticleEmitterConfig` under
+`tsc --strict`, which is where a Phaser config key renamed between versions would fail and
+nowhere else.
+
+Two traps the particles suite hit, both worth knowing before writing a fixture:
+
+- **A fixture colour has to clear the editor's own chrome, not just the other objects.**
+  The obvious cyan for a particle texture is `#00e5ff` — which is `SELECTION_COLOR`, and a
+  freshly added node is selected, so `findDrawn` counted the outline drawn around the very
+  emitter under test and reported particles that were never emitted. The chrome to clear
+  is the outline `0x00e5ff`, the guides `0xff3ea5` and `0xffa723`, the frame `0x5a6478`,
+  the emitter marker `#ff6bd6` and the scene `#1d2330`.
+- **A whole-file `not.toContain` assertion is a shared resource.** The prefab export test
+  asserted the string "no image chosen in the editor" was absent from the entire output,
+  as its way of proving `collectAssets` descends into definitions. Adding a deliberately
+  image-less emitter to the hostile project made that string *correct* output and broke a
+  test about something else. Scope such an assertion to the region whose behaviour it is
+  actually about — there, the factory body.
 
 One trap the multi-select suite hit immediately: **adding an object selects it**, so a
 freshly added object is already in the selection and an additive tap on it takes it back
@@ -1295,7 +1428,18 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 Texture atlases (the asset table holds whole images cut on a regular grid; an atlas is
 named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
-than more of this one), physics, particles, audio, and cameras.
+than more of this one), physics, audio, and cameras.
+
+Particles shipped in iteration 15 with four deliberate holes. **No emit or death zones** —
+a zone is a geometry object, i.e. a second sub-format inside the document with its own
+parser, picker and validator, which is the `.tmj` argument at a smaller scale. **No
+follow target, timed burst or `stopAfter`** — behaviour over time is game logic, the
+`scene.start` argument again. **No per-particle animation**: `ParticlesProps` would grow an
+`animationId` and `collectAnimations` a branch, which is a pure loosening later rather than
+a format break, and the editor's whole clip story is built around a Sprite's
+`AnimationState`. **No multi-frame particles**: a `frames` array would be the second
+array-valued prop in the schema and the second `cloneWithNewIds` special case, for a look a
+single frame mostly covers.
 
 Tilemaps shipped in iteration 14 with three deliberate holes: **one layer per map**, **no
 per-tile collision**, and **no Tiled import**. The first is a loosening rather than a

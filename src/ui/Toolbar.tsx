@@ -1,4 +1,4 @@
-import { useEditorStore } from '../core/store';
+import { hasMotionIn, useEditorStore } from '../core/store';
 import { supportsFileSystemAccess } from '../io/fileIO';
 
 export interface ToolbarActions {
@@ -102,14 +102,15 @@ export function Toolbar({
   const setSnapEnabled = useEditorStore((s) => s.setSnapEnabled);
   const gridEnabled = useEditorStore((s) => s.gridEnabled);
   const setGridEnabled = useEditorStore((s) => s.setGridEnabled);
-  const previewAnimations = useEditorStore((s) => s.previewAnimations);
-  const setPreviewAnimations = useEditorStore((s) => s.setPreviewAnimations);
-  // Only a project that has an animation gets the button. A 390px toolbar
-  // already clips when everything is shown, and a control that can only ever
-  // do nothing is worth less than the width it costs — while a project that
-  // *does* animate needs it in the toolbar rather than a panel, because on a
-  // phone a panel is a sheet covering the canvas you are trying to watch.
-  const hasAnimations = useEditorStore((s) => s.project.animations.length > 0);
+  const previewMotion = useEditorStore((s) => s.previewMotion);
+  const setPreviewMotion = useEditorStore((s) => s.setPreviewMotion);
+  // Only a project with something that moves gets the button — an animation
+  // clip, or an emitter anywhere in it. A 390px toolbar already clips when
+  // everything is shown, and a control that can only ever do nothing is worth
+  // less than the width it costs — while a project that *does* move needs it in
+  // the toolbar rather than a panel, because on a phone a panel is a sheet
+  // covering the canvas you are trying to watch.
+  const hasMotion = useEditorStore((s) => hasMotionIn(s.project));
 
   return (
     <header className="toolbar">
@@ -171,15 +172,15 @@ export function Toolbar({
         >
           <GridIcon />
         </button>
-        {hasAnimations && (
+        {hasMotion && (
           <button
-            className={`btn btn--toggle ${previewAnimations ? 'is-active' : ''}`}
-            aria-pressed={previewAnimations}
-            onClick={() => setPreviewAnimations(!previewAnimations)}
-            title={previewAnimations ? 'Stop animations' : 'Play animations'}
-            aria-label="Play animations"
+            className={`btn btn--toggle ${previewMotion ? 'is-active' : ''}`}
+            aria-pressed={previewMotion}
+            onClick={() => setPreviewMotion(!previewMotion)}
+            title={previewMotion ? 'Preview on' : 'Preview off'}
+            aria-label="Preview motion"
           >
-            <PreviewIcon playing={previewAnimations} />
+            <PreviewIcon playing={previewMotion} />
           </button>
         )}
       </div>

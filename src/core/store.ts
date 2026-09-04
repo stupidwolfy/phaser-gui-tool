@@ -191,7 +191,8 @@ export interface EditorState {
   setGuidesVisible: (guidesVisible: boolean) => void;
 
   /**
-   * Whether animated sprites actually play on the canvas.
+   * Whether the canvas moves by itself: animated sprites play, and particle
+   * emitters emit.
    *
    * Editor state, never saved, and off by default — the same family as
    * `snapEnabled` and `lockAspect`. A canvas that animates by itself is a
@@ -200,9 +201,16 @@ export interface EditorState {
    * document field the user is editing, so it has to be the frame on screen
    * while they edit it. Preview is therefore something asked for, and the one
    * moment the canvas stops mirroring the document exactly.
+   *
+   * An emitter is that argument at its sharpest — stopped it sits at a fixed
+   * place, running it draws a cloud that is somewhere different every frame —
+   * which is why it rides on this one field rather than a second toggle. Named
+   * for the motion rather than for animations because it governs both: a field
+   * named after one of two things is how a future reader talks themselves into
+   * adding a second flag for the other.
    */
-  previewAnimations: boolean;
-  setPreviewAnimations: (previewAnimations: boolean) => void;
+  previewMotion: boolean;
+  setPreviewMotion: (previewMotion: boolean) => void;
   /**
    * The tilemap the canvas is currently painting, or null.
    *
@@ -589,7 +597,17 @@ function mapSprites(
   return changed ? next : nodes;
 }
 
-/** The same, across every scene in the project. */
+/**
+ * The same, across every scene in the project.
+ *
+ * The division of labour with `mapProjectNodes` is worth stating once, because
+ * both look like "reach across the document and patch things": this one is the
+ * traversal for everything about a **clip**, which only a sprite can play, and
+ * `mapProjectNodes` is the traversal for everything about an **image**, which a
+ * sprite, an emitter and a tilemap can all point at. That is also why only the
+ * second one walks the prefab definitions — an image reference inside one
+ * outlives the image otherwise.
+ */
 function mapProjectSprites(
   project: Project,
   patch: (props: SpriteProps, id: string) => Partial<SpriteProps> | null,
@@ -1057,7 +1075,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     gridSize: DEFAULT_GRID_SIZE,
     angleStep: DEFAULT_ANGLE_STEP,
     guidesVisible: true,
-    previewAnimations: false,
+    previewMotion: false,
     paintingId: null,
     brushTile: 0,
     erasing: false,
@@ -1080,7 +1098,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         angleStep: Math.max(1, Math.min(180, Math.round(angleStep) || DEFAULT_ANGLE_STEP)),
       }),
     setGuidesVisible: (guidesVisible) => set({ guidesVisible }),
-    setPreviewAnimations: (previewAnimations) => set({ previewAnimations }),
+    setPreviewMotion: (previewMotion) => set({ previewMotion }),
 
     setPainting: (paintingId) => set({ paintingId }),
     setBrushTile: (brushTile) => set({ brushTile: Math.max(0, Math.floor(brushTile)) }),
@@ -1248,32 +1266,45 @@ export const useEditorStore = create<EditorState>((set, get) => {
         const orphaned = new Set(
           project.animations.filter((clip) => clip.assetId === id).map((clip) => clip.id),
         );
-        const withoutSprites = mapProjectSprites(
+
+        // Every kind of reference to the image goes in one traversal, by the
+        // rule that the document may never hold a dangling reference after any
+        // action in the editor. `mapProjectNodes` rather than
+        // `mapProjectSprites` because that one walks the scenes only, and a
+        // sprite, an emitter or a tilemap can all sit inside a prefab
+        // definition — where a dangling id would outlive the image with nothing
+        // in the editor able to reach it.
+        //
+        // A tilemap keeps its tiles: unlike an image, where the bytes were the
+        // only copy, the indices still mean something the moment another
+        // tileset is picked, and `tileMapOf` draws them as empty until one is.
+        return mapProjectNodes(
           {
             ...project,
             assets: project.assets.filter((asset) => asset.id !== id),
             animations: project.animations.filter((clip) => !orphaned.has(clip.id)),
           },
-          (props) =>
-            props.assetId === id
-              ? { assetId: null, frame: 0, animationId: null }
-              : props.animationId && orphaned.has(props.animationId)
-                ? { animationId: null }
-                : null,
-        );
-
-        // The tilemaps drawing it lose their tileset in the same step, by the
-        // rule that the document may never hold a dangling reference after any
-        // action in the editor. Their tiles stay: unlike an image, where the
-        // bytes were the only copy, the indices still mean something the moment
-        // another tileset is picked — and `tileMapOf` draws them as empty until
-        // one is. `mapProjectNodes` rather than `mapProjectSprites` because a
-        // tilemap can sit inside a prefab definition, which that one does not
-        // walk.
-        return mapProjectNodes(withoutSprites, (node) =>
-          node.type === 'tilemap' && node.props.assetId === id
-            ? { ...node, props: { ...node.props, assetId: null } }
-            : null,
+          (node) => {
+            if (node.type === 'sprite') {
+              if (node.props.assetId === id) {
+                return {
+                  ...node,
+                  props: { ...node.props, assetId: null, frame: 0, animationId: null },
+                };
+              }
+              if (node.props.animationId && orphaned.has(node.props.animationId)) {
+                return { ...node, props: { ...node.props, animationId: null } };
+              }
+              return null;
+            }
+            if (node.type === 'particles' && node.props.assetId === id) {
+              return { ...node, props: { ...node.props, assetId: null, frame: 0 } };
+            }
+            if (node.type === 'tilemap' && node.props.assetId === id) {
+              return { ...node, props: { ...node.props, assetId: null } };
+            }
+            return null;
+          },
         );
       }),
 
@@ -1305,20 +1336,36 @@ export const useEditorStore = create<EditorState>((set, get) => {
           return { ...clip, frames };
         });
 
-        return mapProjectSprites(
+        // An emitter indexes the same grid a sprite does — `frameCountOf` is a
+        // property of the image, which is the whole point of the grid living
+        // on the asset — so its frame is clamped by the same call, in the same
+        // traversal, and for the same reason.
+        return mapProjectNodes(
           {
             ...project,
             assets: project.assets.map((entry) => (entry.id === assetId ? next : entry)),
             animations,
           },
-          (props) => {
-            if (props.assetId !== assetId) return null;
-            const frame = clampFrame(next, props.frame);
-            const animationId =
-              props.animationId && removed.has(props.animationId) ? null : props.animationId;
-            return frame === props.frame && animationId === props.animationId
-              ? null
-              : { frame, animationId };
+          (node) => {
+            if (node.type === 'sprite') {
+              if (node.props.assetId !== assetId) return null;
+              const frame = clampFrame(next, node.props.frame);
+              const animationId =
+                node.props.animationId && removed.has(node.props.animationId)
+                  ? null
+                  : node.props.animationId;
+              return frame === node.props.frame && animationId === node.props.animationId
+                ? null
+                : { ...node, props: { ...node.props, frame, animationId } };
+            }
+            if (node.type === 'particles') {
+              if (node.props.assetId !== assetId) return null;
+              const frame = clampFrame(next, node.props.frame);
+              return frame === node.props.frame
+                ? null
+                : { ...node, props: { ...node.props, frame } };
+            }
+            return null;
           },
         );
       }),
@@ -1959,11 +2006,14 @@ export function countAssetUses(project: Project, assetId: string): number {
   let count = 0;
   const walk = (nodes: GameObjectNode[]) => {
     for (const node of nodes) {
-      // A tilemap uses its tileset exactly as a sprite uses its image, and the
-      // count is what the removal warning says out loud — so leaving them out
-      // would under-report by a whole level.
+      // A tilemap uses its tileset and an emitter its particle texture exactly
+      // as a sprite uses its image, and the count is what the removal warning
+      // says out loud — so leaving either out would under-report by a whole
+      // object type.
       if (
-        (node.type === 'sprite' || node.type === 'tilemap') &&
+        (node.type === 'sprite' ||
+          node.type === 'tilemap' ||
+          node.type === 'particles') &&
         node.props.assetId === assetId
       ) {
         count += 1;
@@ -1973,6 +2023,30 @@ export function countAssetUses(project: Project, assetId: string): number {
   };
   for (const scene of project.scenes) walk(scene.children);
   return count;
+}
+
+/**
+ * Whether anything in the project moves by itself — an animation clip, or a
+ * particle emitter anywhere in it.
+ *
+ * What decides whether the toolbar shows its preview toggle at all. It walks
+ * the prefab definitions as well as the scenes, because an emitter that exists
+ * only inside a placed prefab still animates the canvas, and a button that was
+ * missing for it would leave that project with no way to stop the motion.
+ *
+ * Answers a boolean rather than anything derived: a zustand selector that
+ * built a fresh object every call would compare unequal every render.
+ */
+export function hasMotionIn(project: Project): boolean {
+  if (project.animations.length > 0) return true;
+
+  const walk = (nodes: GameObjectNode[]): boolean =>
+    nodes.some((node) => node.type === 'particles' || walk(node.children));
+
+  return (
+    project.scenes.some((scene) => walk(scene.children)) ||
+    project.prefabs.some((prefab) => walk(prefab.children))
+  );
 }
 
 /**

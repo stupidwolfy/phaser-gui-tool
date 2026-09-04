@@ -59,8 +59,15 @@
  * `parseProject` passes through verbatim — so there is no field an older build
  * would silently drop and re-save without. The crash alone is enough, and it is
  * not a judgement call.
+ *
+ * v7 — particles — is the same crash half again, and only that half. A v6 build
+ * has no `'particles'` case in `createDisplayObject`, so it leaves the object
+ * undefined and its renderer crashes, exactly as `tilemap` did to v5 and
+ * `instance` to v4. Nothing else about the feature needs it: a particle texture
+ * is an ordinary image, sliced or not, which v2 already reads, and the emitter's
+ * own settings ride in on `scenes` — verbatim, again.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -73,7 +80,8 @@ export type NodeType =
   | 'sprite'
   | 'container'
   | 'instance'
-  | 'tilemap';
+  | 'tilemap'
+  | 'particles';
 
 /**
  * An imported image, held in the document as a data URL.
@@ -332,6 +340,78 @@ export interface TilemapProps {
   alpha: number;
 }
 
+/**
+ * A particle emitter: a source that throws copies of one texture around.
+ *
+ * The first node whose whole point is what it does *over time*, which is why it
+ * is stopped in the editor unless the preview toggle is on — the argument that
+ * already keeps a sprite's animation still while you place it.
+ *
+ * Every field is one number and one Phaser config key, flattened out of the
+ * `{min, max}` and `{start, end}` pairs Phaser takes, and the set is chosen as
+ * the smallest one that makes fire, sparks and falling snow three visibly
+ * different objects from the inspector alone. Nothing here is array-valued,
+ * which is why `cloneWithNewIds` needs no case for it and `tilemap.props.data`
+ * stays the one array in the schema.
+ *
+ * There is deliberately no `emitting` field. Whether an emitter runs is the
+ * preview toggle's answer in the editor and Phaser's default in an export; a
+ * document field would be a second answer to the same question, and an emitter
+ * that starts switched off and is triggered later is a line of game logic —
+ * the argument that keeps `scene.start` out of the document.
+ */
+export interface ParticlesProps {
+  /** Null until an image is chosen; the canvas draws the emitter marker until then. */
+  assetId: string | null;
+  /**
+   * Which frame of the asset's sheet each particle draws, clamped by
+   * `clampFrame` exactly as a sprite's is. One frame rather than a list: a
+   * `frames` array would be the second array-valued prop in the schema and the
+   * second `cloneWithNewIds` special case, for a look a single frame mostly
+   * covers.
+   */
+  frame: number;
+  /** How long one particle lives, in milliseconds. */
+  lifespan: number;
+  /** Phaser's `speed: { min, max }`, in pixels per second. */
+  speedMin: number;
+  speedMax: number;
+  /**
+   * Phaser's `angle: { min, max }`, the emission direction in degrees. The one
+   * field that turns a puff into a jet or into snow with nothing else touched.
+   */
+  angleMin: number;
+  angleMax: number;
+  /** Phaser's `scale: { start, end }` — smoke grows, sparks shrink. */
+  scaleStart: number;
+  scaleEnd: number;
+  /**
+   * Phaser's `alpha: { start, end }`. Without a fade particles pop out of
+   * existence at the end of their life, which reads as a rendering fault
+   * rather than as a decision.
+   */
+  alphaStart: number;
+  alphaEnd: number;
+  /** Particles per emission, and milliseconds between emissions. */
+  quantity: number;
+  frequency: number;
+  /**
+   * The one thing an emission angle cannot express: an arc. An ember that
+   * rises and then falls is gravity, not a direction.
+   */
+  gravityX: number;
+  gravityY: number;
+  /** '#ffffff' means untinted, the same convention a sprite's tint uses. */
+  tint: string;
+  /**
+   * 'ADD' is what makes fire look like fire rather than a heap of opaque
+   * discs. Two options, so a select rather than a number.
+   */
+  blendMode: 'NORMAL' | 'ADD';
+  /** The emitter object's own alpha, as every node type has. */
+  alpha: number;
+}
+
 export interface NodePropsByType {
   rectangle: RectangleProps;
   ellipse: EllipseProps;
@@ -340,6 +420,7 @@ export interface NodePropsByType {
   container: ContainerProps;
   instance: InstanceProps;
   tilemap: TilemapProps;
+  particles: ParticlesProps;
 }
 
 /**

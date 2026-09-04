@@ -120,9 +120,9 @@ test('a sheet and its animation survive a save and an open', async ({ editor }, 
 
   // The bump is load-bearing: a v3 build rebuilds assets field by field and
   // names the project's fields one at a time, so it would silently drop both of
-  // these and write the file back without them. 5 as of prefabs, which bumped
-  // it again for that same reason and for a type an older build cannot draw.
-  expect(parsed.schemaVersion).toBe(6);
+  // these and write the file back without them. 7 as of particles, later bumps
+  // having come from types an older build cannot draw at all.
+  expect(parsed.schemaVersion).toBe(7);
   expect(parsed.assets[0].sheet).toEqual({
     frameWidth: FRAME_SIZE,
     frameHeight: FRAME_SIZE,

@@ -260,8 +260,15 @@ function collectAssets(
       // sprite's is — and only a *sliced* one, because an unsliced image is not
       // a tileset and its map emits a comment rather than a layer. Loading it
       // anyway would ship bytes for a texture nothing then draws.
+      //
+      // An emitter's particle texture is collected unconditionally, unlike a
+      // tileset: an unsliced image is a perfectly good one-frame particle, so
+      // there is nothing here for a grid to gate. Leaving emitters out is the
+      // failure worth naming — an export that boots, runs, and throws
+      // missing-texture squares.
       const assetId =
         node.type === 'sprite' ||
+        node.type === 'particles' ||
         (node.type === 'tilemap' && frameGridOf(findAsset(project, node.props.assetId)))
           ? node.props.assetId
           : null;
@@ -421,9 +428,14 @@ function usedIn(
       }
       // The other half of the pair: `collectAssets` decides what the texture is
       // called across the file, this decides what *this* scene preloads. A
-      // tilemap missing from either exports a layer built on a texture the
+      // tilemap or an emitter missing from either is built on a texture the
       // scene never loaded, which throws before anything is drawn.
-      if (node.type === 'tilemap' && node.props.assetId) assets.add(node.props.assetId);
+      if (
+        (node.type === 'tilemap' || node.type === 'particles') &&
+        node.props.assetId
+      ) {
+        assets.add(node.props.assetId);
+      }
       walk(node.children);
     }
   };
@@ -690,6 +702,37 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
         `${num(grid ? grid.margin : 0)}, ${num(grid ? grid.spacing : 0)})`
       );
     }
+    case 'particles': {
+      const entry = node.props.assetId ? used.get(node.props.assetId) : undefined;
+      if (!entry) return null;
+      const p = node.props;
+      // A single expression, so this stays an `add.*` rather than taking the
+      // helper-function route a tilemap and an instance had to.
+      //
+      // Every key is emitted, including `tint: 0xffffff` and
+      // `blendMode: "NORMAL"` — deliberately unlike `modifiersFor`, which emits
+      // only what differs from Phaser's defaults. A chained modifier left out
+      // is a line that would have restated a default; this literal *is* the
+      // object, so writing it whole means the generated code says exactly what
+      // the document says, and every dial a reader might want to change is in
+      // one place rather than half-hidden behind a default they cannot see.
+      return (
+        `${receiver}.add.particles(${num(x)}, ${num(y)}, ${str(entry.key)}, {\n` +
+        `      frame: ${num(clampFrame(entry.asset, p.frame))},\n` +
+        `      lifespan: ${num(p.lifespan)},\n` +
+        `      speed: { min: ${num(p.speedMin)}, max: ${num(p.speedMax)} },\n` +
+        `      angle: { min: ${num(p.angleMin)}, max: ${num(p.angleMax)} },\n` +
+        `      scale: { start: ${num(p.scaleStart)}, end: ${num(p.scaleEnd)} },\n` +
+        `      alpha: { start: ${num(p.alphaStart)}, end: ${num(p.alphaEnd)} },\n` +
+        `      quantity: ${num(p.quantity)},\n` +
+        `      frequency: ${num(p.frequency)},\n` +
+        `      gravityX: ${num(p.gravityX)},\n` +
+        `      gravityY: ${num(p.gravityY)},\n` +
+        `      tint: ${hexLiteral(p.tint)},\n` +
+        `      blendMode: ${str(p.blendMode)},\n` +
+        `    })`
+      );
+    }
     case 'container':
       return `${receiver}.add.container(${num(x)}, ${num(y)})`;
     case 'instance': {
@@ -714,6 +757,14 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
 /**
  * Only the modifiers that differ from Phaser's defaults, so the generated code
  * stays readable instead of restating `setScale(1, 1)` on every object.
+ *
+ * There is deliberately no `particles` branch, and that is worth saying because
+ * this function is not exhaustive over the union — "no branch needed" and
+ * "forgot a branch" look identical here. An emitter's tint and blend mode are
+ * inside its config literal, and the shared modifiers all apply to it as they
+ * do to anything else: `setAngle` on a `ParticleEmitter` is Transform's, the
+ * game object's own rotation, not the emission angle (that is
+ * `setEmitterAngle`, which the config's `angle` already carries).
  */
 function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimation>): string[] {
   const out: string[] = [];
@@ -807,6 +858,8 @@ function missingReason(node: GameObjectNode): string {
       ? 'its image is not sliced into tiles, so there is no tileset to build.'
       : 'no tileset chosen in the editor, so nothing to add.';
   }
+  // The fallback covers a sprite and an emitter alike, and says the same true
+  // thing about both: without an image there is no object to add.
   return 'no image chosen in the editor, so nothing to add.';
 }
 

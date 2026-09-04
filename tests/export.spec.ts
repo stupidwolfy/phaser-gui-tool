@@ -172,11 +172,48 @@ test('a prefab exports as one factory function, called once per instance', async
   // The sprite inside the definition proves the asset collection descends into
   // prefab bodies: without that this exports the "no image chosen" stand-in for
   // an image that is chosen, and the page still boots.
-  expect(exported.contents).not.toContain('no image chosen in the editor');
+  //
+  // Scoped to the factory body rather than the whole file, because the fixture
+  // also holds an emitter with deliberately no image, whose own comment is the
+  // correct output and would otherwise be read as this failure.
+  const factory = exported.contents.slice(
+    exported.contents.indexOf(`function ${fn}(`),
+  );
+  expect(factory.slice(0, factory.indexOf('\n}'))).not.toContain(
+    'no image chosen in the editor',
+  );
 
   // A dangling instance is called out rather than silently dropped, the same
   // way a sprite with no image is.
   expect(exported.contents).toContain('the prefab it placed is no longer in the project');
+});
+
+test('an emitter exports as one add.particles with its whole config', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+
+  // An `add.*` rather than a helper call: an emitter is one expression, so it
+  // does not need the route a tilemap and an instance had to take. One call,
+  // because the fixture holds two emitters and only one has an image.
+  expect(exported.contents.split('.add.particles(')).toHaveLength(2);
+
+  // The config is emitted whole, defaults included, so the generated code says
+  // exactly what the document says rather than half-hiding settings behind
+  // Phaser defaults a reader cannot see.
+  expect(exported.contents).toContain('lifespan: 750');
+  expect(exported.contents).toContain('speed: { min: 30, max: 210 }');
+  expect(exported.contents).toContain('scale: { start: 1.4, end: 0.2 }');
+  expect(exported.contents).toContain('tint: 0xff8800');
+  expect(exported.contents).toContain('blendMode: "ADD"');
+
+  // The particle texture is one the scene actually preloads — without that the
+  // emitter throws a texture that was never loaded.
+  expect(exported.contents).toContain('this.load.spritesheet(');
 });
 
 test('a tilemap exports as one helper, a data table and one call per map', async ({
