@@ -479,6 +479,17 @@ select {
   background: #a78bfa;
 }
 
+/* A chequer rather than a solid: a tilemap is a grid, and the one shape in the
+   list whose chip can say what it is rather than only which colour it took. */
+.tree__type[data-type='tilemap'] {
+  background:
+    linear-gradient(45deg, #4ecdc4 25%, transparent 25%, transparent 75%, #4ecdc4 75%),
+    linear-gradient(45deg, #4ecdc4 25%, transparent 25%, transparent 75%, #4ecdc4 75%),
+    #1d2330;
+  background-size: 6px 6px;
+  background-position: 0 0, 3px 3px;
+}
+
 /* The whole row of a container the pointer is about to drop into. Distinct
    from the before/after edge lines, which mean "reorder" rather than "put it
    in here" — telling those two apart is the whole of drag-to-nest. */
@@ -815,4 +826,119 @@ select {
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+
+/* -------------------------------------------------------------- tilemaps -- */
+
+/*
+ * The paint bar borrows the move bar's shape and slot, and differs in the one
+ * way it has to: it is on the desktop as well, where there is no tab bar under
+ * it to clear.
+ */
+.tilebar {
+  bottom: calc(env(safe-area-inset-bottom) + 12px);
+}
+
+.app--mobile .tilebar {
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);
+}
+
+/* On the desktop the bar belongs over the canvas, not stretched across the two
+   side panels the way the mobile one stretches across a screen that has none. */
+.app--desktop .tilebar,
+.app--desktop .tilebar__sheet {
+  left: 50%;
+  right: auto;
+  width: min(520px, 50vw);
+  transform: translateX(-50%);
+}
+
+.tilebar__brush {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  cursor: pointer;
+}
+
+/*
+ * The palette opens upward from the bar rather than downward from the button,
+ * so it never covers the bar's own ✓ — the control a user reaches for when the
+ * palette is in the way is the one that would be under it.
+ */
+.tilebar__sheet {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  bottom: calc(env(safe-area-inset-bottom) + 68px);
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
+  z-index: 25;
+}
+
+.app--mobile .tilebar__sheet {
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 64px);
+}
+
+/*
+ * A wrapping row rather than a fixed grid: tiles keep their own aspect ratio,
+ * so a column count would have to be computed from the tileset's frame size —
+ * and the same argument the add row settled, one panel over.
+ */
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.tiles__cell {
+  display: block;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  background-color: var(--bg-panel);
+  /* Tiles are pixel art far more often than not, and a browser's default
+     smoothing turns a 16px tile scaled up into a blur. */
+  image-rendering: pixelated;
+  cursor: pointer;
+}
+
+.tiles__cell--erase {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--text-dim);
+  font-size: 16px;
+}
+
+.tiles__cell.is-selected {
+  border-color: var(--accent);
+}
+
+/* The inspector's Edit tiles button, on while the mode is. */
+.btn--block.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.movebar__btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }

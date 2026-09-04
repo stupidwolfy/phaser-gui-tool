@@ -29,7 +29,9 @@ request. Iteration 12 (shipped) made a piece of layout reusable: prefab definiti
 project, an `instance` node that draws one, and an export that emits a factory function
 per prefab rather than a copy per placement. Iteration 13 (shipped) made the `scenes`
 array hold more than one: a switcher, and an export that emits every scene rather than the
-one on screen. See the README for the user-facing feature
+one on screen. Iteration 14 (shipped) made a level out of tiles: a `tilemap` node, a
+tileset that is nothing more than an image already sliced into frames, and a paint mode
+that owns the canvas while it is on. See the README for the user-facing feature
 list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -100,6 +102,10 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
 `instance` is the one type not in `editing.spec.ts`, because it is the one type with no
 `ADDABLE` entry to add it with — `prefabs.spec.ts` carries the "it draws, it survives a
 save and an open" duty for it instead. That is a deliberate exception, not a skipped step.
+`sprite` and `tilemap` are the same exception by a different route: neither draws anything
+at all until an image has been imported and, for a tilemap, sliced, so `assets.spec.ts` and
+`tilemap.spec.ts` carry that duty for them. A type that *can* be added and seen with no
+setup still belongs in `editing.spec.ts`.
 
 A `container` is the one type that is not purely additive: its children render, so
 `EditorScene.syncNodes` recurses into it and the exporter emits an `add([...])` for it.
@@ -537,6 +543,110 @@ change for that, which is the point of the shape — `activeScene`, `withActiveS
 - **Nothing in the editor starts one scene from another.** That is a line of game logic
   rather than a piece of layout, and the document has no place to put it that would not be
   the beginning of a scripting model.
+
+## Tilemaps
+
+A `tilemap` node is a grid of tile indices drawn as a real `Phaser.Tilemaps.TilemapLayer`,
+so what the canvas shows is what the export builds. Two decisions carry the rest of it.
+
+- **A tileset is an image that has already been sliced, and there is no tileset type.**
+  `ImageAsset.sheet` is the four numbers `addTilesetImage` takes, under the same names,
+  for the reason `load.spritesheet` is handed them near-verbatim — so a tile index *is* a
+  frame index, `SheetSection` is the tileset cutter with no new UI, the grid folded into
+  the texture key already handles a re-cut, and `preload()` already emits the right load
+  call. A
+  `project.tilesets` table would be those same four numbers in a second place, free to
+  disagree with the first, plus a parser and a picker.
+- **The tile size is derived from the tileset, never stored on the node.** The argument
+  that put the frame grid on the image, and the argument for a sprite having no width or
+  height: two maps drawing one tileset cannot disagree about how big a tile is.
+  `FALLBACK_TILE` covers "no tileset chosen yet".
+- **`tileMapOf` is the only reader of `TilemapProps`**, in the `frameGridOf` / `guidesOf` /
+  `prefabChildrenOf` family and for the sharpest version of their reason: four questions —
+  is there a tileset, how big is a tile, is `data` the length the grid claims, is every
+  entry a frame that exists — and any one of them forgotten is a Phaser warning and a
+  missing-texture cell. It answers all four at once, so the renderer, the exporter, the
+  palette and the paint gesture cannot disagree.
+- **A tile the tileset does not have reads as empty, not as the nearest one it does.**
+  The opposite of `clampFrame`, deliberately: a sprite cannot show "no frame", so clamping
+  is the only answer there, while `-1` is a first-class value here and Phaser's own. It is
+  what lets a re-cut leave the document alone — the map blanks while the sheet is mid-edit
+  and comes back whole when the numbers are right again, where rewriting the stored indices
+  would throw a level away over a mistyped margin. `tilemap.spec.ts` asserts the round trip.
+- **`data` is flat and row-major, and `cloneWithNewIds` copies it.** Flat because it is a
+  third of the JSON of an array of arrays and one thing to copy rather than one per row —
+  and it is the first props field that is an array at all, so the shallow spread every
+  duplicate, paste and prefab goes through had to learn about it.
+- **`resizeTilemap` re-shapes row by row, and `tileMapOf`'s padding is only the
+  hand-edited-file backstop.** Reinterpreting a flat array under a new column count shifts
+  every row after the first, so the re-shape has to happen in the same step as the number
+  that causes it. That is why it is an action rather than two `updateProps` calls.
+- **`SCHEMA_VERSION` bumped to 6, on the crash half of the rule and only that half.** A v5
+  build has no `'tilemap'` case in `createDisplayObject`, so it leaves the object undefined
+  and its renderer crashes — the `container` and `instance` case exactly. Nothing else
+  about the feature needs it: a tileset is an ordinary sliced image, and the node's props
+  ride in on `scenes`, the one part of a file `parseProject` passes through verbatim.
+- **The renderer rebuilds on a *shape* change and diffs on a *data* change.** A Phaser map
+  fixes its dimensions, tile size and tileset when it parses one, so any of those changing
+  is a new map rather than a changed one — `textureKeyForAsset`'s argument one object over.
+  Folding a signature into a `nodeShape` data key means `syncNodes`' existing "the type
+  changed, rebuild it" branch does the whole job. Tile *contents* are deliberately not in
+  the signature: `applyNode` compares against `tileData`, a cache of what was last drawn,
+  and calls `putTileAt` only for the cells that differ. A stroke publishes a store change
+  per pointer-move, so re-putting 65,536 tiles each time is the gesture's whole budget.
+- **A `Tilemap` is not a display object, so the sync's prune never reaches one.** That is
+  what `destroyDisplayObject` is for, and why both the prune and the rebuild branch go
+  through it — the `assetTextures` / `animationKeys` bookkeeping, third time.
+- **A tilemap layer's origin is its top-left**, where everything else here is centred.
+  `localRectOf` has the one case for it, and the outline, the hit area, the scale handle,
+  the rotate knob and the published bounds all read the box back through that function, so
+  there is one place the difference is expressed.
+- **A map with no tileset still gets a texture**, `editor:no-tiles`, the
+  `PLACEHOLDER_TEXTURE` rule one level over: an unfinished map has to be selectable,
+  draggable and paintable, and giving the empty case a texture rather than a branch means
+  "no tileset yet" and "the tileset is gone" are one state and one code path.
+- **Paint mode owns the canvas, and that is why it is a mode.** While `paintingId` is set a
+  press lays a tile and does nothing else: `GAMEOBJECT_DOWN` does not select, `POINTER_DOWN`
+  does not pan, `DRAG_START` refuses outright (the `additivePress` refusal by another
+  route), the handles are hidden and the selection shortcuts are off. Without a mode a
+  selected tilemap could never be moved or resized on the canvas again, and on touch the tap
+  meant to pick some other object would lay a tile.
+- **A stroke is one transaction, and the stroke state is cleared before it closes.** History
+  is whole-project snapshots, so an ungrouped per-cell paint is the held-arrow-key problem
+  with a faster finger; and the clear-before-`endTransaction` order is the `draggingId`
+  trap, which here would leave a stroke's last cell visually stale.
+- **A stroke fills in the cells between two pointer samples.** A finger crossing a map lands
+  a move every several tiles, and painting only where the samples fall leaves a dotted line
+  — which on a phone reads as dropped input rather than as the frame rate it is.
+- **`paintingId` is pruned where the selection is**, in `editProject`, `undo` and `redo`, so
+  "you can only paint a map that exists and is on screen" is an invariant rather than
+  something delete, undo and the scene switcher each have to remember.
+- **The bar over the canvas is the palette that has to work; the inspector's is the
+  convenience.** On a phone the Properties sheet covers the canvas being painted, so
+  choosing a tile and placing it could never be seen at once. The bar takes the move bar's
+  slot and shape, the two are never on screen together, and unlike the move bar it is on the
+  desktop too — the way out of a mode belongs on the surface the mode has taken.
+- **The eraser is the same field from two controls, not two answers to one question.** The
+  palette's erase cell and the bar's toggle both write `erasing`; what would be wrong is a
+  second notion of what the brush is.
+- **The export is one module-level helper plus a `TILEMAPS` table.** `constructorFor` may
+  only answer with a single expression and a tilemap is three statements, so it takes the
+  route `instance` already took: emit a function, return a call to it. The name comes out of
+  the module's identifier set right after the prefab factories, by the rule they follow, and
+  every factory body's seed set carries it. The data goes in a named const for `ASSETS`'
+  reasons — `create()` stays a list of objects rather than a wall of numbers, and moving a
+  level out to a JSON file is one object to edit.
+- **`collectAssets` and `usedIn` both had to learn about a tileset**, and they are separate
+  on purpose: the first decides what the texture is called across the file, the second what
+  *this* scene preloads. Missing either gives a layer built on a texture the scene never
+  loaded, which throws before anything is drawn. Only a *sliced* image is collected, because
+  an unsliced one exports a `missingReason` comment rather than a layer, and loading bytes
+  for a texture nothing draws is the failure the sprite case already warns about.
+- **A tilemap node cannot be selected out of a `TileMap` in a zustand selector.**
+  `tileMapOf` builds a fresh object every call and zustand compares snapshots by identity,
+  so `useEditorStore((s) => tileMapOf(...))` is an infinite render loop — React error #185,
+  found the first time the suite ran. Select the project and derive outside the selector, or
+  reach for `useShallow` the way `useSelectionNodes` does.
 
 ## Selection
 
@@ -990,6 +1100,7 @@ tests/
   guides.spec.ts            placing a guide, dragging it, and a drag agreeing with it
   animation.spec.ts         slicing a sheet, drawing one frame, playing a clip
   prefabs.spec.ts           saving a prefab, placing it twice, editing it once
+  tilemap.spec.ts           slicing a tileset, painting it, filling and erasing
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
@@ -1125,6 +1236,18 @@ Traps, each of which produced a confident wrong answer at some point:
   test can actually make is "it reaches a frame it did not start on", polled — a statement
   about time passing, not a single screenshot. Asserting a specific frame at a specific
   moment is a test that fails on a loaded machine.
+- **A page coordinate worked out while a sheet is open points somewhere else once it
+  closes.** A sheet shortens the canvas and the camera re-fits, so the zoom `sceneToScreen`
+  read is no longer the zoom the tap lands under. It cost both mobile paint tests on the
+  first run, and it is why `paintCell` takes *scene* coordinates and converts them on the
+  far side of `closePanels` — the conversion cannot then be done at the wrong moment.
+- **A paint gesture must pass `select: false`.** Paint mode has taken the press, so the
+  priming tap `drag` otherwise sends on touch is itself a stroke, and lays a tile the test
+  never asked for. The handles are exempt from the two-step rule for a different reason and
+  need the same flag.
+- **Leave paint mode before reading pixels.** The cell grid is drawn over the map while the
+  mode is on, and a colour assertion should not have to reason about the editor's own
+  overlay — the same care the move bar's accent-coloured button already forced on `shot`.
 - `@playwright/test` is pinned to `~1.56` because that is the release whose bundled
   Chromium (1194) is the one preinstalled in the container this repo is developed in — do
   not run `playwright install` there. `CHROMIUM_PATH` overrides the executable if a
@@ -1172,7 +1295,18 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 Texture atlases (the asset table holds whole images cut on a regular grid; an atlas is
 named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
-than more of this one), tilemaps, physics, particles, audio, and cameras.
+than more of this one), physics, particles, audio, and cameras.
+
+Tilemaps shipped in iteration 14 with three deliberate holes: **one layer per map**, **no
+per-tile collision**, and **no Tiled import**. The first is a loosening rather than a
+format break — `TilemapProps` would grow a list of layers where it has one `data`, and the
+exporter a `createLayer` per entry — but each one is its own `putTileAt` diff and a layer
+picker in the paint bar, which is a second mode inside a mode. The second is game logic
+rather than layout, and the argument that keeps `scene.start` out of the document applies
+unchanged: `setCollision([1, 2, 3])` is a line the user writes, and a per-tile flag in the
+schema is the beginning of a behaviour model. Tiled import is not a loosening at all — a
+`.tmj` carries named tilesets, object layers, per-tile properties and orientations this
+schema has nowhere to put, so it is a second document format rather than more of this one.
 
 Prefabs shipped in iteration 12, with two deliberate holes left in them: **a definition
 may not contain an instance**, and there are no **per-instance overrides**. The first is
@@ -1186,7 +1320,7 @@ that.
 Alignment and distribution shipped in iteration 6, snapping in iteration 7, equal spacing
 and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9,
 persistent guides in iteration 10, sprite sheets with animations in iteration 11, prefabs
-in iteration 12, and multiple scenes in iteration 13. The
+in iteration 12, multiple scenes in iteration 13, and tilemaps in iteration 14. The
 boxes the geometry family needs are in `src/core/bounds.ts`,
 which any further geometry tool can read. That family is complete in the sense that
 mattered — the user can now author a line of their own — and what is left of it is more of

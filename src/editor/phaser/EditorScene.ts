@@ -13,14 +13,19 @@ import {
   findAsset,
   findNode,
   findParent,
+  EMPTY_TILE,
   frameGridOf,
   guidesOf,
   prefabChildrenOf,
+  tileMapOf,
   worldTransformOf,
   type AnimationClip,
   type GameObjectNode,
   type ImageAsset,
   type Project,
+  type TileCell,
+  type TileMap,
+  type TilemapProps,
 } from '../../core/schema';
 import { decodeImage, decodedImage } from '../../core/assets';
 import { publishBounds, unionRect, type Rect } from '../../core/bounds';
@@ -198,7 +203,33 @@ const textureKeyForAsset = (asset: ImageAsset): string => {
  */
 const animationKeyFor = (clip: AnimationClip, textureKey: string): string =>
   `anim:${clip.id}:${textureKey}:${clip.frames.join(',')}:${clip.frameRate}:${clip.repeat}`;
+/**
+ * What a tilemap's Phaser objects are built *from*, as a string.
+ *
+ * `textureKeyForAsset`'s argument, one object over: a `Tilemap`'s dimensions,
+ * tile size and tileset are fixed when it is parsed and there is no API to
+ * re-cut one in place, so any of those changing has to build a new map and drop
+ * the old one. Comparing a signature means `syncNodes`' existing "rebuild when
+ * the type changed" branch does exactly that with nothing added, and the tile
+ * *contents* — which change on every stroke — are deliberately not in it.
+ */
+const tilemapSignatureOf = (map: TileMap, textureKey: string): string =>
+  `${textureKey}:${map.tileWidth}x${map.tileHeight}:${map.columns}x${map.rows}`;
+
 const PLACEHOLDER_TEXTURE = 'editor:no-image';
+/**
+ * The stand-in tileset, cut into `FALLBACK_TILE` squares.
+ *
+ * `PLACEHOLDER_TEXTURE`'s argument one level over: a tilemap with no tileset
+ * chosen, or one whose image has not finished decoding, still has to be a real
+ * object that can be selected, dragged, resized and painted on. Giving the
+ * empty case a texture of its own rather than a branch means there is one code
+ * path through `createTilemapLayer`, and "no tileset yet" and "the tileset is
+ * gone" are one state rather than two.
+ */
+const NO_TILESET_TEXTURE = 'editor:no-tiles';
+/** Side of one square of that stand-in, matching the fallback tile size. */
+const NO_TILESET_TILE = 32;
 /** Side of the stand-in square drawn for a sprite with no image yet. */
 const PLACEHOLDER_SIZE = 96;
 
@@ -278,7 +309,15 @@ type Renderable =
   // and emits `add.image` unless the node animates, because there the extra
   // capability would be a line of generated code that does nothing.
   | Phaser.GameObjects.Sprite
-  | Phaser.GameObjects.Container;
+  | Phaser.GameObjects.Container
+  // The real thing, not a stand-in built out of Images: a layer is what the
+  // export emits, so drawing one here is what makes the canvas and the
+  // generated game agree about how a map is cut, ordered and positioned. It is
+  // an ordinary Game Object with Transform, Origin, ComputedSize, Alpha and
+  // Visible on it, so every gesture and every modifier already works on one —
+  // with the single exception that its origin is its top-left, which is what
+  // `localRectOf` has a case for.
+  | Phaser.Tilemaps.TilemapLayer;
 
 /**
  * The box an empty group gets, in world units.
@@ -362,6 +401,39 @@ export class EditorScene extends Phaser.Scene {
    */
   private documentKeys = new Set<string>();
   /** Texture keys this scene created, so shutdown and pruning only touch ours. */
+  /**
+   * The `Tilemap` behind each drawn layer, keyed the same way.
+   *
+   * A `Tilemap` is a data container, not a display object, so the sync's
+   * `object.destroy()` prune never reaches one — this is the `assetTextures`
+   * bookkeeping again, for the same reason and with the same fix.
+   */
+  /**
+   * The paint stroke in flight: which tilemap, and the last cell it reached.
+   *
+   * The last cell is what makes a stroke a line rather than a row of dots. A
+   * finger crossing a 32px map at speed lands one pointer-move every several
+   * tiles, so the cells *between* two samples have to be filled in or the
+   * stroke comes out dashed — and on a phone that reads as the editor dropping
+   * input rather than as the frame rate it is.
+   */
+  private painting: { nodeId: string; last: TileCell | null } | null = null;
+  /** The cell grid drawn over the map being painted, and what it last drew. */
+  private paintGraphics!: Phaser.GameObjects.Graphics;
+  private paintSignature = '';
+
+  private tilemaps = new Map<string, Phaser.Tilemaps.Tilemap>();
+  /**
+   * The tiles each layer was last drawn with, so a sync writes only the cells
+   * that actually changed.
+   *
+   * A stroke fires a store change per pointer-move and the scene syncs on every
+   * one of them; re-putting all 65,536 tiles of a full-size map each time would
+   * make the gesture unusable. The diff is against what was drawn rather than
+   * against the previous document, so a rebuild and a re-open start from a
+   * known-empty cache rather than from an assumption.
+   */
+  private tileData = new Map<string, number[]>();
   private assetTextures = new Set<string>();
   /**
    * Animation keys this scene registered.
@@ -601,6 +673,7 @@ export class EditorScene extends Phaser.Scene {
     // has to be drawn, selected and dragged, so it gets a real stand-in rather
     // than nothing at all.
     this.createPlaceholderTexture();
+    this.createNoTilesetTexture();
 
     // Outline of the scene's own bounds, so the user can see where the game
     // canvas ends even when the camera is zoomed out past it.
@@ -615,6 +688,11 @@ export class EditorScene extends Phaser.Scene {
     // draws: a guide is feedback about a gesture, and must never be mistaken
     // for something in the scene or cover the handle being dragged.
     this.guideGraphics = this.add.graphics().setDepth(999);
+
+    // Above the objects, so the cells stay visible over what has been painted,
+    // and below the snap overlays and the handles — the placed guides' depth,
+    // and the two can never be on screen at once.
+    this.paintGraphics = this.add.graphics().setDepth(998).setVisible(false);
 
     // Above the scene frame and below everything the user draws: the grid is
     // the surface objects are placed on, so nothing in the scene may end up
@@ -682,6 +760,11 @@ export class EditorScene extends Phaser.Scene {
       for (const key of this.animationKeys) this.anims.remove(key);
       this.animationKeys.clear();
       this.animationForClip.clear();
+      // A Tilemap is not a display object either, so the scene tearing down
+      // does not take one with it. Same bookkeeping, same reason.
+      for (const tilemap of this.tilemaps.values()) tilemap.destroy();
+      this.tilemaps.clear();
+      this.tileData.clear();
     });
   }
 
@@ -717,6 +800,36 @@ export class EditorScene extends Phaser.Scene {
     context.fillText('?', PLACEHOLDER_SIZE / 2, PLACEHOLDER_SIZE / 2 + 2);
 
     this.textures.addCanvas(PLACEHOLDER_TEXTURE, canvas);
+  }
+
+  /**
+   * The stand-in tileset: one square, added as a sheet so a Tileset can be
+   * built from it exactly as from a real one.
+   *
+   * A checker rather than the '?' the sprite placeholder draws, because this
+   * one is tiled hundreds of times across a map — a field of question marks
+   * reads as a bug, while a flat square reads as "nothing here yet", which is
+   * what it is.
+   */
+  private createNoTilesetTexture(): void {
+    if (this.textures.exists(NO_TILESET_TEXTURE)) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = NO_TILESET_TILE;
+    canvas.height = NO_TILESET_TILE;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+
+    context.fillStyle = '#2a2f3a';
+    context.fillRect(0, 0, NO_TILESET_TILE, NO_TILESET_TILE);
+    context.strokeStyle = '#ff6bd6';
+    context.lineWidth = 1;
+    context.strokeRect(0.5, 0.5, NO_TILESET_TILE - 1, NO_TILESET_TILE - 1);
+
+    // A plain canvas texture: `addTilesetImage` cuts tiles out of the source
+    // image with its own tile size, margin and spacing, and never reads the
+    // texture's frames — so a sheet here would be a cut nothing looks at.
+    this.textures.addCanvas(NO_TILESET_TEXTURE, canvas);
   }
 
   /**
@@ -771,6 +884,101 @@ export class EditorScene extends Phaser.Scene {
     if (!asset) return PLACEHOLDER_TEXTURE;
     const key = textureKeyForAsset(asset);
     return this.textures.exists(key) ? key : PLACEHOLDER_TEXTURE;
+  }
+
+  /**
+   * The texture a tilemap should cut its tiles from.
+   *
+   * `textureKeyFor` for tilesets, with one extra condition: an image that has
+   * not been sliced is not a tileset. Its "one frame" would be the whole
+   * picture, which `addTilesetImage` would then cut into tile-sized pieces
+   * nobody chose — so it falls back to the stand-in and the inspector says to
+   * slice it, rather than drawing a plausible-looking wrong answer.
+   */
+  private tilesetKeyFor(project: Project, assetId: string | null): string {
+    const asset = findAsset(project, assetId);
+    if (!asset || !frameGridOf(asset)) return NO_TILESET_TEXTURE;
+    const key = textureKeyForAsset(asset);
+    return this.textures.exists(key) ? key : NO_TILESET_TEXTURE;
+  }
+
+  /**
+   * Builds the `Tilemap` and the layer that draws it.
+   *
+   * The map is parsed from a plain 2D array, which is the one shape Phaser
+   * builds a map from without a Tiled file — and it is the same array the
+   * exporter writes into its `TILEMAPS` table, so the canvas and the generated
+   * game are cut from one description.
+   *
+   * Neither `addTilesetImage` nor `createLayer` can fail here, which is what
+   * the two assertions say: the first returns null only for a texture key that
+   * does not exist, and `tilesetKeyFor` has just checked; the second only for a
+   * layer id that is missing or already built, and this map was made one line
+   * above with exactly one layer in it.
+   */
+  private createTilemapLayer(props: TilemapProps, key: string): Phaser.Tilemaps.TilemapLayer {
+    const map = tileMapOf(this.syncing, props);
+    const textureKey = this.tilesetKeyFor(this.syncing, props.assetId);
+    const grid = frameGridOf(map.asset);
+
+    const rows = Array.from({ length: map.rows }, (_, row) =>
+      map.data.slice(row * map.columns, (row + 1) * map.columns),
+    );
+    const tilemap = this.make.tilemap({
+      data: rows,
+      tileWidth: map.tileWidth,
+      tileHeight: map.tileHeight,
+    });
+    const tileset = tilemap.addTilesetImage(
+      'tiles',
+      textureKey,
+      map.tileWidth,
+      map.tileHeight,
+      grid ? grid.margin : 0,
+      grid ? grid.spacing : 0,
+    )!;
+    // `gpu: false` by explicit omission, and the cast is that decision: a GPU
+    // layer would need `generateLayerDataTexture()` after every stroke and
+    // cannot mix tilesets, and the declared return covers both kinds.
+    const layer = tilemap.createLayer(0, tileset, 0, 0) as Phaser.Tilemaps.TilemapLayer;
+
+    this.tilemaps.set(key, tilemap);
+    // What is on screen, so `applyNode`'s diff starts from the truth rather
+    // than from an assumption about it.
+    this.tileData.set(key, map.data);
+    return layer;
+  }
+
+  /**
+   * What this node's display object was built from, or undefined for a node
+   * whose object can always be updated in place.
+   *
+   * Undefined for every type but `tilemap`, which is what lets `syncNodes`
+   * compare it unconditionally: the stored value is undefined too, so the
+   * comparison is trivially equal and costs nothing for the other five.
+   */
+  private shapeOf(node: GameObjectNode): string | undefined {
+    if (node.type !== 'tilemap') return undefined;
+    return tilemapSignatureOf(
+      tileMapOf(this.syncing, node.props),
+      this.tilesetKeyFor(this.syncing, node.props.assetId),
+    );
+  }
+
+  /**
+   * Destroys a drawn object and everything held alongside it under its key.
+   *
+   * Both the sync's prune and its "the type changed, rebuild it" branch go
+   * through here, because a tilemap's `Tilemap` and its drawn tile cache are
+   * not the display object and a bare `destroy()` leaks both.
+   */
+  private destroyDisplayObject(key: string, object: Renderable): void {
+    object.destroy();
+    this.displayObjects.delete(key);
+    this.containerBounds.delete(key);
+    this.tilemaps.get(key)?.destroy();
+    this.tilemaps.delete(key);
+    this.tileData.delete(key);
   }
 
   /**
@@ -841,6 +1049,10 @@ export class EditorScene extends Phaser.Scene {
         const id = object.getData('nodeId') as string | undefined;
         if (!id) return;
         const state = store.getState();
+        // The press has already been taken by the stroke. Selecting here as
+        // well would move the inspector off the map being painted, and on touch
+        // would re-arm the two-step rule against whatever was grazed.
+        if (state.paintingId) return;
         this.selectionAtPress = state.selectedIds;
         this.additivePress = this.isAdditive(pointer);
 
@@ -868,7 +1080,13 @@ export class EditorScene extends Phaser.Scene {
     // A press that hits nothing clears the selection and starts a camera pan.
     this.input.on(
       Phaser.Input.Events.POINTER_DOWN,
-      (_pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+      (pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+        // Paint mode owns the canvas: while it is on, a press lays a tile and
+        // does nothing else. It is handled here rather than in GAMEOBJECT_DOWN
+        // because a press outside the map still has to end the stroke's
+        // transaction cleanly, and because a cell can be reached over empty
+        // canvas on the way back into the map.
+        if (this.beginPaint(pointer)) return;
         if (currentlyOver.length > 0) return;
         this.selectionAtPress = [];
         this.additivePress = false;
@@ -880,12 +1098,17 @@ export class EditorScene extends Phaser.Scene {
     this.input.on(Phaser.Input.Events.POINTER_UP, () => {
       this.isPanning = false;
       this.pinchDistance = 0;
+      this.finishPaint();
       // Not just DRAG_END: if Phaser never emits one, an open transaction would
       // silently swallow every later edit's undo entry.
       this.finishDrag();
     });
 
     this.input.on(Phaser.Input.Events.POINTER_MOVE, (pointer: Phaser.Input.Pointer) => {
+      if (this.painting) {
+        if (pointer.isDown) this.paintAt(pointer);
+        return;
+      }
       if (!this.isPanning || !pointer.isDown || this.pinchDistance > 0) return;
       const camera = this.cameras.main;
       camera.scrollX -= (pointer.x - pointer.prevPosition.x) / camera.zoom;
@@ -906,6 +1129,15 @@ export class EditorScene extends Phaser.Scene {
     this.input.on(
       Phaser.Input.Events.DRAG_START,
       (pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.GameObject) => {
+        // Nothing on the canvas is draggable while a map is being painted. The
+        // press has already gone to the stroke, and the handles are hidden, so
+        // this is the `additivePress` refusal below by a different route: a
+        // gesture that meant one thing must not also mean another.
+        if (store.getState().paintingId) {
+          this.dragRejected = true;
+          return;
+        }
+
         // The handle first, and before the touch rule below: it carries no
         // nodeId, so that rule would compare null against the selection, decide
         // they differ and reject every scale drag made with a finger.
@@ -1062,6 +1294,10 @@ export class EditorScene extends Phaser.Scene {
     const endGesture = () => {
       this.isPanning = false;
       this.pinchDistance = 0;
+      // A stroke ends on every one of these for the reason a drag does: a
+      // browser that reclaims the gesture fires only `pointercancel`, and a
+      // transaction left open swallows every later edit's undo step.
+      this.finishPaint();
       this.finishDrag();
     };
 
@@ -1885,6 +2121,7 @@ export class EditorScene extends Phaser.Scene {
       this.overlayLabels[index].setVisible(false);
     }
     this.drawGrid();
+    this.drawPaintGrid();
     this.syncPlacedGuides();
   }
 
@@ -1974,9 +2211,7 @@ export class EditorScene extends Phaser.Scene {
       // Destroying a container destroys its children with it, so an object
       // pruned here may already be gone. Phaser's destroy() is a no-op the
       // second time, which is what makes that safe rather than lucky.
-      object.destroy();
-      this.displayObjects.delete(id);
-      this.containerBounds.delete(id);
+      this.destroyDisplayObject(id, object);
     }
 
     this.publishMeasuredBounds();
@@ -2037,10 +2272,14 @@ export class EditorScene extends Phaser.Scene {
       if (prefix === '') this.documentKeys.add(key);
       let object = this.displayObjects.get(key);
 
-      // A node whose type changed has to be rebuilt, not updated.
-      if (object && object.getData('nodeType') !== node.type) {
-        object.destroy();
-        this.displayObjects.delete(key);
+      // A node whose type changed has to be rebuilt, not updated — and so does
+      // one whose *shape* changed, which today means a tilemap that has been
+      // re-cut, resized or pointed at another tileset. Phaser fixes a map's
+      // dimensions and tile size when it parses one, so those are a new map
+      // rather than a changed one, exactly as a re-cut sheet is a new texture.
+      const shape = this.shapeOf(node);
+      if (object && (object.getData('nodeType') !== node.type || object.getData('nodeShape') !== shape)) {
+        this.destroyDisplayObject(key, object);
         object = undefined;
       }
 
@@ -2067,6 +2306,188 @@ export class EditorScene extends Phaser.Scene {
 
       this.applyNode(object, node, index, key);
     });
+  }
+
+  // -- painting ---------------------------------------------------------------
+
+  /**
+   * The cell of the painted map under the pointer, in tile coordinates.
+   *
+   * Measured in the layer's *own* space through the inverse of its world
+   * matrix, which is the same trick `toParentSpace` plays one level up: a
+   * tilemap inside a rotated, scaled group is then no different from one at the
+   * top level, and nothing here composes a transform by hand. The layer's local
+   * origin is its top-left, so a cell is a plain division from there — and the
+   * result is deliberately not clamped, because a stroke that runs off the edge
+   * is a normal gesture that `paintTiles` drops on its own.
+   */
+  private cellAt(
+    layer: Phaser.Tilemaps.TilemapLayer,
+    map: TileMap,
+    pointer: Phaser.Input.Pointer,
+  ): TileCell {
+    const local = layer.getWorldTransformMatrix().applyInverse(pointer.worldX, pointer.worldY);
+    return {
+      column: Math.floor(local.x / map.tileWidth),
+      row: Math.floor(local.y / map.tileHeight),
+    };
+  }
+
+  /** The painted node, its layer and its resolved grid, or null. */
+  private paintTarget(): {
+    nodeId: string;
+    layer: Phaser.Tilemaps.TilemapLayer;
+    map: TileMap;
+  } | null {
+    const state = useEditorStore.getState();
+    if (!state.paintingId) return null;
+    const node = findNode(activeScene(state.project).children, state.paintingId);
+    if (!node || node.type !== 'tilemap') return null;
+    const layer = this.displayObjects.get(state.paintingId);
+    if (!(layer instanceof Phaser.Tilemaps.TilemapLayer)) return null;
+    return { nodeId: node.id, layer, map: tileMapOf(state.project, node.props) };
+  }
+
+  /**
+   * Starts a stroke, if the canvas is in paint mode. Answers whether the press
+   * was taken, so the caller can stop treating it as a selection or a pan.
+   *
+   * The transaction opens here and closes in `finishPaint`, so one stroke is
+   * one undo step. Without that the history — whole-project snapshots — would
+   * take an entry per pointer-move, which is the held-arrow-key problem with a
+   * faster finger.
+   */
+  private beginPaint(pointer: Phaser.Input.Pointer): boolean {
+    const target = this.paintTarget();
+    if (!target) return false;
+
+    this.painting = { nodeId: target.nodeId, last: null };
+    useEditorStore.getState().beginTransaction();
+    this.paintAt(pointer);
+    return true;
+  }
+
+  /**
+   * Lays the brush along the way from the last cell to this one.
+   *
+   * Every cell on the segment, not just the one under the pointer: pointer
+   * samples arrive several tiles apart on a fast drag, and painting only where
+   * they land leaves a dotted line. Stepping by the larger of the two spans
+   * visits each cell on the way exactly once.
+   */
+  private paintAt(pointer: Phaser.Input.Pointer): void {
+    const stroke = this.painting;
+    const target = this.paintTarget();
+    if (!stroke || !target || target.nodeId !== stroke.nodeId) return;
+
+    const cell = this.cellAt(target.layer, target.map, pointer);
+    const from = stroke.last ?? cell;
+    const steps = Math.max(Math.abs(cell.column - from.column), Math.abs(cell.row - from.row));
+    const cells: TileCell[] = [];
+    for (let step = 0; step <= steps; step += 1) {
+      const at = steps === 0 ? 1 : step / steps;
+      cells.push({
+        column: Math.round(from.column + (cell.column - from.column) * at),
+        row: Math.round(from.row + (cell.row - from.row) * at),
+      });
+    }
+    stroke.last = cell;
+
+    const state = useEditorStore.getState();
+    state.paintTiles(stroke.nodeId, cells, state.erasing ? EMPTY_TILE : state.brushTile);
+  }
+
+  /**
+   * Ends a stroke. Idempotent, because several of the end events fire on a real
+   * device and sometimes only one does.
+   *
+   * The stroke is cleared *before* the transaction closes, exactly as a drag
+   * clears its own state first: `endTransaction` publishes a store change, and
+   * a sync that still believed a stroke was running would be one that had to be
+   * reasoned about rather than one that cannot happen.
+   */
+  private finishPaint(): void {
+    if (!this.painting) return;
+    this.painting = null;
+    useEditorStore.getState().endTransaction();
+  }
+
+  /**
+   * The painted map's own cell grid, and the cell the pointer is over.
+   *
+   * Drawn from a signature like `drawGrid`, and for a sharper version of its
+   * reason: a stroke publishes a store change per pointer-move, and a full-size
+   * map is five hundred line segments — redrawing those on every one of them is
+   * the frame budget the gesture needs. Depth 998 puts it above the objects, so
+   * the cells are visible over what is painted, and below the snap overlays and
+   * the handles at 999 and up.
+   */
+  private drawPaintGrid(): void {
+    const target = this.paintTarget();
+    if (!target) {
+      if (this.paintGraphics.visible) this.paintGraphics.setVisible(false).clear();
+      this.paintSignature = '';
+      return;
+    }
+
+    const { map, layer } = target;
+    const { zoom } = this.cameras.main;
+    const hover = this.painting?.last;
+    // The layer's *world* frame, decomposed, rather than its own transform: a
+    // map nested in a rotated or scaled group is drawn through its parents, and
+    // the overlay is a top-level object with no parents to be drawn through.
+    // The same reason the gestures resolve against a world matrix rather than
+    // adding stored transforms up.
+    const world = layer.getWorldTransformMatrix().decomposeMatrix();
+    const signature = [
+      target.nodeId,
+      map.columns,
+      map.rows,
+      map.tileWidth,
+      map.tileHeight,
+      zoom,
+      world.translateX,
+      world.translateY,
+      world.rotation,
+      world.scaleX,
+      world.scaleY,
+      hover ? `${hover.column},${hover.row}` : '',
+    ].join(':');
+    if (signature === this.paintSignature) return;
+    this.paintSignature = signature;
+
+    const width = map.columns * map.tileWidth;
+    const height = map.rows * map.tileHeight;
+    this.paintGraphics.setVisible(true).clear();
+    this.paintGraphics.setPosition(world.translateX, world.translateY);
+    this.paintGraphics.setRotation(world.rotation);
+    this.paintGraphics.setScale(world.scaleX, world.scaleY);
+
+    // Divided by the scale it is about to be drawn through as well as by the
+    // zoom, so the cell lines stay one screen pixel whatever the map is doing.
+    this.paintGraphics.lineStyle(
+      1 / (zoom * Math.abs(world.scaleX || 1)),
+      GRID_COLOR,
+      GRID_ALPHA,
+    );
+    for (let column = 0; column <= map.columns; column += 1) {
+      const x = column * map.tileWidth;
+      this.paintGraphics.lineBetween(x, 0, x, height);
+    }
+    for (let row = 0; row <= map.rows; row += 1) {
+      const y = row * map.tileHeight;
+      this.paintGraphics.lineBetween(0, y, width, y);
+    }
+
+    if (hover && hover.column >= 0 && hover.row >= 0 && hover.column < map.columns && hover.row < map.rows) {
+      this.paintGraphics.fillStyle(SELECTION_COLOR, 0.25);
+      this.paintGraphics.fillRect(
+        hover.column * map.tileWidth,
+        hover.row * map.tileHeight,
+        map.tileWidth,
+        map.tileHeight,
+      );
+    }
   }
 
   /**
@@ -2125,6 +2546,9 @@ export class EditorScene extends Phaser.Scene {
       case 'sprite':
         object = this.add.sprite(0, 0, this.textureKeyFor(this.syncing, node.props.assetId));
         break;
+      case 'tilemap':
+        object = this.createTilemapLayer(node.props, key);
+        break;
       case 'container':
       case 'instance':
         // Sized in applyNode from whatever ends up inside it; a container needs
@@ -2136,6 +2560,7 @@ export class EditorScene extends Phaser.Scene {
 
     object.setData('nodeId', key);
     object.setData('nodeType', node.type);
+    object.setData('nodeShape', this.shapeOf(node));
     if (interactive) {
       object.setInteractive(hitAreaFor(object, node), hitTestFor(node));
       this.input.setDraggable(object);
@@ -2209,6 +2634,25 @@ export class EditorScene extends Phaser.Scene {
         // Multiply is the default tint mode, so white is exactly "no tint".
         sprite.setTint(hexToNumber(node.props.tint));
         sprite.setFlip(node.props.flipX, node.props.flipY);
+        break;
+      }
+      case 'tilemap': {
+        const layer = object as Phaser.Tilemaps.TilemapLayer;
+        const map = tileMapOf(this.syncing, node.props);
+        const drawn = this.tileData.get(key);
+
+        // Only the cells that changed. The layer was built from `drawn`, and
+        // `syncNodes` has already rebuilt it if the grid's shape moved, so the
+        // two arrays are the same length here by construction.
+        if (drawn !== map.data) {
+          for (let index = 0; index < map.data.length; index += 1) {
+            if (drawn && drawn[index] === map.data[index]) continue;
+            layer.putTileAt(map.data[index], index % map.columns, Math.floor(index / map.columns));
+          }
+          this.tileData.set(key, map.data);
+        }
+
+        layer.setAlpha(node.props.alpha);
         break;
       }
       case 'container':
@@ -2307,6 +2751,15 @@ export class EditorScene extends Phaser.Scene {
       if (bounds) return bounds;
     }
     const { width, height } = object;
+    // A tilemap layer's origin is its top-left, not its centre — Phaser sets
+    // `setOrigin(0, 0)` on one and there is no meaningful way to move it, since
+    // a tile's coordinates are counted from that corner. Every other object
+    // here is centred, so this is the one place the difference is expressed:
+    // the outline, the hit area, the scale handle, the rotate knob and the
+    // published bounds all read the box back through this function.
+    if (object instanceof Phaser.Tilemaps.TilemapLayer) {
+      return new Phaser.Geom.Rectangle(0, 0, width, height);
+    }
     return new Phaser.Geom.Rectangle(-width / 2, -height / 2, width, height);
   }
 
@@ -2368,7 +2821,9 @@ export class EditorScene extends Phaser.Scene {
     // cannot disagree about when they exist.
     const primary = primaryId(state);
     const handleTarget =
-      state.selectedIds.length === 1 && primary ? this.displayObjects.get(primary) : undefined;
+      state.selectedIds.length === 1 && primary && !state.paintingId
+        ? this.displayObjects.get(primary)
+        : undefined;
     if (handleTarget && handleTarget.visible) {
       this.updateScaleHandle(handleTarget);
       this.updateRotateHandle(handleTarget);

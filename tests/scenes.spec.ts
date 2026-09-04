@@ -69,7 +69,8 @@ test('both scenes are saved, and the file reopens on the one it was left on', as
   // older build opens this on the same scene, draws it identically, and carries
   // the other one back out on a re-save. That is the guides case, not the
   // prefabs one — a literal here so that a future bump is a deliberate act.
-  expect(parsed.schemaVersion).toBe(5);
+  // It reads 6 because tilemaps bumped it; multiple scenes did not.
+  expect(parsed.schemaVersion).toBe(6);
   expect(parsed.scenes).toHaveLength(2);
   expect(parsed.scenes[1].children.map((node: { name: string }) => node.name)).toEqual([
     'Second',

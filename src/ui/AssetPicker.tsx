@@ -143,22 +143,39 @@ function AssetRow({
   );
 }
 
-/** The chosen image's details, or a prompt to choose one. */
-export function AssetSummary({ assetId }: { assetId: string | null }) {
+/**
+ * The chosen image's details, or a prompt to choose one.
+ *
+ * The wording differs by what is drawing it, because the consequence does: a
+ * sprite with no image is one placeholder square, while a tilemap with no
+ * tileset is a whole grid of them — and a tilemap's size on the canvas comes
+ * from its own columns and rows, not from the image.
+ */
+export function AssetSummary({
+  assetId,
+  kind = 'sprite',
+}: {
+  assetId: string | null;
+  kind?: 'sprite' | 'tileset';
+}) {
   const asset = useEditorStore((s) => findAsset(s.project, assetId));
 
   if (!asset) {
     return (
       <p className="hint hint--error">
-        No image chosen — this sprite draws a placeholder and exports as nothing.
+        {kind === 'tileset'
+          ? 'No tileset chosen — this map draws placeholders and exports as nothing.'
+          : 'No image chosen — this sprite draws a placeholder and exports as nothing.'}
       </p>
     );
   }
 
   return (
     <p className="hint">
-      {asset.name} · {asset.width}×{asset.height}px. Size on the canvas is this times
-      the transform scale above.
+      {asset.name} · {asset.width}×{asset.height}px.{' '}
+      {kind === 'tileset'
+        ? 'Its frame size is the map’s tile size.'
+        : 'Size on the canvas is this times the transform scale above.'}
     </p>
   );
 }
