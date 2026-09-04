@@ -223,6 +223,50 @@ export class EditorPage {
     await this.settle();
   }
 
+  // -- scenes ----------------------------------------------------------------
+
+  /** Adds a scene and switches to it, from the scene panel's switcher row. */
+  async addScene(): Promise<void> {
+    await this.openPanel('scene');
+    await this.panel('scene').getByRole('button', { name: '+ Scene', exact: true }).click();
+    await this.settle();
+  }
+
+  /**
+   * Switches to a scene by name.
+   *
+   * The chips are labelled `Switch to <name>` rather than by the bare name: the
+   * mobile tab bar's own labels are single common words matched exactly, so a
+   * scene called "Scene" would otherwise put a second button reading exactly
+   * "Scene" on the page and take every mobile test that opens a panel with it.
+   */
+  async switchToScene(name: string): Promise<void> {
+    await this.openPanel('scene');
+    await this.panel('scene').getByRole('button', { name: `Switch to ${name}` }).click();
+    await this.settle();
+  }
+
+  /**
+   * Duplicates or deletes the scene being edited.
+   *
+   * Both live in the inspector beside the scene's own fields, which the
+   * inspector shows only while nothing is selected — so these deselect first
+   * rather than leaving the caller to remember, the way `setGridSize` does.
+   */
+  async duplicateScene(): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByRole('button', { name: 'Duplicate scene' }).click();
+    await this.settle();
+  }
+
+  async deleteScene(): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByRole('button', { name: 'Delete scene' }).click();
+    await this.settle();
+  }
+
   /**
    * The scene tree's sticky additive-selection toggle. While it is on, a press
    * on a row or on the canvas adds to the selection instead of replacing it —

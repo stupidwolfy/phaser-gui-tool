@@ -1,5 +1,5 @@
 import { useState, type DragEvent, type MouseEvent } from 'react';
-import { useActiveScene, useEditorStore, usePrefabs } from '../core/store';
+import { useActiveScene, useEditorStore, usePrefabs, useScenes } from '../core/store';
 import { findParent, type GameObjectNode, type NodeType } from '../core/schema';
 
 /**
@@ -112,6 +112,8 @@ export function SceneTree() {
         </button>
       </div>
 
+      <ScenesSection />
+
       <div className="add-row">
         {ADDABLE.map(({ type, label }) => (
           <button key={type} className="btn btn--add" onClick={() => addNode(type)}>
@@ -141,6 +143,60 @@ export function SceneTree() {
 
       <PrefabsSection />
     </div>
+  );
+}
+
+/**
+ * The scene switcher: one chip per scene, plus the button that adds another.
+ *
+ * It sits in the scene panel, above the objects, for the reason the prefab
+ * library sits below them — that panel is on screen at all times, while the
+ * inspector's `SceneInspector` appears only when *nothing* is selected, so
+ * putting the switcher there would mean deselecting before every switch. The
+ * scene's own fields stay in the inspector, and so do duplicate and delete:
+ * those are about the scene you are in rather than about which one that is,
+ * and a delete button in a row you tap to switch scenes is a delete button
+ * under a thumb aiming at the chip beside it.
+ *
+ * The row is hidden entirely for a one-scene project. A switcher with one chip
+ * offers nothing to switch to, and most projects have one scene — but the
+ * `+ Scene` button has to stay visible, since it is the only way to reach the
+ * second one.
+ *
+ * A chip's accessible name is `Switch to <name>`, not the bare scene name. The
+ * mobile tab bar's labels are single common words matched *exactly*, so a scene
+ * a user calls "Scene" would otherwise put a second button reading exactly
+ * "Scene" on the page — the trap the prefab buttons' `+ ` prefix exists for,
+ * arriving here by a different route because a switcher chip has no prefix to
+ * give it.
+ */
+function ScenesSection() {
+  const scenes = useScenes();
+  const activeId = useActiveScene().id;
+  const setActiveScene = useEditorStore((s) => s.setActiveScene);
+  const addScene = useEditorStore((s) => s.addScene);
+
+  return (
+    <>
+      <div className="panel__section">Scenes</div>
+      <div className="add-row">
+        {scenes.length > 1 &&
+          scenes.map((scene) => (
+            <button
+              key={scene.id}
+              className={`btn btn--add ${scene.id === activeId ? 'is-active' : ''}`}
+              aria-pressed={scene.id === activeId}
+              aria-label={`Switch to ${scene.name}`}
+              onClick={() => setActiveScene(scene.id)}
+            >
+              {scene.name}
+            </button>
+          ))}
+        <button className="btn btn--add" onClick={addScene}>
+          + Scene
+        </button>
+      </div>
+    </>
   );
 }
 

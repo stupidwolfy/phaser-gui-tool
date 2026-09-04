@@ -175,6 +175,36 @@ test('a prefab exports as one factory function, called once per instance', async
   expect(exported.contents).toContain('the prefab it placed is no longer in the project');
 });
 
+test('two scenes named the same thing export as two classes with two keys', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+
+  const classes = exported.contents.match(/^export class (\w+) extends Phaser\.Scene/gm) ?? [];
+  expect(classes).toHaveLength(2);
+  // Both halves of a scene name reach the output, and a repeat is fatal in
+  // both: two identical class declarations will not parse, and two scenes
+  // registered under one key has Phaser keep the first and lose the second.
+  // `export-toolchain.spec` is what proves the first actually compiles; this
+  // says why the de-duplication is there, and covers the key, which is a
+  // string literal no compiler would object to.
+  expect(new Set(classes).size).toBe(2);
+  const keys = exported.contents.match(/^ {4}super\(.*\);$/gm) ?? [];
+  expect(keys).toHaveLength(2);
+  expect(new Set(keys).size).toBe(2);
+
+  // One texture, one factory, one animation key — the tables are file-wide, so
+  // a second scene drawing the same sheet adds nothing to them.
+  expect(exported.contents.match(/^ {2}"[^"]*": "data:image/gm) ?? []).toHaveLength(1);
+  // And the clip is registered in each scene that plays it, guarded, because
+  // an animation belongs to the game rather than to whichever scene ran first.
+  expect(exported.contents.match(/this\.anims\.exists\(/g) ?? []).toHaveLength(2);
+});
+
 test('a group exports as a container its children are added to', async ({ editor }) => {
   await editor.addObject('Rectangle');
   // Not one of the starter project's names: the exporter de-duplicates
