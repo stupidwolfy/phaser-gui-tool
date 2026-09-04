@@ -423,6 +423,47 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * Switches the selected object's Arcade body on or off.
+   *
+   * The checkbox is at the very bottom of the inspector, below the per-type
+   * section, so on a phone it is off the bottom of the sheet until Playwright
+   * scrolls to it — which `check`/`uncheck` do for themselves, unlike `click`.
+   */
+  async setPhysics(on: boolean): Promise<void> {
+    await this.openPanel('inspect');
+    const box = this.checkbox('Physics body');
+    if (on) await box.check();
+    else await box.uncheck();
+    await this.settle();
+  }
+
+  /** Reads back whether the selected object has a body. */
+  async hasPhysics(): Promise<boolean> {
+    await this.openPanel('inspect');
+    return this.checkbox('Physics body').isChecked();
+  }
+
+  /**
+   * The scene's gravity, which lives in `SceneInspector` — so this deselects
+   * first, exactly as the guide helpers do: that panel only renders with an
+   * empty selection.
+   */
+  async setGravity(x: number, y: number): Promise<void> {
+    await this.deselect();
+    await this.setField('Gravity X', x);
+    await this.setField('Gravity Y', y);
+  }
+
+  /** A physics checkbox other than the on/off one, by its label. */
+  async setPhysicsFlag(label: string, on: boolean): Promise<void> {
+    await this.openPanel('inspect');
+    const box = this.checkbox(label);
+    if (on) await box.check();
+    else await box.uncheck();
+    await this.settle();
+  }
+
   async clearGuides(): Promise<void> {
     await this.deselect();
     await this.openPanel('inspect');

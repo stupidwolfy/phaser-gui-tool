@@ -66,6 +66,18 @@
  * `instance` to v4. Nothing else about the feature needs it: a particle texture
  * is an ordinary image, sliced or not, which v2 already reads, and the emitter's
  * own settings ride in on `scenes` — verbatim, again.
+ *
+ * Physics bodies did *not* bump it, and this is the guides case rather than any
+ * of the four crash cases above. A body is not a node type: it is an optional
+ * field on a node and an optional field on a scene, and both of those ride in
+ * on `scenes`, which `parseProject` passes through verbatim. A v7 build has a
+ * `createDisplayObject` case for every type in the file, reads `node.physics`
+ * nowhere, draws the scene identically, and carries both fields back out on a
+ * re-save. Nothing is dropped and nothing is undefined. **This stays contingent
+ * on `parseProject` not reconstructing the scenes field by field**, exactly as
+ * the guides decision is — if it ever starts to, an old build silently loses
+ * every body on every save, which is data loss with no crash. `physics.spec.ts`
+ * asserts the 7 in the saved artefact so a future bump is a deliberate act.
  */
 export const SCHEMA_VERSION = 7;
 
@@ -437,6 +449,19 @@ export type GameObjectNode = {
     transform: Transform;
     props: NodePropsByType[K];
     /**
+     * An Arcade Physics body, or absent for the great majority of nodes that
+     * have none.
+     *
+     * Here rather than in `props` because it is the one setting that is not
+     * per-type: every entry of `NodePropsByType` would otherwise carry the same
+     * dozen fields, and `createNode` would have to answer "what is this
+     * rectangle's bounce" for an object nobody has asked to simulate. Optional
+     * for the reason `guides` is: every file written before this existed has no
+     * such field, and `parseProject` passes scenes through without
+     * reconstructing them. Read it through `physicsOf`, never directly.
+     */
+    physics?: PhysicsBody;
+    /**
      * Nested nodes, positioned relative to this one. Only a `container`
      * renders them, but the array is present on every node so that traversal,
      * cloning and the parser never have to branch on the type.
@@ -444,6 +469,132 @@ export type GameObjectNode = {
     children: GameObjectNode[];
   };
 }[NodeType];
+
+/**
+ * The node types that can carry an Arcade body, and the only reader of that
+ * list is `physicsOf`.
+ *
+ * An Arcade body reads its owner's `x`/`y`, `width` and `height` every step, so
+ * the object has to have all four and they have to mean what the world thinks
+ * they mean. A `rectangle`, an `ellipse`, a `text` and a `sprite` all do. The
+ * four that are missing are each missing for their own reason, and none of them
+ * is an oversight:
+ *
+ * - a `container` and an `instance` are Phaser Containers, which Arcade does
+ *   not simulate — a body on one would be a box around children that go on
+ *   moving independently of it;
+ * - a `particles` node has no ComputedSize at all (see EditorScene's wrapper),
+ *   so it has no width or height for a body to take;
+ * - a `tilemap`'s collision is `setCollision([...])` — a different API about
+ *   which *tiles* are solid, and a per-tile flag in the schema is the beginning
+ *   of a behaviour model rather than more of this one.
+ */
+const PHYSICS_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
+  'rectangle',
+  'ellipse',
+  'text',
+  'sprite',
+]);
+
+/**
+ * An Arcade Physics body attached to one object.
+ *
+ * The fields are Phaser's own, under Phaser's names, so the exported code is
+ * this object with the setters wrapped round it — the rule `AnimationClip` and
+ * `ParticlesProps` already follow.
+ *
+ * What is deliberately *not* here is behaviour over time: no colliders, no
+ * overlap callbacks, no `stopAfter`. Which two objects collide is a line of
+ * game logic, and the argument that keeps `scene.start` out of the document
+ * applies here unchanged. What is here is the body's own standing state, which
+ * is layout: how big it is, where it starts, and how it responds.
+ */
+export interface PhysicsBody {
+  /**
+   * A static body never moves and has no velocity, bounce, drag, mass or
+   * gravity — Phaser's `StaticBody` does not carry those properties at all,
+   * which is why they are not merely ignored for one but absent from the
+   * emitted code. The inspector hides them for the same reason.
+   */
+  kind: 'dynamic' | 'static';
+  velocityX: number;
+  velocityY: number;
+  bounceX: number;
+  bounceY: number;
+  /** Deceleration in pixels/sec^2, applied while acceleration is zero. */
+  dragX: number;
+  dragY: number;
+  /** Degrees per second. */
+  angularVelocity: number;
+  mass: number;
+  /**
+   * `mass` and `immovable` only ever matter inside a collision, and this editor
+   * emits no `collider` or `overlap` anywhere — deciding what collides with
+   * what is game logic, the `scene.start` argument. They are here anyway, and
+   * that is the point: the collider is the one line the user adds by hand, and
+   * these two are the body properties that line reads. Emitting them means the
+   * line they write is the only thing they have to write.
+   */
+  immovable: boolean;
+  /** False exempts this body from the scene's world gravity. */
+  allowGravity: boolean;
+  collideWorldBounds: boolean;
+}
+
+/**
+ * The node's body, defaulted and validated in one place.
+ *
+ * The `guidesOf` / `frameGridOf` / `prefabChildrenOf` / `tileMapOf` family, and
+ * for the sharpest version of their reason: it answers three questions at once
+ * — may this node type carry a body, is this node somewhere a body would mean
+ * anything, and is the stored object well formed — and any one of them
+ * forgotten is a body drawn in the wrong place or exported onto an object
+ * Arcade cannot simulate.
+ *
+ * `topLevel` is the second question, and it is a parameter rather than
+ * something this function could work out because a node does not know its
+ * parent. A body positioned by `x`/`y` that are *parent-relative* is a body in
+ * the wrong place, so only a direct child of the scene may have one. A body
+ * found deeper reads as absent rather than being deleted — the answer
+ * `tileMapOf` gives an out-of-range tile, and for the same reason: a node
+ * dragged into a group and back out again is the same node, and throwing its
+ * settings away on the way in would be a deletion nothing on screen asked for.
+ */
+export function physicsOf(
+  node: GameObjectNode,
+  topLevel: boolean,
+): PhysicsBody | null {
+  // A fresh object every call, exactly as `tileMapOf` builds one — so
+  // `useEditorStore((s) => physicsOf(...))` is an infinite render loop, since
+  // zustand compares snapshots by identity. Select the node and derive outside
+  // the selector.
+  if (!topLevel || !PHYSICS_TYPES.has(node.type)) return null;
+  const raw = node.physics;
+  if (typeof raw !== 'object' || raw === null) return null;
+  const numberOr = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  return {
+    kind: raw.kind === 'static' ? 'static' : 'dynamic',
+    velocityX: numberOr(raw.velocityX, 0),
+    velocityY: numberOr(raw.velocityY, 0),
+    bounceX: numberOr(raw.bounceX, 0),
+    bounceY: numberOr(raw.bounceY, 0),
+    dragX: numberOr(raw.dragX, 0),
+    dragY: numberOr(raw.dragY, 0),
+    angularVelocity: numberOr(raw.angularVelocity, 0),
+    // Phaser's own default, and zero would be a body every collision sends to
+    // infinity rather than a light one.
+    mass: Math.max(0.0001, numberOr(raw.mass, 1)),
+    immovable: raw.immovable === true,
+    allowGravity: raw.allowGravity !== false,
+    collideWorldBounds: raw.collideWorldBounds === true,
+  };
+}
+
+/** Whether the inspector may offer a body for this node type at all. */
+export function canHavePhysics(type: NodeType): boolean {
+  return PHYSICS_TYPES.has(type);
+}
 
 /**
  * A line the user placed for things to line up on.
@@ -514,6 +665,41 @@ export interface SceneDoc {
    * them. Read it through `guidesOf`, never directly.
    */
   guides?: SceneGuide[];
+  /**
+   * The Arcade world this scene's bodies live in. Optional for the reason
+   * `guides` is, and read through `scenePhysicsOf`, never directly.
+   */
+  physics?: ScenePhysics;
+}
+
+/**
+ * The scene's physics world.
+ *
+ * Gravity and nothing else. The world's *bounds* are deliberately absent: the
+ * scene already has a width and a height, and a second rectangle saying how big
+ * the scene is would be two fields free to disagree about one number — the
+ * argument that gives a sprite no width of its own and a tilemap no tile size
+ * of its own. The exporter emits `setBounds(0, 0, width, height)` from the
+ * scene's own size, which is also what Phaser would have defaulted to for a
+ * game exactly the size of this scene and what it would *not* have defaulted to
+ * for a module dropped into a larger one.
+ */
+export interface ScenePhysics {
+  /** Pixels/sec^2. Positive y is downward, as everywhere else here. */
+  gravityX: number;
+  gravityY: number;
+}
+
+/**
+ * The scene's gravity, defaulted and validated in one place — `guidesOf`'s
+ * sibling, on the other optional field scenes carry.
+ */
+export function scenePhysicsOf(scene: SceneDoc): ScenePhysics {
+  const raw = scene.physics;
+  const numberOr = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  if (typeof raw !== 'object' || raw === null) return { gravityX: 0, gravityY: 0 };
+  return { gravityX: numberOr(raw.gravityX, 0), gravityY: numberOr(raw.gravityY, 0) };
 }
 
 /**

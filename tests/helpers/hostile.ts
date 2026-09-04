@@ -10,6 +10,25 @@ import { stripPng } from './png';
  * class declaration. So this covers every string the exporter interpolates,
  * and the rule when a new field starts reaching the output is to add it here.
  */
+/**
+ * A body's fields at rest, for the fixtures whose point is the *shape* of the
+ * emit rather than its numbers — the numbers are exercised once, in full, on
+ * the top-level rectangle.
+ */
+const NO_MOTION = {
+  velocityX: 0,
+  velocityY: 0,
+  bounceX: 0,
+  bounceY: 0,
+  dragX: 0,
+  dragY: 0,
+  angularVelocity: 0,
+  mass: 1,
+  immovable: false,
+  allowGravity: true,
+  collideWorldBounds: false,
+};
+
 export function hostileProject(): Project {
   const breakout = '</script><script>window.__pwned = "yes";</script>';
   // A real four-frame sheet, because the export path for one runs Phaser's own
@@ -65,6 +84,11 @@ export function hostileProject(): Project {
         children: [
           {
             id: 'p1',
+            // Carries a body for the reason the nested rectangle above does:
+            // a prefab factory adds its children to the Container it returns,
+            // so a definition's children are container children by exactly the
+            // same mechanism, and the emit has to leave this one out too.
+            physics: { kind: 'dynamic' as const, ...NO_MOTION },
             name: breakout,
             type: 'rectangle',
             visible: true,
@@ -117,6 +141,9 @@ export function hostileProject(): Project {
           { id: 'guide-1', axis: 'x' as const, position: 480 },
           { id: 'guide-2', axis: 'y' as const, position: 270 },
         ],
+        // Set here and deliberately absent from the second scene, so both
+        // branches of `scenePhysicsOf` reach the exporter in one file.
+        physics: { gravityX: -20, gravityY: 480 },
         children: [
           {
             id: 'a',
@@ -125,6 +152,28 @@ export function hostileProject(): Project {
             visible: true,
             transform: { x: 480, y: 270, rotation: 0, scaleX: 1, scaleY: 1 },
             props: { width: 200, height: 120, fill: '#4f8cff', alpha: 1 },
+            // A dynamic body with a non-default value in every field. Not here
+            // for escaping — a body carries no free user text — but because
+            // `export-toolchain.spec` compiles the emitted `.ts` under
+            // `tsc --strict` against the real Phaser types, and this is the
+            // only place the emitted setter chain ever meets
+            // `Phaser.Physics.Arcade.Body`. A method Phaser renamed between
+            // versions would fail there and nowhere else. The hostile emitter's
+            // eighteen fields are here for exactly the same reason.
+            physics: {
+              kind: 'dynamic' as const,
+              velocityX: 120,
+              velocityY: -45,
+              bounceX: 0.4,
+              bounceY: 0.85,
+              dragX: 30,
+              dragY: 5,
+              angularVelocity: 90,
+              mass: 2.5,
+              immovable: false,
+              allowGravity: false,
+              collideWorldBounds: true,
+            },
             children: [],
           },
           {
@@ -179,6 +228,12 @@ export function hostileProject(): Project {
                 // Local coordinates: the group puts it at 700,400.
                 transform: { x: 0, y: 0, rotation: -37.125, scaleX: 1, scaleY: 1 },
                 props: { width: 120, height: 80, fill: '#22d3ee', alpha: 1 },
+                // A body on a node inside a group, which only a hand-edited
+                // file can hold — the store cannot reach one to write it. It is
+                // what proves the exporter emits nothing for a nested body
+                // rather than emitting one positioned in the group's
+                // coordinates.
+                physics: { kind: 'dynamic' as const, ...NO_MOTION },
                 children: [],
               },
             ],
@@ -218,6 +273,10 @@ export function hostileProject(): Project {
               frame: 3,
               animationId: null,
             },
+            // The other branch: a static body is one `add.existing(obj, true)`
+            // with nothing to chain, so without this the `true` argument never
+            // reaches either toolchain.
+            physics: { kind: 'static' as const, ...NO_MOTION },
             children: [],
           },
           {
@@ -357,6 +416,21 @@ export function hostileProject(): Project {
             children: [],
           },
           {
+            id: 'p',
+            // Named after the module-level body helper, so `toIdentifier`
+            // collides with it. Without this the seeding of `bodyFn` into
+            // `buildCreateBody`'s and every factory body's identifier set is
+            // untested, and the failure it guards against is silent: an object
+            // bound as `arcadeBody` inside `create()` would shadow the function
+            // the line beside it calls, and the export would compile.
+            name: 'arcade body',
+            type: 'rectangle',
+            visible: true,
+            transform: { x: 780, y: 120, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { width: 60, height: 60, fill: '#8b5cf6', alpha: 1 },
+            children: [],
+          },
+          {
             id: 'd',
             name: 'name123',
             type: 'text',
@@ -406,6 +480,10 @@ export function hostileProject(): Project {
               frame: 0,
               animationId: 'anim-1',
             },
+            // A body in a scene that has *no* `physics` field of its own, so
+            // `scenePhysicsOf`'s default branch reaches the exporter in the
+            // same file as the scene above, which sets one.
+            physics: { kind: 'static' as const, ...NO_MOTION },
             children: [],
           },
         ],

@@ -33,8 +33,10 @@ one on screen. Iteration 14 (shipped) made a level out of tiles: a `tilemap` nod
 tileset that is nothing more than an image already sliced into frames, and a paint mode
 that owns the canvas while it is on. Iteration 15 (shipped) put motion into the scene
 itself: a `particles` node drawn as a real `ParticleEmitter`, stopped by default and
-running only under the preview toggle the animations already had. See the README for the
-user-facing feature list.
+running only under the preview toggle the animations already had. Iteration 16 (shipped)
+gave an object a body: an Arcade physics body on a top-level node, a gravity on the scene,
+and an export that emits real `physics.add.existing` — drawn on a canvas that still
+refuses to simulate. See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -102,7 +104,9 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
    what a texture is called across the file, the second what *one scene* preloads.
    `countAssetUses` in `src/core/store.ts` is off this checklist entirely and is the same
    kind of hand-matched list — miss it and the image-deletion warning under-reports by a
-   whole object type.
+   whole object type. `PHYSICS_TYPES` in `schema.ts` is a second such list and the
+   **fourth silent step**: a new type is not body-eligible until it is named there, and
+   nothing anywhere fails if it should have been.
 7. `tests/` — the two silent steps are exactly the two the suite covers: add the type to
    `tests/editing.spec.ts` (it draws where the document says, and survives a save and an
    open) and give it a hostile instance in `tests/helpers/hostile.ts`, which puts its
@@ -759,6 +763,138 @@ does *over time*, and two decisions carry the rest of it.
   and "Alpha" would be ambiguous to a reader and to `labelled()`'s exact-match locator
   alike — the "Animation name, not Name" rule.
 
+## Physics
+
+A node can carry a `PhysicsBody`, and a scene a gravity. Both are document state, both are
+exported as real Arcade Physics, and neither is ever run here.
+
+- **The editor never simulates, and that is the load-bearing decision.** A simulating
+  canvas moves objects, and a moved object either drifts out of step with the stored
+  transform or rewrites it — so a scene left alone for ten seconds is a scene the user has
+  to rebuild. That is the animation argument at its limit: preview is off by default
+  because a canvas whose objects are never where you last looked makes placing one by eye a
+  matter of timing, and a physics step does not merely animate an object, it changes the
+  numbers the document is made of. There is no version of "run it for a moment" that leaves
+  the document alone. So a body is **drawn, not run**, and it deliberately does *not* ride
+  on `previewMotion` — the one place this feature declines the toggle the emitters took.
+  `hasMotionIn` is untouched and says so in a comment, because beside a function that walks
+  the prefab bodies for emitters, not learning about physics looks like an omission.
+- **`SCHEMA_VERSION` did not bump, and this is the guides case rather than any of the four
+  crash cases.** A body is not a node type: it is an optional field on a node and an
+  optional field on a scene, and both ride in on `scenes`, the one part of a file
+  `parseProject` passes through verbatim. A v7 build has a `createDisplayObject` case for
+  every type in the file, reads `node.physics` nowhere, draws identically, and carries both
+  fields back out on a re-save. **This stays contingent on `parseProject` not
+  reconstructing scenes field by field**, exactly as the guides decision is — if it ever
+  starts to, an old build silently loses every body on every save, which is data loss with
+  no crash. `physics.spec.ts` asserts the 7 in the saved artefact so a future bump is a
+  deliberate act.
+- **`physicsOf(node, topLevel)` is the only reader**, in the `guidesOf` / `frameGridOf` /
+  `prefabChildrenOf` / `tileMapOf` family and answering three questions at once: may this
+  node type carry a body, is this node somewhere a body would mean anything, and is the
+  stored object well formed. Any one forgotten is an outline drawn in the wrong place or an
+  export onto an object Arcade cannot simulate. It builds a fresh object per call, so
+  `useEditorStore((s) => physicsOf(...))` is React error #185 — the `tileMapOf` trap, and
+  the comment is on both.
+- **Four types are eligible — `rectangle`, `ellipse`, `text`, `sprite` — and each of the
+  four left out is left out for its own reason.** A `container` and an `instance` are
+  Phaser Containers, which Arcade does not simulate: a body on one would be a box around
+  children that go on moving independently of it. A `particles` node has no ComputedSize at
+  all (see Particles above), so there is no width or height for a body to take. A
+  `tilemap`'s collision is `setCollision([...])` — a different API about which *tiles* are
+  solid, and giving the whole layer one rectangular body would be a half-answer that looks
+  like the real one.
+- **Only a top-level node may have one, and the rule lives in a reader rather than in five
+  store guards.** An Arcade body reads its owner's `x`/`y` as *world* coordinates every
+  step, and a node inside a container has parent-relative ones — a prefab definition's
+  children are container children by exactly the same mechanism, so the ban is one rule and
+  not two. Enforced as **strip on read, refuse on write**: `physicsOf` answers null for a
+  nested node, and `setNodePhysics` reaches into `scene.children` directly so a nested node
+  is simply not in the array it searches. The two halves look redundant and are not — the
+  second is what stops the UI offering something that would do nothing, and the first is
+  what lets `moveNode`, `groupSelection`, `pasteNode`, `createPrefabFromSelection` and the
+  tree's drag-to-nest each need no guard at all. A body found deeper reads as *absent*
+  rather than being deleted, which is the answer `tileMapOf` gives an out-of-range tile and
+  for the same reason: a node dragged into a group and back out is the same node, and
+  throwing its settings away on the way in would be a deletion nothing asked for. The
+  inspector says so in as many words.
+- **A body is axis-aligned and does not turn with its object.** That is Phaser's, not a
+  simplification here, and it is the one thing about physics the canvas can tell a user that
+  the docs will not — so `drawBodies` builds the box from `displayWidth`/`displayHeight`
+  centred on the node's own position rather than from `worldBoundsOf`, which is the rotated
+  AABB and a different, larger box.
+- **The outline sits *above* the selection outline, at depth 1000.5.** For an unrotated
+  object the two are the same rectangle, so one of them is going to be invisible — and it
+  should be the selection, which is already said by both handles, by the move bar and by the
+  whole inspector panel, where this outline is the only thing on the canvas that says the
+  object has a body at all. On a rotated object they separate on their own, the cyan turning
+  and the green staying square, which is the difference worth being able to see.
+- **`drawBodies` is in `update()`, not at the end of the sync.** Its stroke is a screen
+  width divided by the camera zoom, and a pinch changes the zoom without touching the store
+  — the reason `drawGrid`, `syncPlacedGuides` and the selection outline all live there. Left
+  on the sync it is a hairline after zooming in, which is the one-pixel-line trap arriving
+  by a new route.
+- **There is no visibility toggle, and that is not an omission.** The grid and the guides
+  are drawn everywhere whether or not anyone asked, so switching them off switches off
+  something the user did not put there; a body outline exists only where one was
+  deliberately attached. A control that could only ever hide the answer to "which of these
+  has physics" is worth less than the width it would cost a 390px toolbar that already
+  clips. A static body is told apart by a cross through the box — one colour and two lines
+  rather than a second palette entry, saying the one thing about a body that is visible on a
+  canvas nobody is simulating.
+- **The world is gravity and nothing else; the bounds are the scene rectangle.** A second
+  stored rectangle would be two fields free to disagree about one number — the argument that
+  gives a sprite no width of its own and a tilemap no tile size of its own — and a bounds
+  rectangle the canvas does not draw is a number with no feedback. `setBounds(0, 0, width,
+  height)` is still *emitted*: Phaser defaults the world to the game canvas, which is this
+  size for the runnable page and is whatever the host game happens to be for a module
+  dropped into one, so the line is redundant in one output and load-bearing in the other,
+  and emitting it in both is what makes `collideWorldBounds` mean the same thing in each.
+  There is no scene-level "physics enabled" flag either: physics is on iff something carries
+  a body, and a flag would be a second answer to the same question.
+- **`mass` and `immovable` are kept even though nothing this editor emits can read them.**
+  Both only matter inside a collision, and deciding what collides with what is game logic —
+  the `scene.start` argument. They are here because the collider *is* the one line the user
+  writes by hand, and these two are the body properties that line reads: emitting them means
+  that line is the only thing they have to write.
+- **The emitted setters are whole, defaults included — the opposite call from
+  `modifiersFor`, which emits only what differs from Phaser's.** A chained modifier left out
+  is a line restating a default, but a body's dozen numbers interact (drag only bites while
+  acceleration is zero, bounce only shows against something to bounce off, gravity is the
+  world's unless this body opts out), so a reader tuning one wants the others beside it. The
+  emitter config made the same call for the same reason. `modifiersFor` itself gains no
+  physics branch and says so, because "no branch needed" and "forgot a branch" look
+  identical: `physics.add.existing` answers with the *object*, not the body, and the body
+  does not exist until that call has been made, so the setters cannot be chained onto the
+  constructor and are their own statements.
+- **`arcadeBody` exists for one reason: `ball.body.setBounce(0.8)` does not compile.**
+  `GameObject.body` is `Body | StaticBody | MatterJS.BodyType | null` and only the first has
+  a bounce. A cast would fix that in TypeScript and would be a *syntax error* in the runnable
+  page, whose `create()` body is the same plain JavaScript — and that shared body is the
+  property that stops the two outputs drifting, so it is not one to spend here. A three-line
+  function narrows it once, reads at the call site almost exactly as `.body` would, and
+  throws naming the object rather than leaving a null dereference three frames later, which
+  is the tilemap helper's argument. Its name comes out of the module's identifier set right
+  after the tilemap helper's, and every factory body's seed set carries it — the hostile
+  project holds an object named "arcade body" for exactly that.
+- **Only a dynamic body needs the helper, and only a dynamic body gets a chain.** Phaser's
+  `StaticBody` genuinely has no velocity, bounce, drag, mass or gravity, so a static body is
+  a bare `add.existing(obj, true)` and the inspector's dynamic-only fields are *absent*
+  rather than disabled: a disabled field says "not now", and these do not exist for that kind
+  of body at all. A file with no dynamic body emits no helper, and a file with no body at all
+  emits no physics of any kind — the rule the asset table, the tilemap helper and the prefab
+  factories all already follow.
+- **The game config is the page's; the gravity is the scene's.** `this.physics` is undefined
+  unless the game config asks for Arcade, so `generateRunnableHtml` adds
+  `physics: { default: 'arcade' }` itself, while `generateScene` — which cannot reach a
+  config it does not own — emits a header comment saying what to add. Gravity stays in
+  `create()` because it is per scene and the config is one object for the whole game, which
+  is the only split that survives two scenes wanting different gravity.
+- **`constructorFor` gains no case, so the one compile error the export checklist advertises
+  never fires for this feature.** Every step of it is silent: the renderer, the exporter, the
+  inspector and `PHYSICS_TYPES` alike. `physics.spec.ts` and `export.spec.ts` are what stand
+  in for the compiler.
+
 ## Selection
 
 `selectedIds: string[]` is the selection, in the order it was picked; the **last** entry
@@ -1214,6 +1350,7 @@ tests/
   prefabs.spec.ts           saving a prefab, placing it twice, editing it once
   tilemap.spec.ts           slicing a tileset, painting it, filling and erasing
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
+  physics.spec.ts           a body drawn, never simulated, and refused inside a group
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
@@ -1237,6 +1374,16 @@ The first carries no free user text to escape and is not there for escaping: it 
 only place the emitted config literal's *shape* meets `ParticleEmitterConfig` under
 `tsc --strict`, which is where a Phaser config key renamed between versions would fail and
 nowhere else.
+
+It holds five physics bodies for that same kind of reason: one dynamic with a non-default
+value in every field, because that toolchain is the only place the emitted setter chain
+ever meets `Phaser.Physics.Arcade.Body`; two static, so `add.existing(obj, true)` reaches
+both toolchains; and two the export must *not* emit — one nested in a group and one inside
+a prefab definition, neither of which the store can reach to write, so only a hand-edited
+file can hold them. Its object named "arcade body" is the only test of `bodyFn` being
+allocated from the module's identifier set before any object draws from it: without it, an
+object bound as `arcadeBody` inside `create()` would shadow the function the line beside it
+calls, and the export would still compile.
 
 Two traps the particles suite hit, both worth knowing before writing a fixture:
 
@@ -1337,6 +1484,22 @@ Traps, each of which produced a confident wrong answer at some point:
   three tree rows reading "Body" the moment one instance is detached, and
   `selectInTree` is an exact-name locator. Rename before detaching, or reach the child by
   row position — `prefabs.spec.ts` does both, and says which and why.
+- **The scale handle occludes the very pixels a colour centroid is averaging.** It keeps a
+  44px *screen* target over the object's bottom-right corner, and a physics body's outline
+  runs straight through it — so a centroid measured while the object is selected sits
+  several pixels off the object's own centre, and ten pixels off at the mobile project's
+  zoom, where a 240x160 box is only ~89x59 on screen. Neither number is motion, and both
+  look exactly like it. Deselect before measuring an outline, or compare two shots taken
+  under identical chrome. The same care the move bar's accent-coloured button already
+  forced on `shot`, arriving on the other side of the canvas.
+- **A physics body outline is drawn *above* the selection outline**, at depth 1000.5 — so a
+  test can see a body on a freshly added object without deselecting first. What it cannot
+  do is *measure* one there, for the reason immediately above.
+- **The `.js` toolchain harness enables Arcade in its own game config**, because a scene
+  module cannot: `this.physics` is undefined unless the game asks for it, and `create()`
+  then throws on the first body and the canvas draws nothing. That is not a harness
+  workaround — the exported module's header comment says exactly what to add, and the
+  harness following it is what proves the comment is sufficient.
 - **A drag test that asserts where the pointer put something has to turn snapping off.**
   It is on by default, so `editing.spec`'s two "the object lands where I dragged it" tests
   now begin with `setSnapping(false)` — the starter project's own objects were pulling the
@@ -1428,7 +1591,26 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 Texture atlases (the asset table holds whole images cut on a regular grid; an atlas is
 named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
-than more of this one), physics, audio, and cameras.
+than more of this one), audio, and cameras.
+
+Physics shipped in iteration 16 with five deliberate holes. **No simulation in the
+editor** — the argument is the whole of the Physics section above, and it is the one hole
+here that is not a loosening: running the world rewrites the document, so "add a play
+button" is not a smaller version of this, it is a different editor. **No colliders or
+overlap callbacks** — which two objects collide is game logic, the `scene.start` argument,
+and it is also what `mass` and `immovable` are emitted for. **No circular bodies** —
+`setCircle(radius, offsetX, offsetY)` defaults its offsets to the body's *current* offset
+rather than to centred, so a bare `setCircle(r)` parks the circle in the corner of a
+non-square object; getting it right means a radius and two offsets, and the radius is a
+second answer to the object's own size (the "a sprite has no width or height" argument).
+For a `text` node it is worse than awkward: text measures against the font at runtime and
+the document does not know its size, so the editor's outline and the exported call could
+compute different circles, in the one place where being wrong is invisible until something
+fails to collide. It is a pure loosening later — one prop and three emitted arguments.
+**No Matter physics**, which is a second engine with a second body model rather than more
+of this one. And **no body on a node inside a group or a prefab**, which is *not* deferred
+work: an axis-aligned body cannot express a rotated parent's frame at all, so it is a limit
+of Arcade's body model rather than of this editor.
 
 Particles shipped in iteration 15 with four deliberate holes. **No emit or death zones** —
 a zone is a geometry object, i.e. a second sub-format inside the document with its own
@@ -1464,7 +1646,8 @@ that.
 Alignment and distribution shipped in iteration 6, snapping in iteration 7, equal spacing
 and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9,
 persistent guides in iteration 10, sprite sheets with animations in iteration 11, prefabs
-in iteration 12, multiple scenes in iteration 13, and tilemaps in iteration 14. The
+in iteration 12, multiple scenes in iteration 13, tilemaps in iteration 14, particles in
+iteration 15 and physics bodies in iteration 16. The
 boxes the geometry family needs are in `src/core/bounds.ts`,
 which any further geometry tool can read. That family is complete in the sense that
 mattered — the user can now author a line of their own — and what is left of it is more of

@@ -106,6 +106,13 @@ for (const variant of VARIANTS) {
         '  width: 960,',
         '  height: 540,',
         "  parent: 'app',",
+        // The one thing the exported module cannot do for itself, and the one
+        // thing its header comment tells the reader to add. This harness is
+        // that reader: without it `this.physics` is undefined and `create()`
+        // throws on the first body, which is precisely the failure the note
+        // exists to prevent — so following the note here is what proves the
+        // note is sufficient.
+        "  physics: { default: 'arcade' },",
         '  scene: Scene,',
         '});',
         '',

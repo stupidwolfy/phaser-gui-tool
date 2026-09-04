@@ -5,6 +5,7 @@ import {
   newId,
   type GameObjectNode,
   type NodeType,
+  type PhysicsBody,
   type Prefab,
   type Project,
   type SceneDoc,
@@ -166,6 +167,32 @@ export function createNode(
 }
 
 /**
+ * A body the moment it is switched on, before the user has touched a field.
+ *
+ * Every dial at Phaser's own default except `collideWorldBounds`, which starts
+ * *on*. A dynamic body with gravity and nothing to stop it leaves the scene in
+ * under a second, so a body that started unbounded would make the feature look
+ * broken the first time anyone exported it — and the scene rectangle is already
+ * the world's bounds, so the box it stays inside is one the user can see.
+ */
+export function defaultPhysicsBody(kind: PhysicsBody['kind'] = 'dynamic'): PhysicsBody {
+  return {
+    kind,
+    velocityX: 0,
+    velocityY: 0,
+    bounceX: 0,
+    bounceY: 0,
+    dragX: 0,
+    dragY: 0,
+    angularVelocity: 0,
+    mass: 1,
+    immovable: false,
+    allowGravity: true,
+    collideWorldBounds: true,
+  };
+}
+
+/**
  * A node that places the given prefab.
  *
  * Named after the prefab rather than "Instance": the tree row is the only place
@@ -201,6 +228,10 @@ export function cloneWithNewIds(node: GameObjectNode): GameObjectNode {
     // moment anything here stopped being written immutably. Every path that
     // copies a node runs through this one function, so it is copied here once.
     props: node.type === 'tilemap' ? { ...node.props, data: [...node.props.data] } : { ...node.props },
+    // The same trap one field over: `physics` is an object, so the outer spread
+    // would leave the copy and the original sharing one, and editing the
+    // duplicate's bounce would edit the original's too.
+    ...(node.physics ? { physics: { ...node.physics } } : {}),
     children: node.children.map(cloneWithNewIds),
   } as GameObjectNode;
 }

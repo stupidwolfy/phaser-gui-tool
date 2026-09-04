@@ -6,6 +6,7 @@ import {
   createInstanceNode,
   createNode,
   createScene,
+  defaultPhysicsBody,
   newProject,
 } from './defaults';
 import {
@@ -18,6 +19,7 @@ import {
   type Rect,
 } from './bounds';
 import {
+  canHavePhysics,
   clampFrame,
   composeTransform,
   containsInstance,
@@ -31,6 +33,7 @@ import {
   guidesOf,
   localTransformIn,
   newId,
+  physicsOf,
   prefabChildrenOf,
   worldTransformOf,
   type AnimationClip,
@@ -41,6 +44,7 @@ import {
   MAX_TILEMAP_SIDE,
   tileMapOf,
   type NodeType,
+  type PhysicsBody,
   type Prefab,
   type Project,
   type SceneDoc,
@@ -442,6 +446,19 @@ export interface EditorState {
    * wholesale is how a second, undocumented way to edit them appears.
    */
   updateScene: (patch: Partial<Omit<SceneDoc, 'children' | 'id' | 'guides'>>) => void;
+
+  // -- physics ---------------------------------------------------------------
+  /**
+   * Adds, edits or removes a node's Arcade body. `null` removes it.
+   *
+   * It reaches into `scene.children` directly rather than through `mapNode`,
+   * and that is the whole of the "only a top-level node may have a body" rule:
+   * a nested node is not in that array, so this action cannot reach one and
+   * there is no second place to remember the guard — the `moveNode` cycle
+   * refusal by another route. A patch merges over whatever the node already
+   * has, so the inspector's fields each send one key.
+   */
+  setNodePhysics: (id: string, patch: Partial<PhysicsBody> | null) => void;
 
   // -- tilemaps --------------------------------------------------------------
   /**
@@ -1869,6 +1886,38 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     updateScene: (patch) => editScene((scene) => ({ ...scene, ...patch })),
 
+    setNodePhysics: (id, patch) =>
+      editScene((scene) => {
+        const index = scene.children.findIndex((child) => child.id === id);
+        // Not a direct child of the scene, so not somewhere a body means
+        // anything. Returning the scene unchanged keeps array identity, which
+        // is what `editProject` reads for "nothing happened" and therefore for
+        // "no undo step".
+        if (index < 0) return scene;
+        const node = scene.children[index];
+        if (!canHavePhysics(node.type)) return scene;
+
+        let next: GameObjectNode;
+        if (patch === null) {
+          if (!node.physics) return scene;
+          // Removed rather than left as a disabled body: an absent field is
+          // what every file written before this feature has, so "no body" is
+          // one state rather than two.
+          const stripped = { ...node } as GameObjectNode;
+          delete stripped.physics;
+          next = stripped;
+        } else {
+          // Merged over the validated read, not over the raw field, so a patch
+          // landing on a hand-edited body cleans it up on its way past.
+          const base = physicsOf(node, true) ?? defaultPhysicsBody();
+          next = { ...node, physics: { ...base, ...patch } } as GameObjectNode;
+        }
+
+        const children = [...scene.children];
+        children[index] = next;
+        return { ...scene, children };
+      }),
+
     paintTiles: (nodeId, cells, tile) =>
       editProject((project) =>
         editTilemapProps(project, nodeId, (map) => {
@@ -2036,6 +2085,11 @@ export function countAssetUses(project: Project, assetId: string): number {
  *
  * Answers a boolean rather than anything derived: a zustand selector that
  * built a fresh object every call would compare unequal every render.
+  *
+ * Deliberately blind to physics bodies, which is worth saying out loud beside
+ * a function that walks the prefab bodies for the emitters: a body does not
+ * animate the canvas, because the editor never simulates one. There is nothing
+ * for a ▶ to start and nothing for it to stop.
  */
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;

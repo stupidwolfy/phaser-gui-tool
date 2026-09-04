@@ -6,10 +6,13 @@ import {
   findAsset,
   findPrefab,
   frameGridOf,
+  physicsOf,
+  scenePhysicsOf,
   tileMapOf,
   type AnimationClip,
   type GameObjectNode,
   type ImageAsset,
+  type PhysicsBody,
   type Prefab,
   type Project,
   type SceneDoc,
@@ -640,6 +643,103 @@ function buildTilemapHelper(fn: string, language: SceneLanguage, indent: string)
   return lines.join('\n').replace(/^(?!$)/gm, indent);
 }
 
+/**
+ * Which physics one scene needs: whether it has a body at all, and whether any
+ * of them is dynamic.
+ *
+ * `scene.children` only, because a body may not live anywhere else — a prefab's
+ * children are added to the Container the factory returns, which is the same
+ * reason a group's children may not have one. So unlike `usedIn`, this has no
+ * prefab half to get wrong.
+ */
+function physicsUsedIn(scene: SceneDoc): { any: boolean; dynamic: boolean } {
+  let any = false;
+  let dynamic = false;
+  for (const node of scene.children) {
+    const body = physicsOf(node, true);
+    if (!body) continue;
+    any = true;
+    if (body.kind === 'dynamic') dynamic = true;
+  }
+  return { any, dynamic };
+}
+
+/**
+ * The one thing standing between the generated code and what a person would
+ * actually have written.
+ *
+ * By hand this is `ball.body.setBounce(0.8)`, which is what the Phaser docs
+ * show and what a reader expects. It does not compile: `GameObject.body` is
+ * `Body | StaticBody | MatterJS.BodyType | null`, and only the first of those
+ * has a velocity or a bounce — so under the `--strict` the exported `.ts` is
+ * compiled with, the property access is an error before the call is. A cast
+ * would fix it in TypeScript and would be a syntax error in the runnable page,
+ * whose `create()` body is the *same* plain JavaScript; that shared body is the
+ * property that stops the two outputs drifting, so it is not one to spend here.
+ *
+ * A three-line function narrows it once instead, reads at the call site almost
+ * exactly as `.body` would, and throws with the object's name if it is ever
+ * reached for something that has no dynamic body — which beats a null
+ * dereference three frames later, the argument the tilemap helper's guards
+ * already make.
+ *
+ * Only dynamic bodies need it. A static one is a single `add.existing(obj,
+ * true)` with nothing to chain, because Phaser's `StaticBody` genuinely has no
+ * velocity, bounce, drag, mass or gravity to set.
+ */
+function buildBodyHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(object: Phaser.GameObjects.GameObject): Phaser.Physics.Arcade.Body {`
+    : `function ${fn}(object) {`;
+  const lines = [
+    signature,
+    '  const body = object.body;',
+    '  if (!(body instanceof Phaser.Physics.Arcade.Body)) {',
+    "    throw new Error('No dynamic Arcade body on: ' + object.name);",
+    '  }',
+    '  return body;',
+    '}',
+  ];
+  // Per physical line, as `buildTilemapHelper` and `buildFactories` both are:
+  // the typed signature is one entry that spans none, but the rule is the same.
+  return lines.join('\n').replace(/^(?!$)/gm, indent);
+}
+
+/**
+ * The lines that give one object its Arcade body, or none at all.
+ *
+ * Every dial is emitted, defaults included — the emitter config's rule rather
+ * than `modifiersFor`'s. A body has a dozen numbers that interact (drag only
+ * bites while acceleration is zero, bounce only shows against something to
+ * bounce off, gravity is the world's unless this body opts out), so a reader
+ * tuning one wants to see the others beside it rather than to remember which
+ * of Phaser's defaults are in force. The chained form is one statement, so the
+ * whole body still reads as a single thing.
+ */
+function bodyLines(id: string, body: PhysicsBody, ctx: EmitContext): string[] {
+  if (body.kind === 'static') {
+    // Nothing to chain: a StaticBody has no velocity, bounce, drag, mass or
+    // gravity, and an immovable flag on a body that never moves would be a line
+    // restating its own type.
+    return [`${ctx.receiver}.physics.add.existing(${id}, true);`];
+  }
+  const setters = [
+    `.setVelocity(${num(body.velocityX)}, ${num(body.velocityY)})`,
+    `.setBounce(${num(body.bounceX)}, ${num(body.bounceY)})`,
+    `.setDrag(${num(body.dragX)}, ${num(body.dragY)})`,
+    `.setAngularVelocity(${num(body.angularVelocity)})`,
+    `.setMass(${num(body.mass)})`,
+    `.setImmovable(${body.immovable})`,
+    `.setAllowGravity(${body.allowGravity})`,
+    `.setCollideWorldBounds(${body.collideWorldBounds})`,
+  ];
+  return [
+    `${ctx.receiver}.physics.add.existing(${id});`,
+    `${ctx.bodyFn}(${id})\n      ${setters.join('\n      ')};`,
+  ];
+}
+
 interface EmitContext {
   assets: Map<string, UsedAsset>;
   animations: Map<string, UsedAnimation>;
@@ -652,6 +752,11 @@ interface EmitContext {
    * out from under the calls.
    */
   tilemapFn: string;
+  /**
+   * What the dynamic-body accessor is called in this module, allocated from the
+   * same identifier set and for the same reason as `tilemapFn`.
+   */
+  bodyFn: string;
   /** `'this'` inside a Scene method, `'scene'` inside a factory function. */
   receiver: string;
 }
@@ -765,6 +870,13 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
  * do to anything else: `setAngle` on a `ParticleEmitter` is Transform's, the
  * game object's own rotation, not the emission angle (that is
  * `setEmitterAngle`, which the config's `angle` already carries).
+  *
+ * No physics branch, and here — as with the emitter's `setAngle` — "no branch
+ * needed" and "forgot a branch" look identical, so this says which. A body's
+ * setters cannot be chained onto the constructor for two reasons at once:
+ * `physics.add.existing` answers with the *object*, not the body, and the body
+ * does not exist until that call has been made. They are emitted as their own
+ * statements by `bodyLines` instead.
  */
 function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimation>): string[] {
   const out: string[] = [];
@@ -812,6 +924,7 @@ function emitNode(
   ctx: EmitContext,
   used: Set<string>,
   lines: string[],
+  nested = false,
 ): string | null {
   const constructor = constructorFor(node, ctx);
   if (constructor === null) {
@@ -828,11 +941,19 @@ function emitNode(
   lines.push(`const ${id} = ${constructor}${chain};`);
   // Carries the editor name through, so objects stay findable at runtime.
   lines.push(`${id}.setName(${str(node.name)});`);
+
+  // `nested` is the whole of "only a top-level object gets a body", and it is
+  // one boolean rather than a rule three call sites remember: the container
+  // recursion below passes it, and so does every prefab factory body. Both are
+  // the same fact — an Arcade body reads its owner's `x`/`y` as world
+  // coordinates, and a child of a Container has neither.
+  const body = physicsOf(node, !nested);
+  if (body) lines.push(...bodyLines(id, body, ctx));
   lines.push('');
 
   if (node.type === 'container' && node.children.length > 0) {
     const childIds = node.children
-      .map((child) => emitNode(child, ctx, used, lines))
+      .map((child) => emitNode(child, ctx, used, lines, true))
       .filter((childId): childId is string => childId !== null);
     // Added after the children are built, and in document order: a container's
     // list order is its draw order, exactly as the scene's array is.
@@ -913,11 +1034,12 @@ function buildFactories(
       'y',
       'root',
       ctx.tilemapFn,
+      ctx.bodyFn,
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
     const childIds = entry.prefab.children
-      .map((child) => emitNode(child, inner, used, lines))
+      .map((child) => emitNode(child, inner, used, lines, true))
       .filter((childId): childId is string => childId !== null);
     if (childIds.length > 0) lines.push(`root.add([${childIds.join(', ')}]);`, '');
     lines.push('return root;');
@@ -942,11 +1064,35 @@ function buildCreateBody(
   const used = new Set<string>([
     'this',
     ctx.tilemapFn,
+    ctx.bodyFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
   const lines: string[] = [
     `this.cameras.main.setBackgroundColor(${str(scene.backgroundColor)});`,
   ];
+
+  // Before the objects, for the reason the animation registrations are: a body
+  // created below is added to this world, and one created against the default
+  // gravity and then re-parented to another is a body that has already taken a
+  // step under the wrong one.
+  //
+  // `setBounds` from the scene's own size rather than from a second stored
+  // rectangle. Phaser defaults the world to the *game canvas*, which is this
+  // size for the runnable page and is whatever the host game happens to be for
+  // a module dropped into one — so the line is redundant in one output and load
+  // bearing in the other, and emitting it in both is what makes
+  // `collideWorldBounds` mean the same thing in each.
+  const world = physicsUsedIn(scene);
+  if (world.any) {
+    const gravity = scenePhysicsOf(scene);
+    lines.push('');
+    lines.push(
+      `this.physics.world.gravity.set(${num(gravity.gravityX)}, ${num(gravity.gravityY)});`,
+    );
+    lines.push(
+      `this.physics.world.setBounds(0, 0, ${num(scene.width)}, ${num(scene.height)});`,
+    );
+  }
 
   // Before the objects, because an object's `.play(...)` names one: animations
   // are registered on the game's manager, and playing a key it has not been
@@ -965,6 +1111,35 @@ function buildCreateBody(
   while (lines.at(-1) === '') lines.pop();
   return lines.map((line) => (line ? `    ${line}` : '')).join('\n');
 }
+
+/**
+ * The one thing about this output a reader has to act on outside the file.
+ *
+ * `this.physics` is undefined unless the *game config* asks for Arcade, so a
+ * scene class that uses it is a scene class that throws in a project which does
+ * not — and it throws on the first body, in `create`, with a message about
+ * reading a property of undefined that says nothing about the cause. The
+ * runnable page sets the config itself and does not need this; a module dropped
+ * into someone else's game cannot, so it says so instead.
+ */
+/**
+ * The half of the same problem this output *can* solve for itself.
+ *
+ * Emitted only when the project has a body, so every project that predates
+ * physics exports byte for byte what it always did — the rule the asset table,
+ * the tilemap helper and the prefab factories all already follow. No `debug`
+ * key: Phaser defaults it off, and a page that shipped with the debug draw on
+ * would be a game whose objects all wear a green box nobody asked for. The
+ * gravity lives in `create()` rather than here because it is per scene, and
+ * this config is the boot scene's alone.
+ */
+const arcadeConfig = (needed: boolean) =>
+  needed ? "        physics: { default: 'arcade' },\n" : '';
+
+const physicsNote = (needed: boolean) =>
+  needed
+    ? `\n// Uses Arcade Physics. Your game config needs: physics: { default: 'arcade' }`
+    : '';
 
 const header = (project: Project) =>
   `// Generated by Phaser GUI Tool from "${project.name}".\n` +
@@ -992,6 +1167,12 @@ interface Emission {
    * file, so the same project exports the same way for anyone who opens it.
    */
   boot: UsedScene;
+  /**
+   * Whether the file needs Arcade at all, and whether it needs the dynamic-body
+   * accessor. File-wide, because the helper and the game config are file-wide
+   * even though the world lines are per scene.
+   */
+  physics: { any: boolean; dynamic: boolean };
 }
 
 function prepare(project: Project): Emission {
@@ -1002,14 +1183,21 @@ function prepare(project: Project): Emission {
   // already follow: an object called "create tilemap layer" bound inside
   // `create()` would otherwise shadow the function the call beside it needs.
   const tilemapFn = toIdentifier('create tilemap layer', moduleNames);
+  // And immediately after it, by that same rule.
+  const bodyFn = toIdentifier('arcade body', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   const animations = collectAnimations(project, project.scenes, assets, prefabs);
   const tilemaps = collectTilemaps(project, project.scenes, prefabs, assets);
   const current = activeScene(project);
+  const worlds = project.scenes.map(physicsUsedIn);
   return {
     scenes,
-    ctx: { assets, animations, prefabs, tilemaps, tilemapFn, receiver: 'this' },
+    ctx: { assets, animations, prefabs, tilemaps, tilemapFn, bodyFn, receiver: 'this' },
     boot: scenes.find((entry) => entry.scene.id === current.id) ?? scenes[0],
+    physics: {
+      any: worlds.some((world) => world.any),
+      dynamic: worlds.some((world) => world.dynamic),
+    },
   };
 }
 
@@ -1070,7 +1258,7 @@ ${buildCreateBody(entry.scene, ctx, usage.animations)}
  * outputs cover the three real cases without overlapping.
  */
 export function generateScene(project: Project, language: SceneLanguage = 'ts'): string {
-  const { scenes, ctx, boot } = prepare(project);
+  const { scenes, ctx, boot, physics } = prepare(project);
 
   // A project with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
@@ -1086,13 +1274,18 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // project that predates them exports byte for byte what it always did.
   const factories =
     ctx.prefabs.size > 0 ? `\n${buildFactories(ctx, language, '')}\n` : '';
+  // Only when something is actually dynamic: a file of static bodies has
+  // nothing to chain and would carry a function nothing calls.
+  const bodies = physics.dynamic
+    ? `\n${buildBodyHelper(ctx.bodyFn, language, '')}\n`
+    : '';
   const classes = scenes
     .map((entry) => buildSceneClass(entry, ctx, language, true))
     .join('\n\n');
 
-  return `${header(project)}
+  return `${header(project)}${physicsNote(physics.any)}
 import Phaser from 'phaser';
-${table}${tiles}${factories}
+${table}${tiles}${bodies}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -1105,7 +1298,7 @@ export default ${boot.className};
  * the Phaser it was built for.
  */
 export function generateRunnableHtml(project: Project): string {
-  const { scenes, ctx, boot } = prepare(project);
+  const { scenes, ctx, boot, physics } = prepare(project);
   // phaserVersion comes from the project file, so it is not trustworthy input
   // for a URL. Anything that is not a plain version falls back to the version
   // this editor targets.
@@ -1125,6 +1318,9 @@ export function generateRunnableHtml(project: Project): string {
   // anywhere, and Phaser is a global here rather than an import.
   const factories =
     ctx.prefabs.size > 0 ? `${buildFactories(ctx, 'js', '      ')}\n\n` : '';
+  const bodies = physics.dynamic
+    ? `${buildBodyHelper(ctx.bodyFn, 'js', '      ')}\n\n`
+    : '';
   const classes = scenes
     .map((entry) =>
       buildSceneClass(entry, ctx, 'js', false).replace(/^(?!$)/gm, '      '),
@@ -1156,14 +1352,14 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${tiles}${factories}      ${classes}
+${table}${tiles}${bodies}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,
         width: ${num(boot.scene.width)},
         height: ${num(boot.scene.height)},
         backgroundColor: ${str(boot.scene.backgroundColor)},
-        scale: {
+${arcadeConfig(physics.any)}        scale: {
           mode: Phaser.Scale.FIT,
           autoCenter: Phaser.Scale.CENTER_BOTH,
         },
