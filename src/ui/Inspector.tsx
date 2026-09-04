@@ -9,6 +9,7 @@ import {
 } from '../core/store';
 import {
   EMPTY_TILE,
+  canHavePhysics,
   containsInstance,
   containsNode,
   findAsset,
@@ -16,6 +17,8 @@ import {
   frameCountOf,
   frameGridOf,
   guidesOf,
+  physicsOf,
+  scenePhysicsOf,
   siblingsOf,
   tileMapOf,
   type GameObjectNode,
@@ -305,8 +308,60 @@ function SceneInspector() {
         </button>
       </div>
 
+      <WorldSection />
+
       <SnappingSection />
     </div>
+  );
+}
+
+/**
+ * The scene's physics world.
+ *
+ * Gravity and nothing else, in the panel about the space objects are placed in
+ * — the only setting here that belongs to every body at once, and the one a
+ * user reaches for immediately after switching their first body on. It is
+ * document state, unlike the snapping block below it: two people opening the
+ * same file must get the same fall.
+ *
+ * The row appears only once something in the scene has a body. Gravity with no
+ * body to pull on is a number that can only ever do nothing, which is the
+ * argument that keeps the ▶ button out of a toolbar with nothing that moves.
+ */
+function WorldSection() {
+  const scene = useActiveScene();
+  const updateScene = useEditorStore((s) => s.updateScene);
+
+  // Top level only, which is where a body may be — the same walk the renderer
+  // and the exporter make, and the same `true`.
+  const any = scene.children.some((child) => physicsOf(child, true) !== null);
+  if (!any) return null;
+
+  const gravity = scenePhysicsOf(scene);
+  const set = (patch: Partial<typeof gravity>) =>
+    updateScene({ physics: { ...gravity, ...patch } });
+
+  return (
+    <>
+      <div className="panel__section">Physics world</div>
+      <div className="field-row">
+        <NumberField
+          label="Gravity X"
+          value={gravity.gravityX}
+          onChange={(gravityX) => set({ gravityX })}
+        />
+        <NumberField
+          label="Gravity Y"
+          value={gravity.gravityY}
+          onChange={(gravityY) => set({ gravityY })}
+        />
+      </div>
+      <p className="hint">
+        Positive Y falls downward, as everywhere else here. The world's bounds
+        are the scene's own width and height, so an object set to collide with
+        them stops at the frame you can see.
+      </p>
+    </>
   );
 }
 
@@ -1290,6 +1345,168 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
           />
         </>
       )}
+
+      <PhysicsSection node={node} />
     </div>
+  );
+}
+
+/**
+ * The node's Arcade Physics body.
+ *
+ * Last in the panel, below the per-type section rather than above it. A body is
+ * opt-in and most objects never get one, so switched off it is a single
+ * checkbox — and putting a dozen fields between the object's name and the fill
+ * colour it is actually being edited for would cost a 390px screen most of a
+ * scroll on every object in the project.
+ *
+ * Two things are refused rather than offered and quietly ignored, which is the
+ * `containsInstance` treatment of "Save as prefab": a type Arcade cannot
+ * simulate, and a node inside a group. Both say why. The second is the one a
+ * reader will not expect, so it says the actual reason — a body is placed from
+ * its object's `x`/`y`, and inside a group those are the group's coordinates,
+ * not the world's.
+ */
+function PhysicsSection({ node }: { node: GameObjectNode }) {
+  const scene = useActiveScene();
+  const setNodePhysics = useEditorStore((s) => s.setNodePhysics);
+
+  if (!canHavePhysics(node.type)) return null;
+
+  // The same question the store asks, asked the same way: a body may only be on
+  // a direct child of the scene.
+  const topLevel = scene.children.some((child) => child.id === node.id);
+  const body = physicsOf(node, topLevel);
+
+  if (!topLevel) {
+    return (
+      <>
+        <div className="panel__section">Physics</div>
+        <p className="hint">
+          {node.physics
+            ? 'This object has a body, but it is inside a group, so nothing draws it and the export leaves it out. Move it back to the top level of the scene and it comes back exactly as you left it.'
+            : "Only an object in the scene itself can have a body. Arcade places a body from its object's X and Y, and inside a group those are the group's coordinates rather than the scene's."}
+        </p>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="panel__section">Physics</div>
+      <CheckboxField
+        label="Physics body"
+        value={body !== null}
+        onChange={(on) => setNodePhysics(node.id, on ? {} : null)}
+      />
+
+      {body && (
+        <>
+          <SelectField
+            label="Body"
+            value={body.kind}
+            options={[
+              { value: 'dynamic', label: 'Dynamic — moves' },
+              { value: 'static', label: 'Static — never moves' },
+            ]}
+            onChange={(kind) =>
+              setNodePhysics(node.id, { kind: kind === 'static' ? 'static' : 'dynamic' })
+            }
+          />
+
+          {/* A static body genuinely has none of these — Phaser's StaticBody
+              carries no velocity, bounce, drag, mass or gravity — so they are
+              absent rather than disabled. A disabled field says "not now"; these
+              do not exist for this kind of body at all. */}
+          {body.kind === 'dynamic' && (
+            <>
+              <div className="field-row">
+                <NumberField
+                  label="Velocity X"
+                  value={body.velocityX}
+                  onChange={(velocityX) => setNodePhysics(node.id, { velocityX })}
+                />
+                <NumberField
+                  label="Velocity Y"
+                  value={body.velocityY}
+                  onChange={(velocityY) => setNodePhysics(node.id, { velocityY })}
+                />
+              </div>
+              <div className="field-row">
+                <NumberField
+                  label="Bounce X"
+                  value={body.bounceX}
+                  step={0.05}
+                  min={0}
+                  onChange={(bounceX) => setNodePhysics(node.id, { bounceX })}
+                />
+                <NumberField
+                  label="Bounce Y"
+                  value={body.bounceY}
+                  step={0.05}
+                  min={0}
+                  onChange={(bounceY) => setNodePhysics(node.id, { bounceY })}
+                />
+              </div>
+              <div className="field-row">
+                <NumberField
+                  label="Drag X"
+                  value={body.dragX}
+                  min={0}
+                  onChange={(dragX) => setNodePhysics(node.id, { dragX })}
+                />
+                <NumberField
+                  label="Drag Y"
+                  value={body.dragY}
+                  min={0}
+                  onChange={(dragY) => setNodePhysics(node.id, { dragY })}
+                />
+              </div>
+              <div className="field-row">
+                <NumberField
+                  label="Spin°/s"
+                  value={body.angularVelocity}
+                  onChange={(angularVelocity) =>
+                    setNodePhysics(node.id, { angularVelocity })
+                  }
+                />
+                <NumberField
+                  label="Mass"
+                  value={body.mass}
+                  step={0.1}
+                  min={0.0001}
+                  onChange={(mass) => setNodePhysics(node.id, { mass })}
+                />
+              </div>
+              <CheckboxField
+                label="Immovable"
+                value={body.immovable}
+                onChange={(immovable) => setNodePhysics(node.id, { immovable })}
+              />
+              <CheckboxField
+                label="Affected by gravity"
+                value={body.allowGravity}
+                onChange={(allowGravity) => setNodePhysics(node.id, { allowGravity })}
+              />
+            </>
+          )}
+
+          <CheckboxField
+            label="Collide with world bounds"
+            value={body.collideWorldBounds}
+            onChange={(collideWorldBounds) =>
+              setNodePhysics(node.id, { collideWorldBounds })
+            }
+          />
+          <p className="hint">
+            The green outline on the canvas is the body. It stays square to the
+            screen however the object is turned, because an Arcade body does not
+            rotate with what it belongs to. Nothing moves in the editor — the
+            document is what you are editing, so the simulation is left to the
+            game you export.
+          </p>
+        </>
+      )}
+    </>
   );
 }

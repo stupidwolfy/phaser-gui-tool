@@ -133,6 +133,28 @@ A tileset is just such an image: the frames you slice it into are the tiles you 
 and a tilemap's tile size is its frame size — so one image can be a sprite sheet and a
 tileset at once, and there is nothing extra to set up.
 
+### Physics
+
+Any rectangle, ellipse, text or sprite at the top level of a scene can be given an **Arcade
+Physics body** — Dynamic for something that moves, Static for a floor or a wall — plus
+velocity, bounce, drag, spin, mass and whether it feels the scene's gravity. Gravity itself
+is a scene setting, and the world's edges are the scene rectangle you can already see.
+
+The editor **draws** the body and never runs it. Its green box is where the body sits, and
+because an Arcade body is axis-aligned it stays square to the screen however the object is
+turned — which is the one thing about physics the canvas can tell you and the docs cannot.
+Nothing moves while you are placing it: the document is what you are editing, so the
+simulation belongs to the game you export. Export the runnable page to watch it go.
+
+The export is the real thing — `this.physics.add.existing(...)` with every setter written
+out, `this.physics.world.gravity.set(...)` and `setBounds(...)` per scene. The runnable
+page enables Arcade in its own game config; a `.ts` or `.js` module cannot, so it says at
+the top what to add to yours.
+
+What it deliberately leaves to you is the **collider**: which two objects actually collide
+is a line of game logic, so the export sets each body up and you write
+`this.physics.add.collider(ball, platform)`.
+
 ### Saving
 
 Where the File System Access API exists (desktop Chrome and Edge), **Save** writes back to
@@ -142,10 +164,14 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; thirteen iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; sixteen iterations in, it is a
 working editor but a small one.
 
-**Not built yet** — texture atlases, tilemaps, physics, particles, audio and cameras.
+**Not built yet** — texture atlases, audio and cameras. Physics is in, with four limits:
+nothing is simulated in the editor, there are no colliders (the one line you write
+yourself), bodies are rectangles rather than circles, and only an object at the top level
+of a scene can have one — a body is positioned in world coordinates, and an object inside a
+group is not.
 Scenes are in, with one limit: nothing in the editor starts one scene from another, since
 that is a line of game logic rather than a piece of layout — the export registers them all
 and leaves `this.scene.start('Level 2')` to you. Prefabs are in, with two limits: a prefab cannot contain another prefab,

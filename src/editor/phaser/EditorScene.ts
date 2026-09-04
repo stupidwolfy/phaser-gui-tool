@@ -16,6 +16,7 @@ import {
   EMPTY_TILE,
   frameGridOf,
   guidesOf,
+  physicsOf,
   prefabChildrenOf,
   tileMapOf,
   worldTransformOf,
@@ -79,6 +80,26 @@ const GUIDE_COLOR = 0xff3ea5;
  */
 const PLACED_GUIDE_COLOR = 0xffa723;
 const PLACED_GUIDE_WIDTH = 2;
+
+/**
+ * The outline drawn round an object that carries a physics body.
+ *
+ * Green because it is the colour Phaser's own Arcade debug draw uses, so the
+ * editor and a game running with `debug: true` say the same thing the same way
+ * — and because it is clear of every other mark on this canvas: the selection
+ * cyan, the two guide colours, the scene frame, the emitter marker and the
+ * default fills of all three shapes.
+ *
+ * There is no toggle for it, unlike the grid and the guides. Those are drawn
+ * everywhere whether or not anyone asked, so switching them off is switching
+ * off something the user did not put there; a body outline exists only where
+ * one was deliberately attached, and it is the only thing on the canvas that
+ * says a body is there at all. A control that could only ever hide the answer
+ * to "which of these has physics" is worth less than the toolbar width it would
+ * cost.
+ */
+const BODY_COLOR = 0x00ff00;
+const BODY_WIDTH = 2;
 
 /**
  * The grab band around a guide, in screen pixels.
@@ -626,6 +647,14 @@ export class EditorScene extends Phaser.Scene {
   private angleLabel: { text: string; x: number; y: number } | null = null;
   private guideGraphics!: Phaser.GameObjects.Graphics;
   /**
+   * The physics-body outlines, redrawn whole every sync.
+   *
+   * A Graphics rather than an object per body, unlike the placed guides: a body
+   * outline is never hit-tested — it is an annotation on an object that is
+   * already grabbable, where a guide has nothing else to be grabbed by.
+   */
+  private bodyGraphics!: Phaser.GameObjects.Graphics;
+  /**
    * One interactive rectangle per guide the user has placed, pooled the way the
    * selection outlines are.
    *
@@ -737,6 +766,17 @@ export class EditorScene extends Phaser.Scene {
     // draws: a guide is feedback about a gesture, and must never be mistaken
     // for something in the scene or cover the handle being dragged.
     this.guideGraphics = this.add.graphics().setDepth(999);
+
+    // Above the selection outline (1000) and below the handles (1001), which is
+    // a deliberate choice rather than an arbitrary slot. For an *unrotated*
+    // object the two outlines are the same rectangle, so one of them is going
+    // to be invisible — and it should be the selection: that a thing is
+    // selected is already said by the two handles, by the move bar and by the
+    // whole inspector panel, while this outline is the only thing anywhere on
+    // the canvas that says the object has a body at all. On a rotated object
+    // they separate on their own, the cyan turning with the object and the
+    // green staying square, which is the difference worth being able to see.
+    this.bodyGraphics = this.add.graphics().setDepth(1000.5);
 
     // Above the objects, so the cells stay visible over what has been painted,
     // and below the snap overlays and the handles — the placed guides' depth,
@@ -2219,6 +2259,7 @@ export class EditorScene extends Phaser.Scene {
     this.drawGrid();
     this.drawPaintGrid();
     this.syncPlacedGuides();
+    this.drawBodies();
   }
 
   /** Two fingers down: zoom by how much the gap between them changed. */
@@ -2315,6 +2356,70 @@ export class EditorScene extends Phaser.Scene {
     // After the objects, not before: `zoomToFit` frames the scene rectangle,
     // and this way the frame it settles on is the one the user sees drawn.
     if (switched) this.zoomToFit();
+  }
+
+  /**
+   * Outlines every object in the scene that carries a physics body.
+   *
+   * The box is deliberately *not* the selection outline's box. An Arcade body
+   * is axis-aligned and does not turn with its object, so a rotated sprite's
+   * body is a straight rectangle of the object's unrotated display size, and
+   * drawing it any other way would show the user a shape their exported game
+   * does not have. Centred on the object's position because all four types that
+   * can carry a body have a centred origin, which is also how Phaser places the
+   * body from `displayOrigin`.
+   *
+   * A static body gets a cross through it as well as an outline. That is one
+   * colour and two extra lines rather than a second palette entry, and it says
+   * the one thing about a body that is visible on a canvas nobody is
+   * simulating: this one is never going to move.
+   *
+   * Only `scene.children` is walked, which is the top-level rule again and the
+   * reason nothing here has to check for it — `physicsOf` is handed `true`
+   * because this loop cannot reach a node for which it would be false.
+   *
+   * In `update()` rather than at the end of the sync, with `drawGrid`,
+   * `syncPlacedGuides` and the selection outline, and for exactly their reason:
+   * the stroke is a *screen* width divided by the camera zoom, and a pinch
+   * changes the zoom without touching the store. Drawn on the sync alone it
+   * would be left at whatever width the last edit happened to see — a hairline
+   * after zooming in, which is the one-pixel-line trap arriving by a new route.
+   */
+  private drawBodies(): void {
+    this.bodyGraphics.clear();
+    const scene = activeScene(useEditorStore.getState().project);
+
+    const width = BODY_WIDTH / this.cameras.main.zoom;
+    let styled = false;
+
+    for (const node of scene.children) {
+      const body = physicsOf(node, true);
+      // A hidden object is not on screen, so an outline round it would be a
+      // mark with nothing under it — the rule that already keeps hidden objects
+      // out of the snap targets.
+      if (!body || !node.visible) continue;
+      const object = this.displayObjects.get(node.id);
+      if (!object) continue;
+
+      // Absolute because a negative scale flips an object without giving it a
+      // negative-width body; Phaser normalises the same way.
+      const w = Math.abs(object.displayWidth);
+      const h = Math.abs(object.displayHeight);
+      if (!(w > 0) || !(h > 0)) continue;
+
+      const x = node.transform.x - w / 2;
+      const y = node.transform.y - h / 2;
+
+      if (!styled) {
+        this.bodyGraphics.lineStyle(width, BODY_COLOR, 1);
+        styled = true;
+      }
+      this.bodyGraphics.strokeRect(x, y, w, h);
+      if (body.kind === 'static') {
+        this.bodyGraphics.lineBetween(x, y, x + w, y + h);
+        this.bodyGraphics.lineBetween(x + w, y, x, y + h);
+      }
+    }
   }
 
   /**

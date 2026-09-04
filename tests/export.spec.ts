@@ -297,6 +297,97 @@ test('a group exports as a container its children are added to', async ({ editor
   expect(exported.contents).toMatch(/widgetGroup\.add\(\[widget\]\);/);
 });
 
+test('a body exports as add.existing and its setters, and a nested one as nothing', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+
+  // Three bodies reach the output and no more: the fixture holds five, and the
+  // two it leaves out are the one nested in a group and the one inside a prefab
+  // definition. Both are container children, whose x/y are their parent's
+  // coordinates rather than the world's — a count rather than a whole-file
+  // `not.toContain`, which is a shared resource this file has already been
+  // burned by once.
+  expect(exported.contents.match(/physics\.add\.existing\(/g) ?? []).toHaveLength(3);
+
+  // A static body is one call with nothing chained onto it, because Phaser's
+  // StaticBody genuinely has no velocity, bounce, drag, mass or gravity.
+  expect(exported.contents).toContain(', true);');
+  expect(exported.contents.match(/^function arcadeBody\(/gm) ?? []).toHaveLength(1);
+
+  // Every dial, defaults included — deliberately unlike `modifiersFor`, which
+  // emits only what differs from Phaser's own.
+  expect(exported.contents).toContain('.setVelocity(120, -45)');
+  expect(exported.contents).toContain('.setBounce(0.4, 0.85)');
+  expect(exported.contents).toContain('.setDrag(30, 5)');
+  expect(exported.contents).toContain('.setAngularVelocity(90)');
+  expect(exported.contents).toContain('.setMass(2.5)');
+  expect(exported.contents).toContain('.setImmovable(false)');
+  expect(exported.contents).toContain('.setAllowGravity(false)');
+  expect(exported.contents).toContain('.setCollideWorldBounds(true)');
+
+  // One world block per scene that has a body — the second scene sets none of
+  // its own, so it takes `scenePhysicsOf`'s default rather than the first
+  // scene's.
+  expect(exported.contents).toContain('this.physics.world.gravity.set(-20, 480);');
+  expect(exported.contents).toContain('this.physics.world.gravity.set(0, 0);');
+  expect(exported.contents.match(/world\.setBounds\(/g) ?? []).toHaveLength(2);
+
+  // A module cannot set the game config, so it says what the reader has to add.
+  expect(exported.contents).toContain("physics: { default: 'arcade' }");
+
+  // The helper's name came out of the module's identifier set before any object
+  // drew from it, so the object the fixture calls "arcade body" binds something
+  // else rather than shadowing the function the line beside it calls.
+  expect(exported.contents).toContain('const arcadeBody2 = this.add.rectangle(');
+});
+
+test('the exported page runs the physics it was given', async ({ editor, page }, testInfo) => {
+  // Built through the UI rather than from a fixture: this is the one assertion
+  // that the *whole* chain arrived — the game config, the world, `add.existing`
+  // and the gravity — and each of those is set somewhere different.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 120);
+  await editor.setPhysics(true);
+  await editor.setGravity(0, 600);
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain("physics: { default: 'arcade' },");
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('physics'), exported.contents);
+
+  const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+  expect(before.count).toBeGreaterThan(100);
+  await run.page.waitForTimeout(600);
+  const after = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+
+  // Downward, and by more than a rounding error: at 600px/s² a body falls about
+  // 100 scene pixels in 600ms, before the canvas scale is even accounted for.
+  expect(after.count).toBeGreaterThan(100);
+  expect(after.y).toBeGreaterThan(before.y + 20);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('a project with no bodies exports no physics at all', async ({ editor }) => {
+  // The rule the asset table, the tilemap helper and the prefab factories all
+  // follow: a project that predates a feature exports byte for byte what it
+  // always did.
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).not.toContain('arcade');
+  expect(exported.contents).not.toContain('this.physics');
+
+  const module = await editor.exportCode('ts');
+  expect(module.contents).not.toContain('arcade');
+});
+
 test('a sprite with no image is called out rather than dropped', async ({ editor }) => {
   await editor.addObject('Image');
   const exported = await editor.exportCode('ts');
