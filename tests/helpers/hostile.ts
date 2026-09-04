@@ -288,6 +288,75 @@ export function hostileProject(): Project {
             children: [],
           },
           {
+            id: 'n',
+            // An emitter with a hostile name and a non-default value in every
+            // one of its eighteen fields.
+            //
+            // Its point is not escaping — the config carries no free user text
+            // beyond `blendMode` — but that `export-toolchain.spec` compiles
+            // the emitted `.ts` under `tsc --strict` against the real Phaser
+            // types. That is the only place the config literal's *shape* is
+            // checked against `ParticleEmitterConfig`, and a key Phaser renamed
+            // between versions would fail there and nowhere else. Rotated and
+            // scaled so `modifiersFor` runs over an emitter too.
+            name: `${breakout} sparks`,
+            type: 'particles',
+            visible: true,
+            transform: { x: 200, y: 420, rotation: 17.25, scaleX: 1.5, scaleY: 1.5 },
+            props: {
+              assetId: 'sheet-1',
+              frame: 2,
+              lifespan: 750,
+              speedMin: 30,
+              speedMax: 210,
+              angleMin: 200,
+              angleMax: 340,
+              scaleStart: 1.4,
+              scaleEnd: 0.2,
+              alphaStart: 0.9,
+              alphaEnd: 0.1,
+              quantity: 3,
+              frequency: 80,
+              gravityX: 15,
+              gravityY: 120,
+              tint: '#ff8800',
+              blendMode: 'ADD',
+              alpha: 0.85,
+            },
+            children: [],
+          },
+          {
+            id: 'o',
+            // No image, which is the emitter half of `missingReason`: it takes
+            // `constructorFor`'s null return, exactly as the unfinished map
+            // above does.
+            name: 'unfinished sparks',
+            type: 'particles',
+            visible: true,
+            transform: { x: 860, y: 420, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: {
+              assetId: null,
+              frame: 0,
+              lifespan: 1000,
+              speedMin: 50,
+              speedMax: 150,
+              angleMin: 0,
+              angleMax: 360,
+              scaleStart: 1,
+              scaleEnd: 0,
+              alphaStart: 1,
+              alphaEnd: 0,
+              quantity: 1,
+              frequency: 50,
+              gravityX: 0,
+              gravityY: 0,
+              tint: '#ffffff',
+              blendMode: 'NORMAL',
+              alpha: 1,
+            },
+            children: [],
+          },
+          {
             id: 'd',
             name: 'name123',
             type: 'text',

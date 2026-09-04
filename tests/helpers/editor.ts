@@ -174,7 +174,7 @@ export class EditorPage {
   }
 
   async addObject(
-    label: 'Rectangle' | 'Ellipse' | 'Text' | 'Image' | 'Group' | 'Tiles',
+    label: 'Rectangle' | 'Ellipse' | 'Text' | 'Image' | 'Group' | 'Tiles' | 'Particles',
   ): Promise<void> {
     await this.openPanel('scene');
     await this.panel('scene').getByRole('button', { name: `+ ${label}` }).click();
@@ -471,12 +471,13 @@ export class EditorPage {
   }
 
   /**
-   * The toolbar's play toggle, which only exists once the project holds an
-   * animation — so this is called after `addAnimation`, never before.
+   * The toolbar's preview toggle, which only exists once the project holds
+   * something that moves — an animation clip or a particle emitter — so this is
+   * called after `addAnimation` or after adding a Particles node, never before.
    */
   async setPreview(on: boolean): Promise<void> {
     await this.closePanels();
-    const button = this.page.getByRole('button', { name: 'Play animations' });
+    const button = this.page.getByRole('button', { name: 'Preview motion' });
     if (((await button.getAttribute('aria-pressed')) === 'true') !== on) await button.click();
     await this.settle();
   }

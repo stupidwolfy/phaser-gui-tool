@@ -43,7 +43,8 @@ on a desktop.
   which frame a sprite shows
 - Animate it: build a clip from the frames (`0-3, 7` picks and orders them), set the
   frame rate and whether it loops, and press ▶ in the toolbar to watch it play on the
-  canvas. Animations are saved with the project and exported as real
+  canvas — the same button starts and stops every particle emitter, since both are the
+  canvas moving by itself. Animations are saved with the project and exported as real
   `this.anims.create(...)` calls, so the sheet and the clip come out the other side
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
 - Group objects: a group moves, rotates, scales and fades everything inside it as one,
@@ -61,6 +62,12 @@ on a desktop.
   drag to lay the tile you picked, ⌫ to rub tiles out, ✓ when you are done. Set the map's
   size in columns and rows, fill the whole thing with one tile, and export it as a real
   `make.tilemap` / `addTilesetImage` / `createLayer`, tile data and all
+- Throw **particles**: `+ Particles` adds an emitter, an imported image is what it
+  throws, and the inspector shapes it — lifespan, how fast and in which directions, how it
+  grows and fades, how many and how often, gravity, tint and blend mode. It sits still
+  until you press ▶ in the toolbar, so an emitter stays where you put it while you place
+  the rest of the scene, and exports as a real `this.add.particles(...)` with every
+  setting in one object
 - Build a game out of several **scenes**: `+ Scene` in the scene panel adds one, the
   chips beside it switch between them, and the inspector duplicates or deletes the one
   you are in. Images, animations and prefabs are shared by all of them; the project

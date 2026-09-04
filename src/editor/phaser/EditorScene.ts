@@ -22,6 +22,7 @@ import {
   type AnimationClip,
   type GameObjectNode,
   type ImageAsset,
+  type ParticlesProps,
   type Project,
   type TileCell,
   type TileMap,
@@ -234,6 +235,33 @@ const NO_TILESET_TILE = 32;
 const PLACEHOLDER_SIZE = 96;
 
 /**
+ * The marker drawn for an emitter that is not emitting.
+ *
+ * `PLACEHOLDER_TEXTURE`'s argument a third time, and here it covers more than
+ * "no image yet": an emitter is stopped unless preview is on, so most of the
+ * time it draws nothing at all — and an object that draws nothing cannot be
+ * seen, selected or dragged. Giving it a texture rather than a branch means
+ * "no image chosen", "the image is gone", "the image is still decoding" and
+ * "chosen, but not running" are one state and one code path rather than four.
+ *
+ * Filled discs rather than an outline: a one-pixel line never reaches full
+ * strength on screen, so a stroked marker is both hard to see under a thumb
+ * and impossible for a colour-centroid assertion to find.
+ */
+const EMITTER_TEXTURE = 'editor:emitter';
+/**
+ * The emitter's size, in world units — the marker's and the box's at once.
+ *
+ * A `ParticleEmitter` mixes in Transform and Visible but *not* ComputedSize or
+ * Origin, so it has no width, no height and no `displayOriginX` for
+ * `InputManager.pointWithinHitArea` to offset by. It is therefore drawn inside
+ * a Container of this size, which has all three — and because the texture is
+ * authored at exactly this size, the marker and the box a gesture reads cannot
+ * disagree about where the emitter is.
+ */
+const EMITTER_SIZE = 96;
+
+/**
  * The corner scale handle, in *screen* pixels — it is resized against the
  * camera zoom every frame so it stays the same size to the eye and to the
  * finger, whatever the camera is doing.
@@ -391,6 +419,26 @@ export class EditorScene extends Phaser.Scene {
    * everything inside it has been laid out.
    */
   private containerBounds = new Map<string, Phaser.Geom.Rectangle>();
+
+  /**
+   * The emitter inside each particles node's container, by display key.
+   *
+   * The container is what the document's transform, alpha and hit area apply
+   * to; this is the thing that actually throws particles, and the only way
+   * back to it once the two are built. The `tilemaps` map one object over.
+   */
+  private emitters = new Map<string, Phaser.GameObjects.Particles.ParticleEmitter>();
+
+  /**
+   * The config each emitter was last given, by display key.
+   *
+   * `setConfig` calls `resetCounters`, which restarts the flow — and the scene
+   * syncs on *every* store change, so applying the config unconditionally
+   * would have a selection, or a nudge of some unrelated object, reset every
+   * emitter before it had emitted anything. This is `play(key, true)`'s
+   * ignoreIfPlaying by another route: compare, and only then apply.
+   */
+  private emitterConfigs = new Map<string, string>();
 
   /**
    * The display keys belonging to real document nodes, rebuilt every sync.
@@ -674,6 +722,7 @@ export class EditorScene extends Phaser.Scene {
     // than nothing at all.
     this.createPlaceholderTexture();
     this.createNoTilesetTexture();
+    this.createEmitterTexture();
 
     // Outline of the scene's own bounds, so the user can see where the game
     // canvas ends even when the camera is zoomed out past it.
@@ -833,6 +882,49 @@ export class EditorScene extends Phaser.Scene {
   }
 
   /**
+   * The marker drawn for an emitter that is not emitting: a spray of filled
+   * discs, in the placeholder's colours so the editor's own stand-ins read as
+   * one family.
+   *
+   * Not tracked in `assetTextures`: that set is the keys built *from the
+   * document's images*, and removing an editor stand-in along with them would
+   * take out a texture every emitter still needs — the same reason Phaser's
+   * own `__DEFAULT` is not removed by guesswork.
+   */
+  private createEmitterTexture(): void {
+    if (this.textures.exists(EMITTER_TEXTURE)) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = EMITTER_SIZE;
+    canvas.height = EMITTER_SIZE;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+
+    context.fillStyle = '#2a2f3a';
+    context.fillRect(0, 0, EMITTER_SIZE, EMITTER_SIZE);
+
+    const middle = EMITTER_SIZE / 2;
+    context.fillStyle = '#ff6bd6';
+    // One large disc at the origin — which is where the emitter actually is —
+    // and four smaller ones thrown off it, so the marker says "a source" and
+    // not merely "an object".
+    const discs: [number, number, number][] = [
+      [middle, middle, 13],
+      [middle - 24, middle - 20, 7],
+      [middle + 22, middle - 26, 5],
+      [middle + 27, middle + 21, 8],
+      [middle - 27, middle + 25, 6],
+    ];
+    for (const [x, y, radius] of discs) {
+      context.beginPath();
+      context.arc(x, y, radius, 0, Math.PI * 2);
+      context.fill();
+    }
+
+    this.textures.addCanvas(EMITTER_TEXTURE, canvas);
+  }
+
+  /**
    * Brings the game's textures in line with the document's asset table.
    *
    * The document holds data URLs; Phaser needs decoded images. Decoding is
@@ -979,6 +1071,10 @@ export class EditorScene extends Phaser.Scene {
     this.tilemaps.get(key)?.destroy();
     this.tilemaps.delete(key);
     this.tileData.delete(key);
+    // The container's own `destroy` takes the emitter and the marker with it,
+    // so only the two lookups have to be dropped by hand.
+    this.emitters.delete(key);
+    this.emitterConfigs.delete(key);
   }
 
   /**
@@ -2195,7 +2291,7 @@ export class EditorScene extends Phaser.Scene {
     // And after the textures, because an animation is built from a texture's
     // frames — but still before the nodes, which play what it registers.
     this.syncAnimations(state.project);
-    this.previewing = state.previewAnimations;
+    this.previewing = state.previewMotion;
     this.syncing = state.project;
 
     const seen = new Set<string>();
@@ -2549,6 +2645,9 @@ export class EditorScene extends Phaser.Scene {
       case 'tilemap':
         object = this.createTilemapLayer(node.props, key);
         break;
+      case 'particles':
+        object = this.createEmitter(node.props, key);
+        break;
       case 'container':
       case 'instance':
         // Sized in applyNode from whatever ends up inside it; a container needs
@@ -2566,6 +2665,48 @@ export class EditorScene extends Phaser.Scene {
       this.input.setDraggable(object);
     }
     return object;
+  }
+
+  /**
+   * A particles node's display object: a fixed-size Container holding the
+   * marker and the emitter itself.
+   *
+   * The wrapper is not decoration. A `ParticleEmitter` has Transform and
+   * Visible but no ComputedSize and no Origin, so it has no width, no height
+   * and no `displayOriginX` — and `InputManager.pointWithinHitArea` adds that
+   * origin to every point it tests, so an emitter on its own can never be hit
+   * at all. A Container has all three, which makes the node selectable,
+   * draggable, scalable and turnable with no special case anywhere: the
+   * existing `localRectOf` falls through to a centred `width`/`height` box for
+   * a container with no measured bounds, and `hitAreaFor` and `applyHitArea`
+   * already do the right thing for one.
+   *
+   * Its children are private to the renderer — `syncNodes` recurses into
+   * `container` and `instance` nodes only, and `applyContainerBounds` is
+   * called for those two — so nothing here disturbs "draw order is the array
+   * order, at every level".
+   */
+  private createEmitter(
+    props: ParticlesProps,
+    key: string,
+  ): Phaser.GameObjects.Container {
+    const group = this.add.container(0, 0).setSize(EMITTER_SIZE, EMITTER_SIZE);
+
+    const marker = this.add.image(0, 0, EMITTER_TEXTURE);
+    const emitter = this.add.particles(0, 0, this.textureKeyFor(this.syncing, props.assetId));
+    // An emitter is `emitting` from the moment it is built, so a new one — or
+    // one rebuilt because its node type changed — would puff for a frame
+    // before the first `applyNode` could stop it.
+    emitter.stop(true);
+
+    group.add([marker, emitter]);
+    this.emitters.set(key, emitter);
+    return group;
+  }
+
+  /** The marker inside a particles node's container. */
+  private markerOf(group: Phaser.GameObjects.Container): Phaser.GameObjects.Image {
+    return group.list[0] as Phaser.GameObjects.Image;
   }
 
   private applyNode(
@@ -2655,6 +2796,15 @@ export class EditorScene extends Phaser.Scene {
         layer.setAlpha(node.props.alpha);
         break;
       }
+      case 'particles': {
+        const group = object as Phaser.GameObjects.Container;
+        // On the container, so it multiplies down onto the marker and the
+        // particles alike — what "fade this emitter" should mean, and what the
+        // exported `.setAlpha` does to the bare emitter.
+        group.setAlpha(node.props.alpha);
+        this.applyEmitter(group, node.props, key);
+        break;
+      }
       case 'container':
       case 'instance': {
         const group = object as Phaser.GameObjects.Container;
@@ -2683,6 +2833,73 @@ export class EditorScene extends Phaser.Scene {
     }
 
     this.applyHitArea(object);
+  }
+
+  /**
+   * Brings one emitter in line with its node, and decides whether it runs.
+   *
+   * Running is a single condition rather than several: preview has to be on,
+   * *and* there has to be a real image to throw. Without the second half an
+   * emitter with no image chosen would spray the 96px marker across the scene,
+   * which is neither what the document says nor anything a user asked for.
+   *
+   * The marker is shown exactly when the emitter is not — one field, two
+   * controls, never two notions of the same state.
+   */
+  private applyEmitter(
+    group: Phaser.GameObjects.Container,
+    props: ParticlesProps,
+    key: string,
+  ): void {
+    const emitter = this.emitters.get(key);
+    if (!emitter) return;
+
+    const config = this.emitterConfigFor(props);
+    const signature = JSON.stringify(config);
+    // `setConfig` calls `resetCounters`, which restarts the flow — so applying
+    // it on every store change would mean nothing ever visibly emitted.
+    if (this.emitterConfigs.get(key) !== signature) {
+      emitter.setConfig(config);
+      this.emitterConfigs.set(key, signature);
+    }
+
+    const textureKey = this.textureKeyFor(this.syncing, props.assetId);
+    const running = this.previewing && textureKey !== PLACEHOLDER_TEXTURE;
+    if (running && !emitter.emitting) emitter.start();
+    // `stop(true)` kills what is already in flight rather than letting it die
+    // out over a lifespan: switching preview off has to put the canvas back
+    // where it was immediately, which is the whole point of the toggle.
+    if (!running && emitter.emitting) emitter.stop(true);
+
+    this.markerOf(group).setVisible(!running);
+  }
+
+  /**
+   * The node's settings as a Phaser emitter config.
+   *
+   * The texture and the frame go *in the config* rather than into a rebuild
+   * signature: `setConfig` routes them to `setTexture` and `setEmitterFrame`,
+   * so an emitter can be re-pointed in place — and a rebuild would kill every
+   * live particle, which for a field like Lifespan means the canvas going
+   * blank each time the number is nudged.
+   */
+  private emitterConfigFor(props: ParticlesProps): Record<string, unknown> {
+    const asset = findAsset(this.syncing, props.assetId);
+    return {
+      texture: this.textureKeyFor(this.syncing, props.assetId),
+      frame: clampFrame(asset, props.frame),
+      lifespan: props.lifespan,
+      speed: { min: props.speedMin, max: props.speedMax },
+      angle: { min: props.angleMin, max: props.angleMax },
+      scale: { start: props.scaleStart, end: props.scaleEnd },
+      alpha: { start: props.alphaStart, end: props.alphaEnd },
+      quantity: props.quantity,
+      frequency: props.frequency,
+      gravityX: props.gravityX,
+      gravityY: props.gravityY,
+      tint: hexToNumber(props.tint),
+      blendMode: props.blendMode,
+    };
   }
 
   /**

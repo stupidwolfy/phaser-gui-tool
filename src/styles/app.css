@@ -481,6 +481,13 @@ select {
 
 /* A chequer rather than a solid: a tilemap is a grid, and the one shape in the
    list whose chip can say what it is rather than only which colour it took. */
+/* A spray fading out from a bright centre, where every other chip is a flat
+   fill: an emitter is a thing that throws other things, and the chip can say
+   so by fading the way its own particles do. */
+.tree__type[data-type='particles'] {
+  background: radial-gradient(circle at 50% 50%, #ff5f56 0%, #ff5f56 35%, transparent 75%);
+}
+
 .tree__type[data-type='tilemap'] {
   background:
     linear-gradient(45deg, #4ecdc4 25%, transparent 25%, transparent 75%, #4ecdc4 75%),

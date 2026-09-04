@@ -19,6 +19,7 @@ import {
   siblingsOf,
   tileMapOf,
   type GameObjectNode,
+  type ParticlesProps,
 } from '../core/schema';
 import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
 import { TilePalette } from './TilePalette';
@@ -620,6 +621,7 @@ const SECTION_TITLE: Record<GameObjectNode['type'], string> = {
   container: 'Group',
   instance: 'Prefab',
   tilemap: 'Tiles',
+  particles: 'Particles',
 };
 
 /** The value the parent picker uses for "not in a group at all". */
@@ -755,11 +757,19 @@ function ArrangeRow({ node }: { node: GameObjectNode }) {
  * playing on the sprite, because the animation owns the frame then — the field
  * would be a number the canvas visibly disagrees with.
  */
-function FrameField({ node }: { node: Extract<GameObjectNode, { type: 'sprite' }> }) {
+function FrameField({
+  node,
+}: {
+  node: Extract<GameObjectNode, { type: 'sprite' | 'particles' }>;
+}) {
   const updateProps = useEditorStore((s) => s.updateProps);
   const asset = useEditorStore((s) => findAsset(s.project, node.props.assetId));
 
-  if (!asset || !frameGridOf(asset) || node.props.animationId) return null;
+  // An emitter indexes the same grid and clamps against the same count, so it
+  // is the same control rather than a copy of it. Only a sprite can have a
+  // clip taking the frame over, which is why that half of the guard narrows.
+  if (!asset || !frameGridOf(asset)) return null;
+  if (node.type === 'sprite' && node.props.animationId) return null;
 
   return (
     <div className="field-row">
@@ -771,6 +781,184 @@ function FrameField({ node }: { node: Extract<GameObjectNode, { type: 'sprite' }
         onChange={(frame) => updateProps(node.id, { frame })}
       />
     </div>
+  );
+}
+
+/**
+ * The emitter panel.
+ *
+ * Long, because an emitter is eighteen numbers rather than a position and a
+ * colour — but every one of them is one Phaser config key, and the set is the
+ * smallest that reaches fire, sparks and falling snow. The image controls are
+ * the picker and the slicer used verbatim, for the reason a tileset reuses
+ * them: a particle sheet *is* a sliced image.
+ *
+ * The hint is not decoration. An emitter is stopped unless preview is on, so
+ * without it the panel reads as broken — every dial set, and nothing moving.
+ */
+function ParticlesSection({
+  node,
+}: {
+  node: Extract<GameObjectNode, { type: 'particles' }>;
+}) {
+  const updateProps = useEditorStore((s) => s.updateProps);
+  const previewMotion = useEditorStore((s) => s.previewMotion);
+  const setProp = (patch: Partial<ParticlesProps>) => updateProps(node.id, patch);
+
+  return (
+    <>
+      <AssetSummary assetId={node.props.assetId} kind="particle" />
+      <AssetPicker
+        selectedAssetId={node.props.assetId}
+        onPick={(assetId) => setProp({ assetId })}
+      />
+
+      {node.props.assetId && (
+        <>
+          <div className="panel__section">Sprite sheet</div>
+          <SheetSection assetId={node.props.assetId} />
+          <FrameField node={node} />
+        </>
+      )}
+
+      {!previewMotion && (
+        <p className="hint">
+          Stopped. Press ▶ in the toolbar to watch it run — the canvas holds
+          still by default so objects stay where you put them.
+        </p>
+      )}
+
+      <div className="panel__section">Emission</div>
+      <NumberField
+        label="Lifespan"
+        value={node.props.lifespan}
+        min={1}
+        step={50}
+        onChange={(lifespan) => setProp({ lifespan })}
+      />
+      <div className="field-row">
+        <NumberField
+          label="Quantity"
+          value={node.props.quantity}
+          min={1}
+          step={1}
+          onChange={(quantity) => setProp({ quantity })}
+        />
+        <NumberField
+          label="Frequency"
+          value={node.props.frequency}
+          min={0}
+          step={10}
+          onChange={(frequency) => setProp({ frequency })}
+        />
+      </div>
+      <div className="field-row">
+        <NumberField
+          label="Speed min"
+          value={node.props.speedMin}
+          step={10}
+          onChange={(speedMin) => setProp({ speedMin })}
+        />
+        <NumberField
+          label="Speed max"
+          value={node.props.speedMax}
+          step={10}
+          onChange={(speedMax) => setProp({ speedMax })}
+        />
+      </div>
+      <div className="field-row">
+        <NumberField
+          label="Angle min"
+          value={node.props.angleMin}
+          step={5}
+          onChange={(angleMin) => setProp({ angleMin })}
+        />
+        <NumberField
+          label="Angle max"
+          value={node.props.angleMax}
+          step={5}
+          onChange={(angleMax) => setProp({ angleMax })}
+        />
+      </div>
+      <div className="field-row">
+        <NumberField
+          label="Gravity X"
+          value={node.props.gravityX}
+          step={10}
+          onChange={(gravityX) => setProp({ gravityX })}
+        />
+        <NumberField
+          label="Gravity Y"
+          value={node.props.gravityY}
+          step={10}
+          onChange={(gravityY) => setProp({ gravityY })}
+        />
+      </div>
+
+      <div className="panel__section">Particle</div>
+      {/* Phaser's own names, and deliberately not "Scale"/"Alpha": the
+          transform's Scale X/Y and the object's own Alpha are a few rows up
+          this same panel, and two fields differing by one word is ambiguous to
+          a reader and to a test locator alike. */}
+      <div className="field-row">
+        <NumberField
+          label="Scale start"
+          value={node.props.scaleStart}
+          step={0.1}
+          min={0}
+          onChange={(scaleStart) => setProp({ scaleStart })}
+        />
+        <NumberField
+          label="Scale end"
+          value={node.props.scaleEnd}
+          step={0.1}
+          min={0}
+          onChange={(scaleEnd) => setProp({ scaleEnd })}
+        />
+      </div>
+      <div className="field-row">
+        <NumberField
+          label="Alpha start"
+          value={node.props.alphaStart}
+          step={0.05}
+          min={0}
+          max={1}
+          onChange={(alphaStart) => setProp({ alphaStart })}
+        />
+        <NumberField
+          label="Alpha end"
+          value={node.props.alphaEnd}
+          step={0.05}
+          min={0}
+          max={1}
+          onChange={(alphaEnd) => setProp({ alphaEnd })}
+        />
+      </div>
+      <ColorField
+        label="Tint"
+        value={node.props.tint}
+        onChange={(tint) => setProp({ tint })}
+      />
+      <SelectField
+        label="Blend"
+        value={node.props.blendMode}
+        options={[
+          { value: 'NORMAL', label: 'Normal' },
+          { value: 'ADD', label: 'Add' },
+        ]}
+        onChange={(blendMode) => setProp({ blendMode: blendMode as 'NORMAL' | 'ADD' })}
+      />
+
+      <div className="panel__section">Appearance</div>
+      <NumberField
+        label="Alpha"
+        value={node.props.alpha}
+        step={0.05}
+        min={0}
+        max={1}
+        onChange={(alpha) => setProp({ alpha })}
+      />
+    </>
   );
 }
 
@@ -1040,6 +1228,8 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
           </div>
         </>
       )}
+
+      {node.type === 'particles' && <ParticlesSection node={node} />}
 
       {node.type === 'container' && (
         <>

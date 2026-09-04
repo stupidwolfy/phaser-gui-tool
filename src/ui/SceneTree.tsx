@@ -19,6 +19,7 @@ const ADDABLE: { type: NodeType; label: string }[] = [
   // "Tiles" rather than "Tilemap": the add row is an auto-fit grid of `nowrap`
   // buttons, so every label is a column the 260px tree has to find room for.
   { type: 'tilemap', label: 'Tiles' },
+  { type: 'particles', label: 'Particles' },
 ];
 
 /** How far each level of nesting steps in, in pixels. */

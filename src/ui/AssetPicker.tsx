@@ -149,14 +149,15 @@ function AssetRow({
  * The wording differs by what is drawing it, because the consequence does: a
  * sprite with no image is one placeholder square, while a tilemap with no
  * tileset is a whole grid of them — and a tilemap's size on the canvas comes
- * from its own columns and rows, not from the image.
+ * from its own columns and rows, not from the image. An emitter is a third
+ * case again: it draws its marker and throws nothing at all.
  */
 export function AssetSummary({
   assetId,
   kind = 'sprite',
 }: {
   assetId: string | null;
-  kind?: 'sprite' | 'tileset';
+  kind?: 'sprite' | 'tileset' | 'particle';
 }) {
   const asset = useEditorStore((s) => findAsset(s.project, assetId));
 
@@ -165,7 +166,9 @@ export function AssetSummary({
       <p className="hint hint--error">
         {kind === 'tileset'
           ? 'No tileset chosen — this map draws placeholders and exports as nothing.'
-          : 'No image chosen — this sprite draws a placeholder and exports as nothing.'}
+          : kind === 'particle'
+            ? 'No image chosen — this emitter draws its marker, throws nothing and exports as nothing.'
+            : 'No image chosen — this sprite draws a placeholder and exports as nothing.'}
       </p>
     );
   }
@@ -175,7 +178,9 @@ export function AssetSummary({
       {asset.name} · {asset.width}×{asset.height}px.{' '}
       {kind === 'tileset'
         ? 'Its frame size is the map’s tile size.'
-        : 'Size on the canvas is this times the transform scale above.'}
+        : kind === 'particle'
+          ? 'Each particle draws one frame of it.'
+          : 'Size on the canvas is this times the transform scale above.'}
     </p>
   );
 }

@@ -15,6 +15,8 @@ import { SCENE } from './helpers/editor';
 const MARKER = '#ff00ff';
 const RECT_FILL = '#4f8cff';
 const ELLIPSE_FILL = '#ffb84f';
+/** The colour the editor draws a stopped emitter's marker in. */
+const EMITTER_MARKER = '#ff6bd6';
 
 /** Screenshot centroids and CSS-pixel maths agree to about a pixel. */
 const NEAR = 4;
@@ -52,6 +54,67 @@ test('adds an object at the scene centre and draws it there', async ({ editor })
   expect(drawn.count).toBeGreaterThan(100);
   expect(Math.abs(drawn.x - expected.x)).toBeLessThan(NEAR);
   expect(Math.abs(drawn.y - expected.y)).toBeLessThan(NEAR);
+});
+
+/**
+ * A particles node belongs in this file, where `sprite`, `tilemap` and
+ * `instance` are excused into their own specs. Those three draw nothing at all
+ * until an image has been imported; an emitter draws its marker with no setup,
+ * which is exactly what the marker is for — an object stopped by default still
+ * has to be visible, selectable and draggable.
+ */
+test('adds a particle emitter, draws its marker, and reopens it', async ({
+  editor,
+  page,
+}, testInfo) => {
+  await editor.clearScene();
+  await editor.addObject('Particles');
+  await editor.setField('Name', 'Sparks');
+
+  // The marker's magenta, and on a cleared scene nothing else on the canvas is
+  // that colour. `findDrawn` matches filled pixels, which is why the marker is
+  // drawn as discs rather than as an outline — at the mobile zoom a 96px square
+  // is about 35 screen pixels, and a one-pixel border of that never reaches
+  // full strength.
+  await editor.closePanels();
+  const centre = await editor.sceneToScreen({ x: SCENE.width / 2, y: SCENE.height / 2 });
+  const drawn = await editor.findDrawn(EMITTER_MARKER);
+  expect(drawn.count, 'the emitter marker is not on the canvas').toBeGreaterThan(100);
+  expect(Math.abs(drawn.x - centre.x)).toBeLessThan(NEAR);
+  expect(Math.abs(drawn.y - centre.y)).toBeLessThan(NEAR);
+
+  // An inspector edit moves what is drawn, for a node whose drawn thing is the
+  // editor's own furniture rather than the object itself.
+  await editor.setField('X', 700);
+  await editor.setField('Y', 400);
+  await editor.closePanels();
+  const moved = await editor.findDrawn(EMITTER_MARKER);
+  const expected = await editor.sceneToScreen({ x: 700, y: 400 });
+  expect(Math.abs(moved.x - expected.x)).toBeLessThan(NEAR);
+  expect(Math.abs(moved.y - expected.y)).toBeLessThan(NEAR);
+
+  // The canvas first, then the file: saving opens the file sheet, which on
+  // mobile covers the very canvas the assertions above read.
+  const saved = await editor.saveToFile();
+  const parsed = JSON.parse(saved.contents);
+  const emitter = parsed.scenes[0].children.find(
+    (node: { name: string }) => node.name === 'Sparks',
+  );
+  expect(emitter.type).toBe('particles');
+  expect(emitter.props).toMatchObject({ assetId: null, lifespan: 1000, blendMode: 'NORMAL' });
+  expect(emitter.transform).toMatchObject({ x: 700, y: 400 });
+
+  const path = testInfo.outputPath('emitter.phaser.json');
+  await fs.writeFile(path, saved.contents, 'utf8');
+  page.on('dialog', (dialog) => void dialog.accept());
+  await editor.newProject();
+  await editor.openFile(path);
+  await editor.closePanels();
+
+  const reopened = await editor.findDrawn(EMITTER_MARKER);
+  expect(reopened.count).toBeGreaterThan(100);
+  expect(Math.abs(reopened.x - expected.x)).toBeLessThan(NEAR);
+  expect(Math.abs(reopened.y - expected.y)).toBeLessThan(NEAR);
 });
 
 test('drags on the canvas, stores the move, and undoes it', async ({ editor }) => {
@@ -147,7 +210,7 @@ test('saves a file, starts over, and reopens it', async ({ editor, page }, testI
   // A literal rather than the imported constant: the point is that a bump is
   // noticed and made deliberately, which comparing the code against itself
   // could never catch. 6 as of tilemaps.
-  expect(parsed.schemaVersion).toBe(6);
+  expect(parsed.schemaVersion).toBe(7);
   const names = parsed.scenes[0].children.map((node: { name: string }) => node.name);
   expect(names).toContain('Marker');
 
