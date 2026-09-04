@@ -8,6 +8,7 @@ import {
   useSelectionNodes,
 } from '../core/store';
 import {
+  EMPTY_TILE,
   containsInstance,
   containsNode,
   findAsset,
@@ -16,9 +17,11 @@ import {
   frameGridOf,
   guidesOf,
   siblingsOf,
+  tileMapOf,
   type GameObjectNode,
 } from '../core/schema';
 import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
+import { TilePalette } from './TilePalette';
 import { AnimationEditor } from './AnimationEditor';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
 
@@ -616,6 +619,7 @@ const SECTION_TITLE: Record<GameObjectNode['type'], string> = {
   sprite: 'Image',
   container: 'Group',
   instance: 'Prefab',
+  tilemap: 'Tiles',
 };
 
 /** The value the parent picker uses for "not in a group at all". */
@@ -767,6 +771,101 @@ function FrameField({ node }: { node: Extract<GameObjectNode, { type: 'sprite' }
         onChange={(frame) => updateProps(node.id, { frame })}
       />
     </div>
+  );
+}
+
+/**
+ * The tilemap panel: the tileset, the grid, the brush, and the way into paint
+ * mode.
+ *
+ * The tileset controls are the image picker and the sheet slicer used verbatim,
+ * because a tileset *is* a sliced image — the same panel that gives a sprite its
+ * frames gives a map its tiles, and a second slicer here would be the same four
+ * numbers in a second place.
+ */
+function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilemap' }> }) {
+  const updateProps = useEditorStore((s) => s.updateProps);
+  const resizeTilemap = useEditorStore((s) => s.resizeTilemap);
+  const fillTiles = useEditorStore((s) => s.fillTiles);
+  const setPainting = useEditorStore((s) => s.setPainting);
+  const paintingId = useEditorStore((s) => s.paintingId);
+  const brushTile = useEditorStore((s) => s.brushTile);
+  const erasing = useEditorStore((s) => s.erasing);
+  // Derived outside the selector, not inside one: `tileMapOf` builds a fresh
+  // object every call and zustand compares snapshots by identity, so selecting
+  // it would re-render on every store read for ever. The same reason
+  // `useSelectionNodes` reaches for `useShallow`.
+  const project = useEditorStore((s) => s.project);
+  const map = tileMapOf(project, node.props);
+
+  const painting = paintingId === node.id;
+
+  return (
+    <>
+      <AssetSummary assetId={node.props.assetId} kind="tileset" />
+      <AssetPicker
+        selectedAssetId={node.props.assetId}
+        onPick={(assetId) => updateProps(node.id, { assetId })}
+      />
+
+      {node.props.assetId && (
+        <>
+          <div className="panel__section">Tileset</div>
+          <SheetSection assetId={node.props.assetId} />
+        </>
+      )}
+
+      <div className="panel__section">Grid</div>
+      <div className="field-row">
+        <NumberField
+          label="Columns"
+          value={node.props.columns}
+          min={1}
+          onChange={(columns) => resizeTilemap(node.id, columns, node.props.rows)}
+        />
+        <NumberField
+          label="Rows"
+          value={node.props.rows}
+          min={1}
+          onChange={(rows) => resizeTilemap(node.id, node.props.columns, rows)}
+        />
+      </div>
+      <p className="hint">
+        {map.columns}×{map.rows} tiles of {map.tileWidth}×{map.tileHeight}px —{' '}
+        {map.columns * map.tileWidth}×{map.rows * map.tileHeight} before scaling. The tile
+        size is the tileset's frame size.
+      </p>
+
+      <div className="panel__section">Brush</div>
+      <TilePalette assetId={node.props.assetId} />
+
+      {/* Toggling rather than only entering: the bar over the canvas has the ✓
+          that leaves, but on a desktop the button that turned the mode on is
+          where a user looks to turn it off again. */}
+      <button
+        className={`btn btn--block ${painting ? 'is-active' : ''}`}
+        onClick={() => setPainting(painting ? null : node.id)}
+        aria-pressed={painting}
+      >
+        {painting ? 'Done painting' : 'Edit tiles'}
+      </button>
+      <button
+        className="btn btn--block"
+        onClick={() => fillTiles(node.id, erasing ? EMPTY_TILE : brushTile)}
+      >
+        {erasing ? 'Clear every tile' : 'Fill with this tile'}
+      </button>
+
+      <div className="panel__section">Appearance</div>
+      <NumberField
+        label="Alpha"
+        value={node.props.alpha}
+        step={0.05}
+        min={0}
+        max={1}
+        onChange={(alpha) => updateProps(node.id, { alpha })}
+      />
+    </>
   );
 }
 
@@ -963,6 +1062,8 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
       )}
 
       {node.type === 'instance' && <InstanceSection node={node} />}
+
+      {node.type === 'tilemap' && <TilemapSection node={node} />}
 
       {node.type === 'text' && (
         <>

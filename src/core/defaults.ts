@@ -1,4 +1,5 @@
 import {
+  EMPTY_TILE,
   SCHEMA_VERSION,
   TARGET_PHASER_VERSION,
   newId,
@@ -99,6 +100,24 @@ export function createNode(
         // than nothing, which is the same answer a sprite with no image gives.
         props: { prefabId: null, alpha: 1 },
       };
+    case 'tilemap':
+      return {
+        ...base,
+        type: 'tilemap',
+        name: name ?? 'Tilemap',
+        // No tileset, like a sprite has no image: adding an object should never
+        // open a file dialog. 20x12 at the 32px fallback is 640x384, which sits
+        // inside the default 960x540 scene with room to see its edges — a map
+        // that filled the scene would have nothing around it to say it is an
+        // object at all.
+        props: {
+          assetId: null,
+          columns: 20,
+          rows: 12,
+          data: Array.from({ length: 20 * 12 }, () => EMPTY_TILE),
+          alpha: 1,
+        },
+      };
     case 'text':
       return {
         ...base,
@@ -146,7 +165,11 @@ export function cloneWithNewIds(node: GameObjectNode): GameObjectNode {
     ...node,
     id: newId(),
     transform: { ...node.transform },
-    props: { ...node.props },
+    // The spread is shallow, and a tilemap's `data` is the first prop that is
+    // an array — two copies sharing one would be a latent aliasing bug the
+    // moment anything here stopped being written immutably. Every path that
+    // copies a node runs through this one function, so it is copied here once.
+    props: node.type === 'tilemap' ? { ...node.props, data: [...node.props.data] } : { ...node.props },
     children: node.children.map(cloneWithNewIds),
   } as GameObjectNode;
 }

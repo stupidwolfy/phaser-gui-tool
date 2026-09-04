@@ -56,6 +56,11 @@ on a desktop.
   prefab from it. Deleting a prefab detaches its instances rather than deleting the
   objects, and exported code gets one factory function per prefab, called once per
   placement
+- Paint a level out of **tiles**: `+ Tiles` adds a map, an imported image sliced into
+  frames is its tileset, and **Edit tiles** turns the canvas into a paint surface — tap or
+  drag to lay the tile you picked, ⌫ to rub tiles out, ✓ when you are done. Set the map's
+  size in columns and rows, fill the whole thing with one tile, and export it as a real
+  `make.tilemap` / `addTilesetImage` / `createLayer`, tile data and all
 - Build a game out of several **scenes**: `+ Scene` in the scene panel adds one, the
   chips beside it switch between them, and the inspector duplicates or deletes the one
   you are in. Images, animations and prefabs are shared by all of them; the project
@@ -116,6 +121,10 @@ serve real image files in your own project instead, replace each value in it wit
 
 An image sliced into frames is loaded with `this.load.spritesheet(...)` and the same four
 numbers you set in the editor, so the frames your game cuts are the frames you drew with.
+
+A tileset is just such an image: the frames you slice it into are the tiles you paint with,
+and a tilemap's tile size is its frame size — so one image can be a sprite sheet and a
+tileset at once, and there is nothing extra to set up.
 
 ### Saving
 

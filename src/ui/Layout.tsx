@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from 'react';
+import { useEditorStore } from '../core/store';
 import { MoveBar } from './MoveBar';
+import { TileBar } from './TileBar';
 import { Sheet } from './Sheet';
 
 export type MobileTab = 'scene' | 'inspect' | 'file' | null;
@@ -51,6 +53,7 @@ export function Layout({
   fileMenu: ReactNode;
 }) {
   const [tab, setTab] = useState<MobileTab>(null);
+  const painting = useEditorStore((s) => s.paintingId !== null);
 
   if (!isMobile) {
     return (
@@ -61,6 +64,10 @@ export function Layout({
           <main className="app__center">{viewport}</main>
           <aside className="app__side app__side--right">{inspector}</aside>
         </div>
+        {/* On the desktop too, unlike the move bar: paint mode takes the canvas
+            over, and the way out of a mode belongs on the surface the mode has
+            taken — not in a panel the user may have scrolled away from. */}
+        <TileBar />
       </div>
     );
   }
@@ -83,9 +90,12 @@ export function Layout({
         {fileMenu}
       </Sheet>
 
-      {/* Hidden while a sheet is open: the sheet already occupies that space,
-          and the object being moved is up in the canvas band anyway. */}
-      {tab === null && <MoveBar />}
+      {/* Both hidden while a sheet is open: the sheet already occupies that
+          space, and the object being edited is up in the canvas band anyway.
+          Never both at once either — a tilemap being painted is not a tilemap
+          being moved, and two stacked bars is most of a 390px screen. */}
+      {tab === null && <TileBar />}
+      {tab === null && !painting && <MoveBar />}
 
       <nav className="tabbar">
         <TabButton label="Scene" icon="☰" active={tab === 'scene'} onClick={() => toggle('scene')} />

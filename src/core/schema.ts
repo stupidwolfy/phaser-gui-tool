@@ -50,8 +50,17 @@
  * without it; and an `instance` node is a type a v4 build has no
  * `createDisplayObject` case for, so it leaves the object undefined and
  * crashes, exactly as `container` did to v2. Either alone would bump this.
+ *
+ * v6 — tilemaps — bumps on that same crash half, and only on it. A `tilemap` is
+ * a node type a v5 build has no `createDisplayObject` case for, so it leaves the
+ * object undefined and its renderer crashes. Nothing else about the feature
+ * needs it: a tileset is an ordinary sliced image, which v4 already reads, and
+ * the node's own props ride in on `scenes`, the one part of a file
+ * `parseProject` passes through verbatim — so there is no field an older build
+ * would silently drop and re-save without. The crash alone is enough, and it is
+ * not a judgement call.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -63,7 +72,8 @@ export type NodeType =
   | 'text'
   | 'sprite'
   | 'container'
-  | 'instance';
+  | 'instance'
+  | 'tilemap';
 
 /**
  * An imported image, held in the document as a data URL.
@@ -288,6 +298,40 @@ export interface InstanceProps {
   alpha: number;
 }
 
+/**
+ * A grid of tiles cut from one sliced image.
+ *
+ * There is no tileset type here and there is deliberately not going to be one: a
+ * tileset *is* an `ImageAsset` with a `sheet`, and a tile index *is* a frame
+ * index. `FrameGrid` already holds exactly the four numbers Phaser's
+ * `addTilesetImage` takes, under the same names, for the same reason
+ * `load.spritesheet` is handed them near-verbatim — so the slicer, the texture
+ * key, the re-cut diff and the preload line are all the ones sprite sheets
+ * already brought, and two tilemaps drawing one image cannot disagree about how
+ * big a tile is.
+ *
+ * Which is also why there is no tile size stored here. It is the asset's frame
+ * size, read back through `tileMapOf`, exactly as a sprite has no width or
+ * height of its own. A copy of it on the node would be a second field over one
+ * number, which is how the two come to disagree.
+ */
+export interface TilemapProps {
+  /** The sliced image the tiles come from. Null draws the placeholder grid. */
+  assetId: string | null;
+  columns: number;
+  rows: number;
+  /**
+   * The tiles, row-major, `columns * rows` of them. `-1` is an empty cell,
+   * which is Phaser's own value for one rather than a convention of ours.
+   *
+   * Flat rather than nested: it is a third of the JSON of an array of arrays,
+   * and one array is one thing for `cloneWithNewIds` to copy rather than one
+   * per row.
+   */
+  data: number[];
+  alpha: number;
+}
+
 export interface NodePropsByType {
   rectangle: RectangleProps;
   ellipse: EllipseProps;
@@ -295,6 +339,7 @@ export interface NodePropsByType {
   sprite: SpriteProps;
   container: ContainerProps;
   instance: InstanceProps;
+  tilemap: TilemapProps;
 }
 
 /**
@@ -536,6 +581,102 @@ function withoutInstances(nodes: GameObjectNode[]): GameObjectNode[] {
   return nodes
     .filter((node) => node.type !== 'instance')
     .map((node) => ({ ...node, children: withoutInstances(node.children) }));
+}
+
+/** An empty cell, which is Phaser's own value for one. */
+export const EMPTY_TILE = -1;
+
+/**
+ * The most tiles a map may be across or down.
+ *
+ * A bound rather than a preference: history is whole-project snapshots, the
+ * document is a file the user carries around, and 256x256 is 65,536 numbers per
+ * map already. Phaser's own GPU layer stops at 4096, which is four hundred times
+ * the JSON this editor should ever be asked to hold in a browser tab.
+ */
+export const MAX_TILEMAP_SIDE = 256;
+
+/** The tile size a map is drawn at while it has no usable tileset. */
+export const FALLBACK_TILE = 32;
+
+/** One cell of a tilemap, in tile coordinates rather than pixels. */
+export interface TileCell {
+  column: number;
+  row: number;
+}
+
+/** A tilemap as it can actually be drawn, however the document says it. */
+export interface TileMap {
+  /** The tileset image, or undefined when there is none to draw. */
+  asset: ImageAsset | undefined;
+  tileWidth: number;
+  tileHeight: number;
+  columns: number;
+  rows: number;
+  /** Exactly `columns * rows` entries, each `-1` or a frame the tileset has. */
+  data: number[];
+  /** How many distinct tiles the tileset offers; never zero. */
+  tileCount: number;
+}
+
+/**
+ * A tilemap node's props, resolved against the project and made usable.
+ *
+ * The only reader of `TilemapProps`, in the family `frameGridOf`, `guidesOf` and
+ * `prefabChildrenOf` belong to, and for the sharpest version of their reason:
+ * every consumer here would otherwise have to ask four separate questions — is
+ * there a tileset, how big is a tile, is `data` the length the grid says, and is
+ * every entry a frame that exists — and any one of them forgotten is a Phaser
+ * warning and a missing-texture cell. Answering all four in one call means the
+ * renderer, the exporter, the palette and the paint gesture cannot disagree.
+ *
+ * The padding and truncation are the hand-edited-file backstop, not the resize
+ * path: `resizeTilemap` re-shapes the array row by row, because reinterpreting a
+ * flat array under a new column count shifts every row after the first. What
+ * arrives here has already been re-shaped, or was never written by this editor.
+ *
+ * A tile the tileset does not have reads as *empty*, not as the nearest one it
+ * does. That is the opposite of `clampFrame`, deliberately: a sprite has no way
+ * to show "no frame", so clamping is the only answer there, while `-1` is a
+ * first-class value here and Phaser's own. It is also what lets a re-cut leave
+ * the document alone — the map goes blank while the sheet is mid-edit and comes
+ * back whole the moment the numbers are right again, where rewriting the stored
+ * indices would have thrown the level away over a mistyped margin.
+ *
+ * `data` keeps its identity when the document's array is already well formed, so
+ * a sync that changes nothing allocates nothing.
+ */
+export function tileMapOf(project: Project, props: TilemapProps): TileMap {
+  const asset = findAsset(project, props.assetId);
+  const grid = frameGridOf(asset);
+  const tileCount = frameCountOf(asset);
+
+  const side = (value: number) =>
+    Number.isFinite(value) ? Math.min(Math.max(1, Math.floor(value)), MAX_TILEMAP_SIDE) : 1;
+  const columns = side(props.columns);
+  const rows = side(props.rows);
+
+  const size = columns * rows;
+  const source = Array.isArray(props.data) ? props.data : [];
+  const clamp = (value: number) => {
+    const tile = Math.floor(value);
+    return Number.isFinite(tile) && tile >= 0 && tile < tileCount ? tile : EMPTY_TILE;
+  };
+
+  let data = source;
+  if (source.length !== size || source.some((tile) => clamp(tile) !== tile)) {
+    data = Array.from({ length: size }, (_, index) => clamp(source[index]));
+  }
+
+  return {
+    asset,
+    tileWidth: grid ? grid.frameWidth : FALLBACK_TILE,
+    tileHeight: grid ? grid.frameHeight : FALLBACK_TILE,
+    columns,
+    rows,
+    data,
+    tileCount,
+  };
 }
 
 /** The clips that read a given sheet, which is what a sprite may choose from. */

@@ -151,7 +151,11 @@ test('a prefab exports as one factory function, called once per instance', async
 
   const exported = await editor.exportCode('ts');
 
-  const declarations = exported.contents.match(/^function create\w*\(/gm) ?? [];
+  // The tilemap helper is a module-level `function create…` too, and is not
+  // what this test is about — the fixture's map is what puts it in the file.
+  const declarations = (exported.contents.match(/^function create\w*\(/gm) ?? []).filter(
+    (declaration) => !declaration.includes('createTilemapLayer'),
+  );
   expect(declarations).toHaveLength(1);
   const fn = (declarations[0] ?? '').slice('function '.length, -1);
   // Two placements, one definition: the whole reason a factory is emitted at
@@ -173,6 +177,40 @@ test('a prefab exports as one factory function, called once per instance', async
   // A dangling instance is called out rather than silently dropped, the same
   // way a sprite with no image is.
   expect(exported.contents).toContain('the prefab it placed is no longer in the project');
+});
+
+test('a tilemap exports as one helper, a data table and one call per map', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+
+  // One helper for the whole file, however many maps it holds — the property
+  // that makes it a helper rather than three statements inlined per map.
+  expect(exported.contents.match(/^function createTilemapLayer\(/gm) ?? []).toHaveLength(1);
+  // Annotated, because the exported .ts is compiled under --strict; the
+  // toolchain spec is what proves it, this says why the annotations exist.
+  expect(exported.contents).toContain('scene: Phaser.Scene');
+  expect(exported.contents).toContain('data: number[][]');
+
+  // A named table rather than the rows inlined into the call, and row by row
+  // rather than one flat run of numbers.
+  expect(exported.contents).toContain('const TILEMAPS = {');
+  expect(exported.contents).toContain('[0, -1, 2],');
+  expect(exported.contents).toContain('[3, 0, -1],');
+
+  // One call: the fixture holds two maps and only one of them has a tileset.
+  expect(exported.contents.split('createTilemapLayer(this, ')).toHaveLength(2);
+  // And the other is called out rather than silently dropped, the way a sprite
+  // with no image and a dangling instance already are.
+  expect(exported.contents).toContain('no tileset chosen in the editor');
+
+  // The tileset is a texture the scene actually preloads. Without that the
+  // helper throws on a tileset that was never loaded, and the page never draws.
+  expect(exported.contents).toContain('this.load.spritesheet(');
 });
 
 test('two scenes named the same thing export as two classes with two keys', async ({

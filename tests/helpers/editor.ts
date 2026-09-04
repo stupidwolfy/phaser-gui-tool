@@ -173,7 +173,9 @@ export class EditorPage {
     return this.panel('scene').locator('.tree__item');
   }
 
-  async addObject(label: 'Rectangle' | 'Ellipse' | 'Text' | 'Image' | 'Group'): Promise<void> {
+  async addObject(
+    label: 'Rectangle' | 'Ellipse' | 'Text' | 'Image' | 'Group' | 'Tiles',
+  ): Promise<void> {
     await this.openPanel('scene');
     await this.panel('scene').getByRole('button', { name: `+ ${label}` }).click();
     await this.settle();
@@ -279,6 +281,79 @@ export class EditorPage {
     await this.settle();
   }
 
+  // -- tilemaps --------------------------------------------------------------
+
+  // Cutting a tileset is `sliceSheet`: a tileset *is* a sliced image, so the
+  // slicer is the same panel and the helper is the same one.
+
+  /** Picks the brush from the inspector's palette. */
+  async pickTile(index: number): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect')
+      .getByRole('button', { name: `Tile ${index}`, exact: true })
+      .click();
+    await this.settle();
+  }
+
+  /** Picks the eraser, from the same palette and the same field. */
+  async pickEraser(): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect')
+      .getByRole('button', { name: 'Erase tiles', exact: true })
+      .first()
+      .click();
+    await this.settle();
+  }
+
+  /**
+   * Enters or leaves paint mode from the inspector's button.
+   *
+   * The bar over the canvas has a ✓ that does the same thing, and the mobile
+   * tests reach it through here anyway: the button is a toggle, so one helper
+   * covers both directions and neither test has to know which control it is
+   * looking at.
+   */
+  async setPainting(on: boolean): Promise<void> {
+    await this.openPanel('inspect');
+    const button = this.panel('inspect').getByRole('button', {
+      name: on ? 'Edit tiles' : 'Done painting',
+      exact: true,
+    });
+    if ((await button.count()) > 0) await button.click();
+    await this.settle();
+  }
+
+  /** Fills every cell of the selected map with the current brush. */
+  async fillTiles(): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect')
+      .getByRole('button', { name: /^(Fill with this tile|Clear every tile)$/ })
+      .click();
+    await this.settle();
+  }
+
+  /**
+   * A press on the canvas that lays one tile, aimed in *scene* coordinates.
+   *
+   * `tap` and not `drag`: a stroke is a press plus its moves, and the shortest
+   * one is a press on its own. On touch this is deliberately *not* the two-step
+   * gesture `drag` sends — paint mode has taken the press, so the tap that
+   * would have selected paints instead, and a priming tap would lay a tile
+   * nobody asked for.
+   *
+   * Scene coordinates rather than page ones, and that is the whole reason this
+   * takes them: entering paint mode opens the inspector, on mobile a sheet that
+   * shortens the canvas and re-fits the camera — so a page coordinate worked
+   * out before the sheet closed points somewhere else entirely by the time the
+   * tap lands. Converting on this side of `closePanels` makes that impossible
+   * to get wrong.
+   */
+  async paintCell(scenePoint: Point): Promise<void> {
+    await this.closePanels();
+    await this.tap(await this.sceneToScreen(scenePoint));
+    await this.settle();
+  }
+
   /**
    * The toolbar's snap toggle. In the toolbar rather than a panel because it
    * has to be reachable while the canvas is visible, which on mobile a sheet
@@ -368,6 +443,21 @@ export class EditorPage {
     if (!(await box.isChecked())) await box.click();
     await this.setField('Frame W', frameSize);
     await this.setField('Frame H', frameSize);
+    await this.settle();
+  }
+
+  /**
+   * Removes the frame grid from the selected object's image, so the image is
+   * one whole picture again.
+   *
+   * The checkbox rather than a zero in the size fields: a frame of zero is an
+   * unusable grid, which is a different state — the editor keeps the numbers
+   * and says to fix them — and the fields refuse it anyway.
+   */
+  async unsliceSheet(): Promise<void> {
+    await this.openPanel('inspect');
+    const box = this.checkbox('Sliced into frames');
+    if (await box.isChecked()) await box.click();
     await this.settle();
   }
 

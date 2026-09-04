@@ -6,12 +6,14 @@ import {
   findAsset,
   findPrefab,
   frameGridOf,
+  tileMapOf,
   type AnimationClip,
   type GameObjectNode,
   type ImageAsset,
   type Prefab,
   type Project,
   type SceneDoc,
+  type TileMap,
 } from '../core/schema';
 
 /**
@@ -254,8 +256,17 @@ function collectAssets(
 
   const walk = (nodes: GameObjectNode[]) => {
     for (const node of nodes) {
-      if (node.type === 'sprite' && node.props.assetId && !used.has(node.props.assetId)) {
-        const asset = findAsset(project, node.props.assetId);
+      // A tilemap's tileset is an image the file has to load exactly as a
+      // sprite's is — and only a *sliced* one, because an unsliced image is not
+      // a tileset and its map emits a comment rather than a layer. Loading it
+      // anyway would ship bytes for a texture nothing then draws.
+      const assetId =
+        node.type === 'sprite' ||
+        (node.type === 'tilemap' && frameGridOf(findAsset(project, node.props.assetId)))
+          ? node.props.assetId
+          : null;
+      if (assetId && !used.has(assetId)) {
+        const asset = findAsset(project, assetId);
         // A sprite can point at an image that is no longer in the table only in
         // a hand-edited file; the editor clears those references itself.
         if (asset) {
@@ -408,6 +419,11 @@ function usedIn(
         if (node.props.assetId) assets.add(node.props.assetId);
         if (node.props.animationId) animations.add(node.props.animationId);
       }
+      // The other half of the pair: `collectAssets` decides what the texture is
+      // called across the file, this decides what *this* scene preloads. A
+      // tilemap missing from either exports a layer built on a texture the
+      // scene never loaded, which throws before anything is drawn.
+      if (node.type === 'tilemap' && node.props.assetId) assets.add(node.props.assetId);
       walk(node.children);
     }
   };
@@ -478,10 +494,152 @@ function buildAnimationLines(
  * factory case is exactly the drift that having `buildCreateBody` shared
  * between the module and the runnable page exists to prevent.
  */
+/**
+ * The tilemaps the export will actually build, keyed by node id.
+ *
+ * A tilemap is emitted only when its tileset is an image the file is already
+ * loading *and* that image has been sliced, which is the same pair of
+ * conditions the canvas draws one under. An unsliced image is not a tileset:
+ * its one "frame" is the whole picture, and cutting that into tile-sized pieces
+ * nobody chose would export a map made of quarters of a sprite. Both misses
+ * come out as a comment through `missingReason` rather than as a broken call.
+ *
+ * File-wide like the asset table, and for the same reason: the data goes into
+ * one module-level object, so two scenes' maps sit side by side in it rather
+ * than each scene carrying a copy of the table's shape.
+ */
+interface UsedTilemap {
+  map: TileMap;
+  /** Its row in the `TILEMAPS` table, and the asset key it draws from. */
+  key: string;
+  assetKey: string;
+}
+
+function collectTilemaps(
+  project: Project,
+  scenes: SceneDoc[],
+  prefabs: Map<string, UsedPrefab>,
+  assets: Map<string, UsedAsset>,
+): Map<string, UsedTilemap> {
+  const used = new Map<string, UsedTilemap>();
+  const keys = new Set<string>();
+
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'tilemap' && node.props.assetId) {
+        const asset = assets.get(node.props.assetId);
+        if (asset && frameGridOf(asset.asset)) {
+          used.set(node.id, {
+            map: tileMapOf(project, node.props),
+            key: toIdentifier(node.name, keys),
+            assetKey: asset.key,
+          });
+        }
+      }
+      walk(node.children);
+    }
+  };
+  for (const scene of scenes) {
+    for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+  }
+  return used;
+}
+
+/**
+ * The tile data, as an object literal keyed like the image table.
+ *
+ * A named const for `ASSETS`' reason twice over: `create()` stays a list of
+ * objects rather than a wall of numbers, and the one thing a reader is likely
+ * to want to change — moving a level out into a JSON file of its own — is one
+ * object at the top of the module. One line per row, because a row of a map is
+ * the unit a person reads it in.
+ */
+function buildTilemapTable(used: Map<string, UsedTilemap>, indent: string): string {
+  const lines = [
+    '/**',
+    ' * Tile data from the editor, row by row. -1 is an empty cell.',
+    ' */',
+    'const TILEMAPS = {',
+    ...[...used.values()].flatMap(({ map, key }) => [
+      `  ${str(key)}: [`,
+      ...Array.from(
+        { length: map.rows },
+        (_, row) =>
+          `    [${map.data.slice(row * map.columns, (row + 1) * map.columns).join(', ')}],`,
+      ),
+      '  ],',
+    ]),
+    '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * The one function every tilemap in the file is built by.
+ *
+ * A tilemap is three statements — parse the data, link the tileset, create the
+ * layer — and `constructorFor` may only answer with one expression. The
+ * `instance` case settled that shape already: emit a module-level function and
+ * return a call to it. The alternative was to let a node contribute statements
+ * of its own before its `const`, which is a second emit shape for one node type
+ * to use.
+ *
+ * It also happens to be what a reader wants: twenty maps is twenty calls rather
+ * than sixty statements, and swapping the whole file to Tiled JSON later is one
+ * function body to rewrite.
+ */
+function buildTilemapHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const params = typed
+    ? [
+        'scene: Phaser.Scene',
+        'x: number',
+        'y: number',
+        'tilesetKey: string',
+        'data: number[][]',
+        'tileWidth: number',
+        'tileHeight: number',
+        'margin: number',
+        'spacing: number',
+      ].join(',\n  ')
+    : 'scene, x, y, tilesetKey, data, tileWidth, tileHeight, margin, spacing';
+  const signature = typed
+    ? `function ${fn}(\n  ${params},\n): Phaser.Tilemaps.TilemapLayer {`
+    : `function ${fn}(${params}) {`;
+
+  // The two guards are not defensive padding: `addTilesetImage` answers null for
+  // a texture that is not loaded and `createLayer` for a layer id that is
+  // already built, and under the `--strict` this file is compiled with, both
+  // have to be narrowed before they can be used. Saying which one failed beats
+  // a null dereference three frames later.
+  const lines = [
+    signature,
+    '  const map = scene.make.tilemap({ data, tileWidth, tileHeight });',
+    "  const tileset = map.addTilesetImage('tiles', tilesetKey, tileWidth, tileHeight, margin, spacing);",
+    "  if (!tileset) throw new Error('Tileset texture not loaded: ' + tilesetKey);",
+    '  const layer = map.createLayer(0, tileset, x, y);',
+    "  if (!layer) throw new Error('Could not create a tilemap layer for: ' + tilesetKey);",
+    typed ? '  return layer as Phaser.Tilemaps.TilemapLayer;' : '  return layer;',
+    '}',
+  ];
+  // Shifted per physical line rather than per entry: the typed signature is
+  // several lines in one entry, and only its first would otherwise move.
+  // `buildFactories` indents the same way for the same reason.
+  return lines.join('\n').replace(/^(?!$)/gm, indent);
+}
+
 interface EmitContext {
   assets: Map<string, UsedAsset>;
   animations: Map<string, UsedAnimation>;
   prefabs: Map<string, UsedPrefab>;
+  tilemaps: Map<string, UsedTilemap>;
+  /**
+   * What the tilemap helper is called in this module. A field rather than a
+   * constant because it is allocated from the module's identifier set like the
+   * prefab factories, so an object named "create tilemap layer" cannot take it
+   * out from under the calls.
+   */
+  tilemapFn: string;
   /** `'this'` inside a Scene method, `'scene'` inside a factory function. */
   receiver: string;
 }
@@ -518,6 +676,19 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
       return frame === 0
         ? `${receiver}.add.image(${num(x)}, ${num(y)}, ${str(entry.key)})`
         : `${receiver}.add.image(${num(x)}, ${num(y)}, ${str(entry.key)}, ${num(frame)})`;
+    }
+    case 'tilemap': {
+      const entry = ctx.tilemaps.get(node.id);
+      if (!entry) return null;
+      const grid = frameGridOf(entry.map.asset);
+      // A call rather than an `add.*`, exactly as an instance is: the helper
+      // does the adding, and because it returns the layer every modifier below
+      // — and the `setName` after them — chains onto it unchanged.
+      return (
+        `${ctx.tilemapFn}(${receiver}, ${num(x)}, ${num(y)}, ${str(entry.assetKey)}, ` +
+        `TILEMAPS[${str(entry.key)}], ${num(entry.map.tileWidth)}, ${num(entry.map.tileHeight)}, ` +
+        `${num(grid ? grid.margin : 0)}, ${num(grid ? grid.spacing : 0)})`
+      );
     }
     case 'container':
       return `${receiver}.add.container(${num(x)}, ${num(y)})`;
@@ -625,9 +796,18 @@ function emitNode(
 
 /** Why a node emitted nothing, for the comment that stands in its place. */
 function missingReason(node: GameObjectNode): string {
-  return node.type === 'instance'
-    ? 'the prefab it placed is no longer in the project, so nothing to add.'
-    : 'no image chosen in the editor, so nothing to add.';
+  if (node.type === 'instance') {
+    return 'the prefab it placed is no longer in the project, so nothing to add.';
+  }
+  // Two ways for a tilemap to have no tileset, and they need different fixes:
+  // one is answered in the asset picker and the other in the slicer, so the
+  // comment says which.
+  if (node.type === 'tilemap') {
+    return node.props.assetId
+      ? 'its image is not sliced into tiles, so there is no tileset to build.'
+      : 'no tileset chosen in the editor, so nothing to add.';
+  }
+  return 'no image chosen in the editor, so nothing to add.';
 }
 
 /**
@@ -674,7 +854,14 @@ function buildFactories(
   const inner: EmitContext = { ...ctx, receiver: 'scene' };
 
   const blocks = [...ctx.prefabs.values()].map((entry) => {
-    const used = new Set<string>(['scene', 'x', 'y', 'root', ...factoryNames]);
+    const used = new Set<string>([
+      'scene',
+      'x',
+      'y',
+      'root',
+      ctx.tilemapFn,
+      ...factoryNames,
+    ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
     const childIds = entry.prefab.children
       .map((child) => emitNode(child, inner, used, lines))
@@ -701,6 +888,7 @@ function buildCreateBody(
   // function the call beside it is trying to reach.
   const used = new Set<string>([
     'this',
+    ctx.tilemapFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
   const lines: string[] = [
@@ -757,12 +945,17 @@ function prepare(project: Project): Emission {
   const moduleNames = new Set<string>();
   const scenes = collectScenes(project, moduleNames);
   const prefabs = collectPrefabs(project, project.scenes, moduleNames);
+  // Out of the same set and immediately after the factories, by the rule they
+  // already follow: an object called "create tilemap layer" bound inside
+  // `create()` would otherwise shadow the function the call beside it needs.
+  const tilemapFn = toIdentifier('create tilemap layer', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   const animations = collectAnimations(project, project.scenes, assets, prefabs);
+  const tilemaps = collectTilemaps(project, project.scenes, prefabs, assets);
   const current = activeScene(project);
   return {
     scenes,
-    ctx: { assets, animations, prefabs, receiver: 'this' },
+    ctx: { assets, animations, prefabs, tilemaps, tilemapFn, receiver: 'this' },
     boot: scenes.find((entry) => entry.scene.id === current.id) ?? scenes[0],
   };
 }
@@ -829,6 +1022,13 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // A project with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
   const table = ctx.assets.size > 0 ? `\n${buildAssetTable(ctx.assets, '')}\n` : '';
+  // Same rule again: no tilemaps, no table and no helper, so every project that
+  // predates them exports byte for byte what it always did.
+  const tiles =
+    ctx.tilemaps.size > 0
+      ? `\n${buildTilemapTable(ctx.tilemaps, '')}\n` +
+        `\n${buildTilemapHelper(ctx.tilemapFn, language, '')}\n`
+      : '';
   // Likewise: a project that places no prefab emits no factories, so every
   // project that predates them exports byte for byte what it always did.
   const factories =
@@ -839,7 +1039,7 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
 
   return `${header(project)}
 import Phaser from 'phaser';
-${table}${factories}
+${table}${tiles}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -863,6 +1063,11 @@ export function generateRunnableHtml(project: Project): string {
 
   const table =
     ctx.assets.size > 0 ? `${buildAssetTable(ctx.assets, '      ')}\n\n` : '';
+  const tiles =
+    ctx.tilemaps.size > 0
+      ? `${buildTilemapTable(ctx.tilemaps, '      ')}\n\n` +
+        `${buildTilemapHelper(ctx.tilemapFn, 'js', '      ')}\n\n`
+      : '';
   // The JavaScript flavour of the factories: this page has no type annotations
   // anywhere, and Phaser is a global here rather than an import.
   const factories =
@@ -898,7 +1103,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${factories}      ${classes}
+${table}${tiles}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

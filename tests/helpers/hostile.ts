@@ -254,6 +254,40 @@ export function hostileProject(): Project {
             children: [],
           },
           {
+            id: 'l',
+            // A tilemap drawing the same sheet as a tileset, with a hostile
+            // name that becomes both a variable binding and a *key in the
+            // TILEMAPS table* — a seventh path into the output, and the only
+            // one where user text becomes an object literal's property.
+            // Rotated and scaled so `modifiersFor` runs over a layer too, and
+            // holding an empty cell and a real tile so both halves of the data
+            // survive both toolchains.
+            name: `${breakout} ground`,
+            type: 'tilemap',
+            visible: true,
+            transform: { x: 60, y: 60, rotation: 8.25, scaleX: 1.5, scaleY: 1.5 },
+            props: {
+              assetId: 'sheet-1',
+              columns: 3,
+              rows: 2,
+              data: [0, -1, 2, 3, 0, -1],
+              alpha: 0.9,
+            },
+            children: [],
+          },
+          {
+            id: 'm',
+            // No tileset at all, which is the tilemap half of `missingReason`:
+            // an export that silently omitted this object would read as an
+            // exporter bug rather than as a map nobody finished.
+            name: 'unfinished map',
+            type: 'tilemap',
+            visible: true,
+            transform: { x: 800, y: 60, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { assetId: null, columns: 2, rows: 2, data: [-1, -1, -1, -1], alpha: 1 },
+            children: [],
+          },
+          {
             id: 'd',
             name: 'name123',
             type: 'text',

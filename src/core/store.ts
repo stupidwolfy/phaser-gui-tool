@@ -37,11 +37,17 @@ import {
   type FrameGrid,
   type GameObjectNode,
   type ImageAsset,
+  EMPTY_TILE,
+  MAX_TILEMAP_SIDE,
+  tileMapOf,
   type NodeType,
   type Prefab,
   type Project,
   type SceneDoc,
   type SpriteProps,
+  type TileCell,
+  type TileMap,
+  type TilemapProps,
   type Transform,
 } from './schema';
 
@@ -197,6 +203,30 @@ export interface EditorState {
    */
   previewAnimations: boolean;
   setPreviewAnimations: (previewAnimations: boolean) => void;
+  /**
+   * The tilemap the canvas is currently painting, or null.
+   *
+   * Editor state, in the `lockAspect` / `snapEnabled` family: it changes what a
+   * press on the canvas does and never what the document says, so it is neither
+   * saved nor undoable. It is a mode, and it says so — while it is set, a press
+   * lays a tile instead of selecting, panning or dragging, and the two handles
+   * are hidden. That is the whole reason it exists rather than painting
+   * whenever a tilemap happens to be selected: without a mode, a selected
+   * tilemap could never be moved or resized on the canvas again, and on touch
+   * the tap meant to pick some other object would lay a tile instead.
+   *
+   * It is pruned wherever the selection is, so "you can only paint a tilemap
+   * that exists and is on screen" is an invariant rather than something delete,
+   * undo and the scene switcher each have to remember.
+   */
+  paintingId: string | null;
+  /** The tile the brush lays. An index into the tileset, like a sprite frame. */
+  brushTile: number;
+  /** Whether the brush clears instead, which is laying `EMPTY_TILE`. */
+  erasing: boolean;
+  setPainting: (nodeId: string | null) => void;
+  setBrushTile: (brushTile: number) => void;
+  setErasing: (erasing: boolean) => void;
   /**
    * Scales a node, honouring `lockAspect`. Both the inspector's Scale fields
    * and the canvas corner handle go through here so the lock cannot mean one
@@ -405,6 +435,31 @@ export interface EditorState {
    */
   updateScene: (patch: Partial<Omit<SceneDoc, 'children' | 'id' | 'guides'>>) => void;
 
+  // -- tilemaps --------------------------------------------------------------
+  /**
+   * Lays `tile` in each of the given cells, or clears them when it is
+   * `EMPTY_TILE`. Cells outside the grid are ignored rather than refused: a
+   * stroke that runs off the edge of the map is a normal gesture, not an error.
+   *
+   * One call is one edit, and the array is rewritten once for however many
+   * cells it names — a stroke is a list of cells, not a call per cell. Nothing
+   * is written at all when every cell already holds that tile, so the identity
+   * `editProject` reads for "no undo step" survives a finger held still.
+   */
+  paintTiles: (nodeId: string, cells: TileCell[], tile: number) => void;
+  /** Every cell at once, in one step. */
+  fillTiles: (nodeId: string, tile: number) => void;
+  /**
+   * Re-shapes the grid, keeping the top-left anchored — a column added is a
+   * column of empties on the right.
+   *
+   * A dedicated action rather than two `updateProps` calls because the array is
+   * flat: reinterpreting it under a new column count shifts every row after the
+   * first, so the re-shape has to happen in the same step as the number that
+   * causes it.
+   */
+  resizeTilemap: (nodeId: string, columns: number, rows: number) => void;
+
   // -- guides ----------------------------------------------------------------
   /**
    * Places a guide, and moves, removes or clears them.
@@ -607,6 +662,52 @@ function mapProjectNodes(
   });
 
   return changed ? { ...project, scenes, prefabs } : project;
+}
+
+/**
+ * Rewrites one tilemap's props, with the node resolved through `tileMapOf`
+ * first so the patch sees a grid that is certainly the right shape.
+ *
+ * Every tilemap edit goes through here for the reason `worldMovePatch` exists:
+ * the arithmetic wants the *usable* map — the real tile size, the real column
+ * count, the data padded to match — and re-deriving that per action is three
+ * chances to derive it differently. Returning null leaves the project's
+ * identity alone, which is how `editProject` hears "no undo step" from a stroke
+ * that painted the tile that was already there.
+ */
+function editTilemapProps(
+  project: Project,
+  nodeId: string,
+  patch: (map: TileMap) => Partial<TilemapProps> | null,
+): Project {
+  return withActiveScene(project, (scene) => {
+    const node = findNode(scene.children, nodeId);
+    if (!node || node.type !== 'tilemap') return scene;
+    const props = patch(tileMapOf(project, node.props));
+    if (!props) return scene;
+    return {
+      ...scene,
+      children: mapNode(
+        scene.children,
+        nodeId,
+        (current) => ({ ...current, props: { ...current.props, ...props } }) as GameObjectNode,
+      ),
+    };
+  });
+}
+
+/**
+ * The painted tilemap, but only while it still names a live one.
+ *
+ * `pruneIds` for the paint mode: the node can be deleted, undone away or left
+ * behind by a scene switch, and every one of those has to end the mode. Doing
+ * it beside the selection means none of those actions has to know the mode
+ * exists.
+ */
+function prunePainting(children: GameObjectNode[], paintingId: string | null): string | null {
+  if (!paintingId) return null;
+  const node = findNode(children, paintingId);
+  return node && node.type === 'tilemap' ? paintingId : null;
 }
 
 /**
@@ -889,6 +990,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       dirty: true,
       selectedIds: pruneIds(children, state.selectedIds, (id) => id),
       moveOrigins: pruneIds(children, state.moveOrigins, (origin) => origin.id),
+      paintingId: prunePainting(children, state.paintingId),
       past: recordHistory
         ? [...state.past, state.project].slice(-HISTORY_LIMIT)
         : state.past,
@@ -956,6 +1058,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
     angleStep: DEFAULT_ANGLE_STEP,
     guidesVisible: true,
     previewAnimations: false,
+    paintingId: null,
+    brushTile: 0,
+    erasing: false,
 
     setLockAspect: (lockAspect) => set({ lockAspect }),
     setMultiSelect: (multiSelect) => set({ multiSelect }),
@@ -976,6 +1081,10 @@ export const useEditorStore = create<EditorState>((set, get) => {
       }),
     setGuidesVisible: (guidesVisible) => set({ guidesVisible }),
     setPreviewAnimations: (previewAnimations) => set({ previewAnimations }),
+
+    setPainting: (paintingId) => set({ paintingId }),
+    setBrushTile: (brushTile) => set({ brushTile: Math.max(0, Math.floor(brushTile)) }),
+    setErasing: (erasing) => set({ erasing }),
 
     scaleNode: (id, axis, value) => {
       const state = get();
@@ -1010,6 +1119,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         future: [],
         txDepth: 0,
         moveOrigins: [],
+        paintingId: null,
       }),
 
     resetProject: () =>
@@ -1022,6 +1132,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         future: [],
         txDepth: 0,
         moveOrigins: [],
+        paintingId: null,
       }),
 
     markSaved: (fileName) => set({ fileName, dirty: false }),
@@ -1137,7 +1248,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         const orphaned = new Set(
           project.animations.filter((clip) => clip.assetId === id).map((clip) => clip.id),
         );
-        return mapProjectSprites(
+        const withoutSprites = mapProjectSprites(
           {
             ...project,
             assets: project.assets.filter((asset) => asset.id !== id),
@@ -1149,6 +1260,20 @@ export const useEditorStore = create<EditorState>((set, get) => {
               : props.animationId && orphaned.has(props.animationId)
                 ? { animationId: null }
                 : null,
+        );
+
+        // The tilemaps drawing it lose their tileset in the same step, by the
+        // rule that the document may never hold a dangling reference after any
+        // action in the editor. Their tiles stay: unlike an image, where the
+        // bytes were the only copy, the indices still mean something the moment
+        // another tileset is picked — and `tileMapOf` draws them as empty until
+        // one is. `mapProjectNodes` rather than `mapProjectSprites` because a
+        // tilemap can sit inside a prefab definition, which that one does not
+        // walk.
+        return mapProjectNodes(withoutSprites, (node) =>
+          node.type === 'tilemap' && node.props.assetId === id
+            ? { ...node, props: { ...node.props, assetId: null } }
+            : null,
         );
       }),
 
@@ -1697,6 +1822,59 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     updateScene: (patch) => editScene((scene) => ({ ...scene, ...patch })),
 
+    paintTiles: (nodeId, cells, tile) =>
+      editProject((project) =>
+        editTilemapProps(project, nodeId, (map) => {
+          const value = tile < 0 || tile >= map.tileCount ? EMPTY_TILE : Math.floor(tile);
+          // Copied on the first cell that actually changes and not before, so a
+          // stroke that repaints what is already there allocates nothing and
+          // records no undo step.
+          let data: number[] | null = null;
+          for (const { column, row } of cells) {
+            if (column < 0 || row < 0 || column >= map.columns || row >= map.rows) continue;
+            const index = row * map.columns + column;
+            if ((data ?? map.data)[index] === value) continue;
+            data ??= [...map.data];
+            data[index] = value;
+          }
+          return data ? { data } : null;
+        }),
+      ),
+
+    fillTiles: (nodeId, tile) =>
+      editProject((project) =>
+        editTilemapProps(project, nodeId, (map) => {
+          const value = tile < 0 || tile >= map.tileCount ? EMPTY_TILE : Math.floor(tile);
+          if (map.data.every((current) => current === value)) return null;
+          return { data: map.data.map(() => value) };
+        }),
+      ),
+
+    resizeTilemap: (nodeId, columns, rows) =>
+      editProject((project) =>
+        editTilemapProps(project, nodeId, (map) => {
+          const side = (value: number) =>
+            Number.isFinite(value)
+              ? Math.min(Math.max(1, Math.floor(value)), MAX_TILEMAP_SIDE)
+              : 1;
+          const nextColumns = side(columns);
+          const nextRows = side(rows);
+          if (nextColumns === map.columns && nextRows === map.rows) return null;
+
+          // Row by row, not index by index: the array is flat, so a new column
+          // count re-reads every row after the first at the wrong offset. The
+          // top-left stays put, which is where the map's own origin is.
+          const data = Array.from({ length: nextColumns * nextRows }, (_, index) => {
+            const column = index % nextColumns;
+            const row = Math.floor(index / nextColumns);
+            return column < map.columns && row < map.rows
+              ? map.data[row * map.columns + column]
+              : EMPTY_TILE;
+          });
+          return { columns: nextColumns, rows: nextRows, data };
+        }),
+      ),
+
     addGuide: (axis, position) =>
       editScene((scene) => ({
         ...scene,
@@ -1749,6 +1927,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         future: [state.project, ...state.future].slice(0, HISTORY_LIMIT),
         dirty: true,
         selectedIds: pruneIds(activeScene(previous).children, state.selectedIds, (id) => id),
+        paintingId: prunePainting(activeScene(previous).children, state.paintingId),
       });
     },
 
@@ -1762,6 +1941,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         future: state.future.slice(1),
         dirty: true,
         selectedIds: pruneIds(activeScene(next).children, state.selectedIds, (id) => id),
+        paintingId: prunePainting(activeScene(next).children, state.paintingId),
       });
     },
   };
@@ -1779,7 +1959,15 @@ export function countAssetUses(project: Project, assetId: string): number {
   let count = 0;
   const walk = (nodes: GameObjectNode[]) => {
     for (const node of nodes) {
-      if (node.type === 'sprite' && node.props.assetId === assetId) count += 1;
+      // A tilemap uses its tileset exactly as a sprite uses its image, and the
+      // count is what the removal warning says out loud — so leaving them out
+      // would under-report by a whole level.
+      if (
+        (node.type === 'sprite' || node.type === 'tilemap') &&
+        node.props.assetId === assetId
+      ) {
+        count += 1;
+      }
       walk(node.children);
     }
   };

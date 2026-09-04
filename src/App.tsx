@@ -187,9 +187,20 @@ export default function App() {
 
       if (event.key === 'Escape') {
         event.preventDefault();
-        store.select(null);
+        // Paint mode first: Escape means "back out of what I am in", and the
+        // mode is the innermost thing to be in. Clearing the selection under it
+        // would leave the canvas painting a map the inspector no longer shows.
+        if (store.paintingId) store.setPainting(null);
+        else store.select(null);
         return;
       }
+
+      // Every shortcut below edits the *selection*, and while a map is being
+      // painted the press that would have chosen one lays a tile instead — so
+      // deleting, duplicating or nudging here would act on whatever was
+      // selected before the mode began, which is not what the user is looking
+      // at. The undo keys are deliberately above this line.
+      if (store.paintingId) return;
 
       if (
         (event.key === 'Delete' || event.key === 'Backspace') &&
