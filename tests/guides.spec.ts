@@ -277,11 +277,12 @@ test('guides survive a save and an open, on a version they did not bump', async 
   // fails, the question to answer is whether the new field is a guide (passed
   // through, no bump) or a sheet (rebuilt, bump), not merely to update the
   // number.
-  // 8 as of audio, and that bump answered the question this comment poses the
-  // right way round: `project.audio` is rebuilt field by field, so it bumps,
-  // while `scene.sounds` rides through verbatim exactly as these guides do and
-  // would not have.
-  expect(file.schemaVersion).toBe(8);
+  // 9 as of the two stretchable types. Audio's bump answered the question this
+  // comment poses the right way round — `project.audio` is rebuilt field by
+  // field, so it bumps, while `scene.sounds` rides through verbatim exactly as
+  // these guides do and would not have — and `nineslice` answered it the other
+  // way, on the crash half: a new node type an older build cannot construct.
+  expect(file.schemaVersion).toBe(9);
   expect(file.scenes[0].guides).toEqual([
     { id: expect.any(String), axis: 'x', position: GUIDE_X },
     { id: expect.any(String), axis: 'y', position: 200 },

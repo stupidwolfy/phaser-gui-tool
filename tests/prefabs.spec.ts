@@ -180,7 +180,7 @@ test('a prefab survives a save and an open', async ({ editor }, testInfo) => {
   // act. 8 as of audio; prefabs themselves took it to 5, which a v4 build
   // would drop on open and re-save without — the same half of the rule audio
   // then took it to 8 on.
-  expect(parsed.schemaVersion).toBe(8);
+  expect(parsed.schemaVersion).toBe(9);
   expect(parsed.prefabs).toHaveLength(1);
   expect(parsed.prefabs[0].name).toBe('Body');
   expect(parsed.prefabs[0].children).toHaveLength(1);

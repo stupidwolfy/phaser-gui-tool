@@ -41,7 +41,10 @@ images, a per-scene list of what a scene registers, and an export that hands the
 handle to play — on a canvas that stays silent unless asked. Iteration 18 (shipped) said
 where the game looks: a per-scene camera with a scroll, a zoom, a follow target and the
 scene for its bounds, drawn on the canvas as the frame it opens on and never once applied
-to the editor's own view. See the README for the user-facing feature list.
+to the editor's own view. Iteration 19 (shipped) let an image be drawn at a size that is
+not its own: a `nineslice` panel whose corners hold while its middle stretches, and a
+`tileSprite` that repeats rather than scaling. See the README for the user-facing feature
+list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -109,7 +112,9 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
    what a texture is called across the file, the second what *one scene* preloads.
    `countAssetUses` in `src/core/store.ts` is off this checklist entirely and is the same
    kind of hand-matched list — miss it and the image-deletion warning under-reports by a
-   whole object type. `PHYSICS_TYPES` in `schema.ts` is a second such list and the
+   whole object type; `removeAsset`'s own patch beside it is a third, and a type missing
+   from that one leaves the document holding a dangling `assetId`, which is the invariant
+   nothing else in the editor is allowed to break. `PHYSICS_TYPES` in `schema.ts` is a second such list and the
    **fourth silent step**: a new type is not body-eligible until it is named there, and
    nothing anywhere fails if it should have been.
 7. `tests/` — the two silent steps are exactly the two the suite covers: add the type to
@@ -122,8 +127,13 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
 save and an open" duty for it instead. That is a deliberate exception, not a skipped step.
 `sprite` and `tilemap` are the same exception by a different route: neither draws anything
 at all until an image has been imported and, for a tilemap, sliced, so `assets.spec.ts` and
-`tilemap.spec.ts` carry that duty for them. A type that *can* be added and seen with no
-setup still belongs in `editing.spec.ts`.
+`tilemap.spec.ts` carry that duty for them. `nineslice` and `tileSprite` are that exception
+one step further out, and the reason is worth stating because they look like they fail it:
+both *do* draw with no setup, on the placeholder — but what either one is *for* cannot be
+seen until an image is imported, since a solid colour stretched and a solid colour sliced
+put identical pixels on the canvas. `nineslice.spec.ts` carries that duty for the pair. A
+type that *can* be added and seen doing its own job with no setup still belongs in
+`editing.spec.ts`.
 
 A `container` is the one type that is not purely additive: its children render, so
 `EditorScene.syncNodes` recurses into it and the exporter emits an `add([...])` for it.
@@ -668,6 +678,111 @@ so what the canvas shows is what the export builds. Two decisions carry the rest
   so `useEditorStore((s) => tileMapOf(...))` is an infinite render loop — React error #185,
   found the first time the suite ran. Select the project and derive outside the selector, or
   reach for `useShallow` the way `useSelectionNodes` does.
+
+## Nine-slice panels and tile sprites
+
+Two ways to draw one image at a size that is not its own. A `nineslice` is a real
+`Phaser.GameObjects.NineSlice`: four insets divide the texture into corners, edges and a
+middle, and only the middle and the edges stretch. A `tileSprite` is a real
+`Phaser.GameObjects.TileSprite`: the texture repeats to fill a box, with a scroll offset
+and a tile scale of its own. Neither adds any architecture — they are the "Adding a Phaser
+object type" checklist run twice, silent steps included — so what is worth writing down is
+where each one's fields live and why.
+
+- **Both have a width and a height, where a sprite deliberately has neither.** That is not
+  an inconsistency, it is the whole point of them. A sprite has no size because scaling one
+  *is* scaling the picture, so a display size would be two fields fighting over one number.
+  Here the box and the picture that fills it are genuinely two facts: a panel is made wider
+  without its corners getting wider, and a tile sprite is made wider by fitting more
+  repeats in. The transform's scale still means what it always did — it stretches the box
+  and everything in it — which is why the inspector's fields are "Width"/"Height" and "Tile
+  scale X/Y" and never a bare "Scale".
+- **The insets are on the node, and this is the one place the feature contradicts
+  `ImageAsset.sheet`.** A frame grid is a property of the *bytes*: it decides how many
+  frames an image has, and two sprites drawing it must not disagree about that. An inset
+  decides nothing about the image — one 64px rounded-corner texture is a dialog frame with
+  16px corners and a health bar with 4px ones — and nothing downstream indexes an inset the
+  way a tile index indexes a frame. So it belongs to the *use*, which is the call
+  `SceneSound`'s `loop` and `volume` already made.
+- **`sliceInsetsOf` is the only reader**, in the `frameGridOf` / `tileMapOf` / `guidesOf` /
+  `physicsOf` / `soundsOf` / `cameraOf` family and answering three questions at once: is
+  there a source to measure against, how big is one *frame* of it, and do these four
+  numbers fit. Phaser needs `left + right` to be no wider than both the frame they are cut
+  from and the box they are drawn into — exceeding the frame samples pixels that are not
+  there, exceeding the box overlaps the corners and draws the panel inside out. The
+  opposing pair is scaled down together against whichever limit binds, so a panel narrowed
+  below its own corners degrades rather than breaks. It builds a fresh object per call, so
+  `useEditorStore((s) => sliceInsetsOf(...))` is React error #185 — the `tileMapOf` trap,
+  fifth time.
+- **Three-slice is free and gets no field.** Phaser reads `top === 0 && bottom === 0` as a
+  horizontal-only slice, which is exactly what a progress bar wants. A mode switch would be
+  a second answer to what the four numbers already say.
+- **Both draw `PLACEHOLDER_TEXTURE` with no image**, which is its argument for the fourth
+  and fifth time: "no image chosen", "the image is gone" and "the image is still decoding"
+  stay one state and one code path. Phaser 4's TileSprite builds its repeat with
+  `createPattern` at frame size rather than a WebGL wrap, so the placeholder's non-power-of-
+  two 96px is not a problem and needs no stand-in of its own — that was a real concern under
+  Phaser 3 and is worth knowing before anyone adds one back.
+- **Neither is in `localRectOf`, `hitAreaFor` or `applyHitArea`, and that is not an
+  omission.** Both are centred, sized game objects with Origin and ComputedSize, so the
+  existing `-width/2, -height/2` box is already right; a tilemap layer's top-left origin
+  stays the one exception in the `Renderable` union. Said in a comment there, because here
+  "no branch needed" and "forgot a branch" look identical.
+- **Both are in `PHYSICS_TYPES`, which is the fourth silent step.** Arcade reads `x`, `y`,
+  `width` and `height` off either exactly as it does off a rectangle, and a panel or a
+  repeating wall is the kind of thing a platformer stands on. Nothing anywhere fails if a
+  type is left out of that list — it is simply never offered a body, which looks like a
+  decision. The hostile project's tile sprite carries a static body for exactly that.
+- **The renderer rebuilds on a texture change and applies everything else in place.** A
+  nine-slice builds its vertices and a tile sprite its fill pattern when they are
+  constructed, so re-pointing either at another image or another frame is a new object
+  rather than a changed one: `shapeOf` folds `textureKey:frame` in and `syncNodes`' existing
+  "the shape changed, rebuild it" branch does the rest, exactly as it does for a tilemap.
+  Size, insets, offset, tile scale, tint and alpha are all in-place setters and deliberately
+  *not* in the signature — otherwise every keystroke in the inspector would rebuild the
+  object, which is the emitter's `setConfig` argument arriving by the other route.
+- **`setSlices` sets the size and the four insets in one call, and has to.** `setSize`
+  alone leaves the slice geometry built for the old box, so a widened panel stretches as if
+  it were an image — which is precisely the failure the type exists to avoid, and precisely
+  the one that looks like the feature not being implemented at all.
+- **`drawableFrame` was factored out of the sprite case rather than copied.** All three
+  types resolve a document frame index against the texture *actually loaded*, which
+  disagrees with the document for as long as a decode is in flight.
+- **Neither type can animate, and that is a fact about Phaser rather than a list that could
+  go stale.** A `NineSlice` and a `TileSprite` carry no AnimationState, so `collectAnimations`
+  and `usedIn`'s animation half gained nothing and say so in comments.
+- **The export is two ordinary `add.*` calls**, so neither takes the module-level-helper
+  route a tilemap and an instance had to — both are single expressions. The panel's ten
+  arguments are emitted whole, insets included, because they only mean anything beside each
+  other and beside the box they are cut against: the emitter config's call and the physics
+  body's, deliberately unlike `modifiersFor`. The tile sprite's offset and tile scale are
+  the opposite, and by the same reasoning — `add.tileSprite` has nowhere to take them, so
+  they are `modifiersFor`'s first new branch since sprite, emitted only when they differ
+  from a plain repeat.
+- **`collectAssets` collects both unconditionally**, on the emitter's reasoning rather than
+  the tileset's: an unsliced image is a perfectly good source for either, since frame 0 of a
+  one-frame texture is the whole picture. There is nothing here for a grid to gate.
+- **`missingReason` needed no edit at all**, since its catch-all already says the true thing
+  about both — worth stating, because on that checklist "already covered" and "forgotten"
+  read the same.
+- **`SCHEMA_VERSION` bumped to 9, on the crash half of the rule and only that half.** A v8
+  build has no case for either type in `createDisplayObject`, so it leaves the object
+  undefined and its renderer crashes: `particles` to v7, `tilemap` to v6, `instance` to v5
+  and `container` to v2 exactly. Cameras did not bump it and these do, which is the whole
+  difference between a field on a scene and a new kind of object in one.
+- **`nineslice.spec.ts` carries the "it draws, it drags, it survives a save and an open"
+  duty for both**, which makes them the fourth and fifth exception to `editing.spec.ts` —
+  and for `sprite`'s reason rather than a step skipped. Both *appear* with no setup, but
+  what either is *for* cannot be seen until an image is imported: a solid colour stretched
+  and a solid colour sliced put identical pixels on the canvas. `framePng` and `tilePng`
+  exist for that, the job `stripPng` does for sheets.
+- **Every claim there is an extent, not a centroid**, because what is being asserted is how
+  big something is drawn. And the border reading is bounded *proportionally* rather than to
+  a pixel: it is the difference between two independently measured extents, so both of its
+  ends carry a colour boundary's sub-pixel phase and the two do not cancel. What the test
+  actually needs is that the border did not scale with the panel — near 1x is the answer,
+  near 3x is the failure — and an absolute tolerance tight enough to mean that sits inside
+  the noise on one project and passes trivially on the other.
 
 ## Particles
 
@@ -1648,6 +1763,7 @@ tests/
   prefabs.spec.ts           saving a prefab, placing it twice, editing it once
   tilemap.spec.ts           slicing a tileset, painting it, filling and erasing
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
+  nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   physics.spec.ts           a body drawn, never simulated, and refused inside a group
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
   camera.spec.ts            a camera drawn, clamped, followed, saved and exported
@@ -1658,7 +1774,7 @@ tests/
   helpers/editor.ts         the page object: panels, fields, gestures, downloads
   helpers/pixels.ts         canvas readback, colour centroids and colour extents
   helpers/hostile.ts        the project made of everything a project should not contain
-  helpers/png.ts            a solid-colour PNG, so image fixtures are readable in a diff
+  helpers/png.ts            solid, striped, framed and marked PNGs, readable in a diff
   helpers/wav.ts            a synthesised WAV, for the same reason and with no encoder
 ```
 
@@ -1912,6 +2028,19 @@ Texture atlases: the asset table holds whole images cut on a regular grid, and a
 named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
 than more of this one.
 
+Nine-slice panels and tile sprites shipped in iteration 19 with four deliberate holes.
+**No `tileX`/`tileY` on a panel** — Phaser 4 can repeat a nine-slice's scalable regions
+instead of stretching them, which is two booleans and would be a pure loosening except for
+one thing: both are `readonly` and constructor-only, so they would have to join
+`shapeOf`'s signature and rebuild the object, and a seamless-texture caveat is a thing to
+explain in a panel that currently needs none. **No scroll speed on a tile sprite** — a
+background that drifts is `tilePositionX += delta` in the game's own `update()`, which is
+behaviour over time and the `scene.start` argument; the document says where the pattern
+starts, which is the part that is layout. **Neither type animates**, which is not deferred
+work at all: a `NineSlice` and a `TileSprite` carry no AnimationState, so this is Phaser's
+limit rather than this editor's. And **no per-corner insets beyond the four** — a nine-slice
+*is* four numbers, and anything finer is a second image.
+
 Cameras shipped in iteration 18 with five deliberate holes. **No second camera** —
 `cameras.add` is a list of cameras with viewports of their own, plus an ignore list saying
 which objects each one draws, and a minimap is two of those decisions rather than more of
@@ -1995,7 +2124,8 @@ Alignment and distribution shipped in iteration 6, snapping in iteration 7, equa
 and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9,
 persistent guides in iteration 10, sprite sheets with animations in iteration 11, prefabs
 in iteration 12, multiple scenes in iteration 13, tilemaps in iteration 14, particles in
-iteration 15, physics bodies in iteration 16 and the scene camera in iteration 18. The
+iteration 15, physics bodies in iteration 16, the scene camera in iteration 18, and
+nine-slice panels with tile sprites in iteration 19. The
 boxes the geometry family needs are in `src/core/bounds.ts`,
 which any further geometry tool can read. That family is complete in the sense that
 mattered — the user can now author a line of their own — and what is left of it is more of

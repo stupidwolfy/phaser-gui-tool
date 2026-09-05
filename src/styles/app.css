@@ -466,6 +466,26 @@ select {
   background: #ff6bd6;
 }
 
+/* A frame: a border of its own colour around a hollow middle, which is exactly
+   what a nine-slice is — corners that hold their size around a middle that
+   stretches. */
+.tree__type[data-type='nineslice'] {
+  background: none;
+  border: 3px solid #f0a500;
+}
+
+/* Four repeats of one square, because a tile sprite is one picture repeated —
+   the chequer a tilemap's chip uses, at half the pitch and in one colour, since
+   here every repeat is the same tile rather than a grid of different ones. */
+.tree__type[data-type='tileSprite'] {
+  background:
+    linear-gradient(45deg, #5ac8fa 25%, transparent 25%, transparent 75%, #5ac8fa 75%),
+    linear-gradient(45deg, #5ac8fa 25%, transparent 25%, transparent 75%, #5ac8fa 75%),
+    #1d2330;
+  background-size: 12px 12px;
+  background-position: 0 0, 6px 6px;
+}
+
 /* Hollow, because a group is a frame around other objects rather than a thing
    with a colour of its own. */
 .tree__type[data-type='container'] {

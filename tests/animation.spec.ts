@@ -120,9 +120,9 @@ test('a sheet and its animation survive a save and an open', async ({ editor }, 
 
   // The bump is load-bearing: a v3 build rebuilds assets field by field and
   // names the project's fields one at a time, so it would silently drop both of
-  // these and write the file back without them. 8 as of audio, which bumped it for
-  // this very reason one table over.
-  expect(parsed.schemaVersion).toBe(8);
+  // these and write the file back without them. 9 as of the two stretchable
+  // types, though the last bump for *this* reason was audio, one table over.
+  expect(parsed.schemaVersion).toBe(9);
   expect(parsed.assets[0].sheet).toEqual({
     frameWidth: FRAME_SIZE,
     frameHeight: FRAME_SIZE,

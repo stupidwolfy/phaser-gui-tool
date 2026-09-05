@@ -15,6 +15,12 @@ const ADDABLE: { type: NodeType; label: string }[] = [
   { type: 'ellipse', label: 'Ellipse' },
   { type: 'text', label: 'Text' },
   { type: 'sprite', label: 'Image' },
+  // "Panel" and "Tiled" rather than "Nine-slice" and "Tile sprite", by the rule
+  // that already labels a tilemap "Tiles": every label is a column the 260px
+  // tree has to find room for. Neither word collides with the mobile tab bar's
+  // exactly-matched Scene / Properties / File.
+  { type: 'nineslice', label: 'Panel' },
+  { type: 'tileSprite', label: 'Tiled' },
   { type: 'container', label: 'Group' },
   // "Tiles" rather than "Tilemap": the add row is an auto-fit grid of `nowrap`
   // buttons, so every label is a column the 260px tree has to find room for.

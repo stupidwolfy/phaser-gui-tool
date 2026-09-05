@@ -82,6 +82,51 @@ export function createNode(
           animationId: null,
         },
       };
+    case 'nineslice':
+      return {
+        ...base,
+        type: 'nineslice',
+        name: name ?? 'Panel',
+        // No asset, for the reason a sprite has none: adding an object should
+        // never open a file dialog. 12px insets on a 240x120 box is a dialog
+        // frame — big enough that the corners are visibly *not* stretching the
+        // moment the panel is widened, which is the whole thing this type is
+        // for and the one thing a new user has to be able to see happen.
+        props: {
+          assetId: null,
+          frame: 0,
+          width: 240,
+          height: 120,
+          left: 12,
+          right: 12,
+          top: 12,
+          bottom: 12,
+          tint: '#ffffff',
+          alpha: 1,
+        },
+      };
+    case 'tileSprite':
+      return {
+        ...base,
+        type: 'tileSprite',
+        name: name ?? 'Tiled',
+        // 320x180 is 16:9 at a third of the default scene, so a new one reads
+        // as a piece of background rather than as an object. Offset 0 and scale
+        // 1 is the texture at its own size, starting at its own corner — the
+        // plain repeat a tile sprite that never meets the inspector stays at.
+        props: {
+          assetId: null,
+          frame: 0,
+          width: 320,
+          height: 180,
+          tilePositionX: 0,
+          tilePositionY: 0,
+          tileScaleX: 1,
+          tileScaleY: 1,
+          tint: '#ffffff',
+          alpha: 1,
+        },
+      };
     case 'container':
       return {
         ...base,

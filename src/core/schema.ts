@@ -92,8 +92,17 @@
  * not what bumps this: the table it points at is. `audio.spec.ts` asserts the
  * current version in the saved artefact so a future bump is a deliberate act —
  * as six other specs now do, which is what makes a bump loud on purpose.
+ *
+ * v9 — nine-slice panels and tile sprites — is back on the crash half, and only
+ * that half. A v8 build has no `'nineslice'` and no `'tileSprite'` case in
+ * `createDisplayObject`, so it leaves the object undefined and its renderer
+ * crashes: `particles` to v7, `tilemap` to v6, `instance` to v5 and `container`
+ * to v2 exactly. Nothing else about the feature needs it — both types point at
+ * an ordinary image, sliced or not, and their own props ride in on `scenes`,
+ * verbatim. Cameras did not bump it and these do, which is the whole difference
+ * between a field on a scene and a new kind of object in one.
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -104,6 +113,8 @@ export type NodeType =
   | 'ellipse'
   | 'text'
   | 'sprite'
+  | 'nineslice'
+  | 'tileSprite'
   | 'container'
   | 'instance'
   | 'tilemap'
@@ -357,6 +368,145 @@ export interface SpriteProps {
 }
 
 /**
+ * A panel drawn as a Phaser `NineSlice`: four insets divide the texture into
+ * corners, edges and a middle, and only the middle and the edges stretch.
+ *
+ * The one type here whose size is its own rather than its texture's, and
+ * deliberately so — that is the entire point of it. A `sprite` has no width or
+ * height because scaling one is scaling the picture; a panel is scaled *without*
+ * scaling its corners, so the box it fills and the picture it fills it with are
+ * two different facts and need two different fields.
+ *
+ * The insets live here rather than on the `ImageAsset`, which is the one place
+ * this contradicts `ImageAsset.sheet` and is worth saying why. A frame grid is a
+ * property of the bytes: it decides how many frames an image has, and two
+ * sprites drawing it must not disagree about that. An inset decides nothing
+ * about the image — one 64px rounded-corner texture is a dialog frame with 16px
+ * corners and a health bar with 4px ones, and nothing downstream indexes an
+ * inset the way a tile index indexes a frame. So it belongs to the use, exactly
+ * as a `SceneSound`'s volume does.
+ *
+ * Read them through `sliceInsetsOf`, never directly: raw they can exceed the
+ * frame they are cut from, which Phaser draws inside out.
+ */
+export interface NineSliceProps {
+  /** Null until an image is chosen; the canvas draws the placeholder until then. */
+  assetId: string | null;
+  /** Which frame of the asset's sheet to slice, clamped by `clampFrame`. */
+  frame: number;
+  width: number;
+  height: number;
+  /**
+   * The four insets, in source pixels. All four are one field each rather than
+   * a `{ x, y }` pair, because a nine-slice's whole subject is that the four
+   * sides differ — a window frame with a title bar has a `top` unlike its
+   * `bottom`, which is the case a symmetric pair could not express.
+   *
+   * `top` and `bottom` of 0 is Phaser's own three-slice, which stretches
+   * horizontally only — a progress bar, and free here rather than a mode flag
+   * that would be a second answer to what these four numbers already say.
+   */
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  /** '#ffffff' means untinted, the same convention a sprite's tint uses. */
+  tint: string;
+  alpha: number;
+}
+
+/**
+ * A texture repeated across a box: a Phaser `TileSprite`.
+ *
+ * Its size is its own for `NineSliceProps`' reason — the box and the picture
+ * that fills it are two facts, and here the whole point is that the second is
+ * smaller than the first and repeats. `tileScale` is the picture's size within
+ * that box, which is *not* the transform's scale: scaling the object stretches
+ * the box and the pattern with it, while scaling the tile leaves the box where
+ * it is and changes how many times the texture fits in it.
+ *
+ * There is no scroll *speed* here, only an offset. A background that drifts is
+ * a `tilePositionX += delta` in the game's own `update()` — behaviour over
+ * time, which is game logic and the `scene.start` argument. What the document
+ * can say is where the pattern starts, and it says exactly that.
+ */
+export interface TileSpriteProps {
+  /** Null until an image is chosen; the canvas draws the placeholder until then. */
+  assetId: string | null;
+  /** Which frame of the asset's sheet to repeat, clamped by `clampFrame`. */
+  frame: number;
+  width: number;
+  height: number;
+  /** Where in the texture the top-left of the box starts, in source pixels. */
+  tilePositionX: number;
+  tilePositionY: number;
+  /** How big one repeat is, as a multiple of the frame's own size. */
+  tileScaleX: number;
+  tileScaleY: number;
+  /** '#ffffff' means untinted, the same convention a sprite's tint uses. */
+  tint: string;
+  alpha: number;
+}
+
+/**
+ * The four insets, certainly usable against the texture and the box they will
+ * be drawn on.
+ *
+ * The only reader of `NineSliceProps`' inset fields, in the `frameGridOf` /
+ * `tileMapOf` / `guidesOf` / `physicsOf` / `soundsOf` / `cameraOf` family and
+ * for their reason: it answers three questions at once, and any one of them
+ * forgotten is a panel Phaser draws inside out.
+ *
+ * - *Is there a source to measure against?* With no asset the frame is the
+ *   placeholder's own square, which is what the canvas actually draws.
+ * - *How big is one frame of it?* A sliced sheet's frame, not the whole image —
+ *   the same distinction `clampFrame` is built on.
+ * - *Do these four numbers fit?* Phaser needs `left + right` to be no wider
+ *   than both the frame it cuts them from and the box it draws them into, and
+ *   the same vertically. Exceeding the frame samples pixels that are not there;
+ *   exceeding the box overlaps the two corners, which draws the panel inside
+ *   out. Scaling the opposing pair down together is what makes a panel narrowed
+ *   below its own corners degrade rather than break.
+ *
+ * A fresh object per call, so `useEditorStore((s) => sliceInsetsOf(...))` is an
+ * infinite render loop — React error #185, the `tileMapOf` trap for the fifth
+ * time. Select the project and derive outside the selector.
+ */
+export function sliceInsetsOf(
+  asset: ImageAsset | undefined,
+  props: NineSliceProps,
+  // Only ever reached with no asset, which is the editor drawing its
+  // placeholder — an export with no image emits a comment rather than a panel,
+  // so the exporter never has a frame size to be missing.
+  fallbackFrameSize = 0,
+): { left: number; right: number; top: number; bottom: number } {
+  const sheet = asset ? frameGridOf(asset) : undefined;
+  const frameWidth = sheet ? sheet.frameWidth : (asset?.width ?? fallbackFrameSize);
+  const frameHeight = sheet ? sheet.frameHeight : (asset?.height ?? fallbackFrameSize);
+
+  // Both limits at once: the picture the insets are cut from, and the box they
+  // are drawn into. Whichever is smaller is the one that binds.
+  const fit = (near: number, far: number, limit: number) => {
+    const a = Math.max(0, Math.floor(Number.isFinite(near) ? near : 0));
+    const b = Math.max(0, Math.floor(Number.isFinite(far) ? far : 0));
+    // `Math.max(0, NaN)` is NaN, so a width a hand-edited file made unusable
+    // has to be caught here rather than propagating into all four insets.
+    const room = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    if (a + b <= room) return [a, b] as const;
+    // Proportionally, so a frame with a wide left border and a narrow right one
+    // still reads as that frame when it is squeezed.
+    const total = a + b;
+    if (total === 0) return [0, 0] as const;
+    const scaled = Math.floor((a / total) * room);
+    return [scaled, room - scaled] as const;
+  };
+
+  const [left, right] = fit(props.left, props.right, Math.min(frameWidth, props.width));
+  const [top, bottom] = fit(props.top, props.bottom, Math.min(frameHeight, props.height));
+  return { left, right, top, bottom };
+}
+
+/**
  * A container groups other nodes: moving, rotating or scaling it moves its whole
  * subtree, and `children` is its content.
  *
@@ -509,6 +659,8 @@ export interface NodePropsByType {
   ellipse: EllipseProps;
   text: TextProps;
   sprite: SpriteProps;
+  nineslice: NineSliceProps;
+  tileSprite: TileSpriteProps;
   container: ContainerProps;
   instance: InstanceProps;
   tilemap: TilemapProps;
@@ -556,9 +708,11 @@ export type GameObjectNode = {
  *
  * An Arcade body reads its owner's `x`/`y`, `width` and `height` every step, so
  * the object has to have all four and they have to mean what the world thinks
- * they mean. A `rectangle`, an `ellipse`, a `text` and a `sprite` all do. The
- * four that are missing are each missing for their own reason, and none of them
- * is an oversight:
+ * they mean. A `rectangle`, an `ellipse`, a `text`, a `sprite`, a `nineslice`
+ * and a `tileSprite` all do — the last two carry ComputedSize and Origin like
+ * the rest, and a panel or a repeating wall is exactly the kind of thing a
+ * platformer stands on. The three that are missing are each missing for their
+ * own reason, and none of them is an oversight:
  *
  * - a `container` and an `instance` are Phaser Containers, which Arcade does
  *   not simulate — a body on one would be a box around children that go on
@@ -574,6 +728,8 @@ const PHYSICS_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
   'ellipse',
   'text',
   'sprite',
+  'nineslice',
+  'tileSprite',
 ]);
 
 /**

@@ -143,44 +143,59 @@ function AssetRow({
   );
 }
 
+type AssetKind = 'sprite' | 'tileset' | 'particle' | 'panel' | 'tile';
+
 /**
- * The chosen image's details, or a prompt to choose one.
+ * What each kind of image-holding object does with its image, and what it says
+ * when it has none.
  *
  * The wording differs by what is drawing it, because the consequence does: a
  * sprite with no image is one placeholder square, while a tilemap with no
  * tileset is a whole grid of them — and a tilemap's size on the canvas comes
- * from its own columns and rows, not from the image. An emitter is a third
- * case again: it draws its marker and throws nothing at all.
+ * from its own columns and rows, not from the image. An emitter is a third case
+ * again: it draws its marker and throws nothing at all. A panel and a tiled
+ * image are a fourth and a fifth, since for those the image is a shape being
+ * cut up or a pattern being repeated rather than the picture itself.
+ *
+ * Two tables rather than the chain of ternaries this was: five kinds each
+ * saying something that specific is a table, and the missing-image line is the
+ * one a user reads while the object is drawing a placeholder, so it says what
+ * the export will do as well — the half they cannot see on the canvas.
  */
+const MISSING_ASSET: Record<AssetKind, string> = {
+  sprite: 'No image chosen — this sprite draws a placeholder and exports as nothing.',
+  tileset: 'No tileset chosen — this map draws placeholders and exports as nothing.',
+  particle:
+    'No image chosen — this emitter draws its marker, throws nothing and exports as nothing.',
+  panel: 'No image chosen — this panel draws a placeholder and exports as nothing.',
+  tile: 'No image chosen — this tiled image draws a placeholder and exports as nothing.',
+};
+
+const ASSET_ROLE: Record<AssetKind, string> = {
+  sprite: 'Size on the canvas is this times the transform scale above.',
+  tileset: 'Its frame size is the map’s tile size.',
+  particle: 'Each particle draws one frame of it.',
+  panel: 'Its corners keep their size; the edges and the middle stretch.',
+  tile: 'It repeats to fill the box below.',
+};
+
+/** The chosen image's details, or a prompt to choose one. */
 export function AssetSummary({
   assetId,
   kind = 'sprite',
 }: {
   assetId: string | null;
-  kind?: 'sprite' | 'tileset' | 'particle';
+  kind?: AssetKind;
 }) {
   const asset = useEditorStore((s) => findAsset(s.project, assetId));
 
   if (!asset) {
-    return (
-      <p className="hint hint--error">
-        {kind === 'tileset'
-          ? 'No tileset chosen — this map draws placeholders and exports as nothing.'
-          : kind === 'particle'
-            ? 'No image chosen — this emitter draws its marker, throws nothing and exports as nothing.'
-            : 'No image chosen — this sprite draws a placeholder and exports as nothing.'}
-      </p>
-    );
+    return <p className="hint hint--error">{MISSING_ASSET[kind]}</p>;
   }
 
   return (
     <p className="hint">
-      {asset.name} · {asset.width}×{asset.height}px.{' '}
-      {kind === 'tileset'
-        ? 'Its frame size is the map’s tile size.'
-        : kind === 'particle'
-          ? 'Each particle draws one frame of it.'
-          : 'Size on the canvas is this times the transform scale above.'}
+      {asset.name} · {asset.width}×{asset.height}px. {ASSET_ROLE[kind]}
     </p>
   );
 }

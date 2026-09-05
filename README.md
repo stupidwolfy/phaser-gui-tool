@@ -10,7 +10,8 @@ on a desktop.
 
 ## What it does
 
-- Place rectangles, ellipses, text and images in a scene
+- Place rectangles, ellipses, text, images, stretchable panels and tiled backgrounds in a
+  scene
 - Select and drag objects on the canvas; pan and pinch-zoom the camera
 - Select several objects at once — turn on **Multi** in the scene tree and tap them, or
   Shift/Ctrl-click on a desktop — then move, group, duplicate, hide or delete all of them
@@ -68,6 +69,14 @@ on a desktop.
   until you press ▶ in the toolbar, so an emitter stays where you put it while you place
   the rest of the scene, and exports as a real `this.add.particles(...)` with every
   setting in one object
+- Stretch a **panel** without stretching its corners: `+ Panel` adds a nine-slice, and the
+  four Slice fields say how wide its border is. Make it any size you like — the corners
+  keep the size you drew them at, and only the edges and the middle stretch, which is what
+  a dialog frame or a button needs. Leave Slice top and bottom at 0 for a bar that
+  stretches sideways only
+- Repeat one image across a box with `+ Tiled`: a wall, water or a parallax background
+  layer. Tile offset scrolls the pattern inside the box and tile scale changes how big one
+  repeat is, neither of which moves or resizes the object itself
 - Give a scene **sound**: import an MP3, OGG, WAV, M4A or WebM under Audio in the scene
   panel, press ▶ on its row to hear it, and add it to the scene to set its volume, whether
   it loops and whether it starts with the scene. Exported code preloads exactly the sounds
@@ -175,10 +184,16 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; seventeen iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; nineteen iterations in, it is a
 working editor but a small one.
 
-**Not built yet** — texture atlases and cameras. Audio is in, with four limits: no audio
+**Not built yet** — texture atlases. Panels and tiled images are in, with three limits: a
+panel's scalable regions stretch rather than repeating, a tiled image has an offset but no
+scroll speed (a background that drifts is one line in your own `update()`), and neither can
+play an animation, which is Phaser's limit rather than this editor's. Cameras are in, with
+five limits: one camera per scene, no fade, shake, pan or other effects over time, no follow
+offset or dead zone, no way to grab the camera frame on the canvas, and no button that
+points your own view through it. Audio is in, with four limits: no audio
 sprites, no per-play settings like rate or pan (those belong on the handle, in the line you
 write), no positional sound, and nothing stops a sound when a scene ends. Physics is in,
 with four limits:
@@ -232,6 +247,7 @@ tests/
   rotation.spec.ts    the rotate knob, and an angle landing on a neighbour or a step
   guides.spec.ts      placing a guide, dragging it, and a drag agreeing with it
   animation.spec.ts   slicing a sheet, drawing one frame of it, and playing a clip
+  nineslice.spec.ts   a panel whose corners hold, and a texture that repeats
   assets.spec.ts      image import, drawing, save/reopen, removal
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite

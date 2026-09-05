@@ -21,6 +21,7 @@ import {
   isDefaultCamera,
   physicsOf,
   prefabChildrenOf,
+  sliceInsetsOf,
   tileMapOf,
   worldTransformOf,
   type AnimationClip,
@@ -373,6 +374,14 @@ type Renderable =
   // and emits `add.image` unless the node animates, because there the extra
   // capability would be a line of generated code that does nothing.
   | Phaser.GameObjects.Sprite
+  // Both centred, sized game objects with Origin, ComputedSize, Tint and Alpha
+  // on them, so `localRectOf`, `hitAreaFor` and `applyHitArea` need no case for
+  // either — the existing centred `width`/`height` box is already the right
+  // one. Worth saying, because here "no branch needed" and "forgot a branch"
+  // look identical; a tilemap layer's top-left origin remains the one exception
+  // in this union.
+  | Phaser.GameObjects.NineSlice
+  | Phaser.GameObjects.TileSprite
   | Phaser.GameObjects.Container
   // The real thing, not a stand-in built out of Images: a layer is what the
   // export emits, so drawing one here is what makes the canvas and the
@@ -1049,6 +1058,20 @@ export class EditorScene extends Phaser.Scene {
   }
 
   /**
+   * A frame that is certainly on the texture actually loaded.
+   *
+   * `clampFrame` resolves an index against the *document's* grid, and the two
+   * disagree for as long as a decode is in flight: the object is on the
+   * single-frame placeholder while its node still says frame 3, and Phaser
+   * warns and drops to a missing texture for a frame that is not there. The
+   * decode re-runs the whole sync when it lands, which is what puts the real
+   * frame up.
+   */
+  private drawableFrame(textureKey: string, frame: number): number {
+    return this.textures.get(textureKey).has(String(frame)) ? frame : 0;
+  }
+
+  /**
    * The texture a tilemap should cut its tiles from.
    *
    * `textureKeyFor` for tilesets, with one extra condition: an image that has
@@ -1120,6 +1143,20 @@ export class EditorScene extends Phaser.Scene {
    * comparison is trivially equal and costs nothing for the other five.
    */
   private shapeOf(node: GameObjectNode): string | undefined {
+    // A panel and a tile sprite both build their geometry from the texture when
+    // they are constructed — the nine-slice its vertices, the tile sprite its
+    // fill pattern — so re-pointing either at another image or another frame is
+    // a new object rather than a changed one. Folding the two into a signature
+    // means `syncNodes`' existing "the shape changed, rebuild it" branch does
+    // the whole job, exactly as it does for a tilemap. Everything else about
+    // both — size, insets, offset, tile scale, tint, alpha — is an in-place
+    // setter and deliberately not in here, or every keystroke in the inspector
+    // would rebuild the object.
+    if (node.type === 'nineslice' || node.type === 'tileSprite') {
+      const key = this.textureKeyFor(this.syncing, node.props.assetId);
+      const asset = findAsset(this.syncing, node.props.assetId);
+      return `${key}:${this.drawableFrame(key, clampFrame(asset, node.props.frame))}`;
+    }
     if (node.type !== 'tilemap') return undefined;
     return tilemapSignatureOf(
       tileMapOf(this.syncing, node.props),
@@ -2816,6 +2853,39 @@ export class EditorScene extends Phaser.Scene {
       case 'sprite':
         object = this.add.sprite(0, 0, this.textureKeyFor(this.syncing, node.props.assetId));
         break;
+      case 'nineslice': {
+        const { props } = node;
+        const key = this.textureKeyFor(this.syncing, props.assetId);
+        const asset = findAsset(this.syncing, props.assetId);
+        const insets = sliceInsetsOf(asset, props, PLACEHOLDER_SIZE);
+        object = this.add.nineslice(
+          0,
+          0,
+          key,
+          this.drawableFrame(key, clampFrame(asset, props.frame)),
+          props.width,
+          props.height,
+          insets.left,
+          insets.right,
+          insets.top,
+          insets.bottom,
+        );
+        break;
+      }
+      case 'tileSprite': {
+        const { props } = node;
+        const key = this.textureKeyFor(this.syncing, props.assetId);
+        const asset = findAsset(this.syncing, props.assetId);
+        object = this.add.tileSprite(
+          0,
+          0,
+          props.width,
+          props.height,
+          key,
+          this.drawableFrame(key, clampFrame(asset, props.frame)),
+        );
+        break;
+      }
       case 'tilemap':
         object = this.createTilemapLayer(node.props, key);
         break;
@@ -2931,13 +3001,7 @@ export class EditorScene extends Phaser.Scene {
           sprite.play(animation, true);
         } else {
           if (sprite.anims.isPlaying) sprite.stop();
-          // Resolved against the texture actually loaded, not against the
-          // document's grid. Those disagree for as long as a decode is in
-          // flight — the sprite is on the single-frame placeholder while its
-          // node still says frame 3 — and Phaser warns and drops to a missing
-          // texture for a frame that is not there. The decode re-runs this
-          // whole sync when it lands, which is what puts the real frame up.
-          const drawn = this.textures.get(key).has(String(frame)) ? frame : 0;
+          const drawn = this.drawableFrame(key, frame);
           // Swapping the image or the frame changes the object's size, which
           // the hit area below then follows — the same reason text needs it as
           // you type.
@@ -2949,6 +3013,55 @@ export class EditorScene extends Phaser.Scene {
         // Multiply is the default tint mode, so white is exactly "no tint".
         sprite.setTint(hexToNumber(node.props.tint));
         sprite.setFlip(node.props.flipX, node.props.flipY);
+        break;
+      }
+      case 'nineslice': {
+        const panel = object as Phaser.GameObjects.NineSlice;
+        const props = node.props;
+        const insets = sliceInsetsOf(
+          findAsset(this.syncing, props.assetId),
+          props,
+          PLACEHOLDER_SIZE,
+        );
+        // One call for the size and the four insets together, which is how
+        // Phaser wants them: `setSize` alone leaves the slice geometry built
+        // for the old box, so a widened panel would stretch as if it were an
+        // image. The texture and the frame are not here at all — they are in
+        // `shapeOf`, so changing either rebuilds the object.
+        if (
+          panel.width !== props.width ||
+          panel.height !== props.height ||
+          panel.leftWidth !== insets.left ||
+          panel.rightWidth !== insets.right ||
+          panel.topHeight !== insets.top ||
+          panel.bottomHeight !== insets.bottom
+        ) {
+          panel.setSlices(
+            props.width,
+            props.height,
+            insets.left,
+            insets.right,
+            insets.top,
+            insets.bottom,
+          );
+        }
+        panel.setAlpha(props.alpha);
+        panel.setTint(hexToNumber(props.tint));
+        break;
+      }
+      case 'tileSprite': {
+        const tiled = object as Phaser.GameObjects.TileSprite;
+        const props = node.props;
+        if (tiled.width !== props.width || tiled.height !== props.height) {
+          tiled.setSize(props.width, props.height);
+        }
+        // The pattern's own offset and size, which are not the transform's:
+        // scaling the object stretches the box and the pattern with it, while
+        // these leave the box alone and change how the texture sits inside it.
+        tiled.setTilePosition(props.tilePositionX, props.tilePositionY);
+        tiled.setTileScale(props.tileScaleX, props.tileScaleY);
+        tiled.setAlpha(props.alpha);
+        tiled.setTint(hexToNumber(props.tint));
         break;
       }
       case 'tilemap': {

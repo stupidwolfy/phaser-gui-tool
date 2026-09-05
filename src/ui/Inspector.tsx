@@ -25,7 +25,9 @@ import {
   siblingsOf,
   tileMapOf,
   type GameObjectNode,
+  type NineSliceProps,
   type ParticlesProps,
+  type TileSpriteProps,
 } from '../core/schema';
 import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
 import { AudioSection } from './AudioPicker';
@@ -789,6 +791,8 @@ const SECTION_TITLE: Record<GameObjectNode['type'], string> = {
   ellipse: 'Shape',
   text: 'Text',
   sprite: 'Image',
+  nineslice: 'Panel',
+  tileSprite: 'Tiled image',
   container: 'Group',
   instance: 'Prefab',
   tilemap: 'Tiles',
@@ -931,14 +935,18 @@ function ArrangeRow({ node }: { node: GameObjectNode }) {
 function FrameField({
   node,
 }: {
-  node: Extract<GameObjectNode, { type: 'sprite' | 'particles' }>;
+  node: Extract<
+    GameObjectNode,
+    { type: 'sprite' | 'particles' | 'nineslice' | 'tileSprite' }
+  >;
 }) {
   const updateProps = useEditorStore((s) => s.updateProps);
   const asset = useEditorStore((s) => findAsset(s.project, node.props.assetId));
 
-  // An emitter indexes the same grid and clamps against the same count, so it
-  // is the same control rather than a copy of it. Only a sprite can have a
-  // clip taking the frame over, which is why that half of the guard narrows.
+  // An emitter, a panel and a tile sprite all index the same grid and clamp
+  // against the same count, so this is the same control rather than four copies
+  // of it. Only a sprite can have a clip taking the frame over, which is why
+  // that half of the guard narrows.
   if (!asset || !frameGridOf(asset)) return null;
   if (node.type === 'sprite' && node.props.animationId) return null;
 
@@ -952,6 +960,205 @@ function FrameField({
         onChange={(frame) => updateProps(node.id, { frame })}
       />
     </div>
+  );
+}
+
+/**
+ * The nine-slice section.
+ *
+ * The image controls are the picker and the slicer used verbatim, for the
+ * reason an emitter and a tileset reuse them: a nine-slice source *is* an
+ * image, sliced or not.
+ *
+ * The four insets are their own field each rather than a symmetric pair,
+ * because a nine-slice's whole subject is that the sides differ — a window
+ * frame with a title bar has a top unlike its bottom. They are labelled "Slice
+ * …" and the box is labelled "Width"/"Height" plainly, since the transform's
+ * Scale X/Y two rows up is the other thing that changes an object's size and
+ * the two must not read as the same control.
+ */
+function NineSliceSection({
+  node,
+}: {
+  node: Extract<GameObjectNode, { type: 'nineslice' }>;
+}) {
+  const updateProps = useEditorStore((s) => s.updateProps);
+  const setProp = (patch: Partial<NineSliceProps>) => updateProps(node.id, patch);
+
+  return (
+    <>
+      <AssetSummary assetId={node.props.assetId} kind="panel" />
+      <AssetPicker
+        selectedAssetId={node.props.assetId}
+        onPick={(assetId) => setProp({ assetId })}
+      />
+
+      {node.props.assetId && (
+        <>
+          <div className="panel__section">Sprite sheet</div>
+          <SheetSection assetId={node.props.assetId} />
+          <FrameField node={node} />
+        </>
+      )}
+
+      <div className="panel__section">Size</div>
+      <div className="field-row">
+        <NumberField
+          label="Width"
+          value={node.props.width}
+          min={1}
+          onChange={(width) => setProp({ width })}
+        />
+        <NumberField
+          label="Height"
+          value={node.props.height}
+          min={1}
+          onChange={(height) => setProp({ height })}
+        />
+      </div>
+
+      <div className="panel__section">Slices</div>
+      <p className="hint">
+        The corners keep their size at any width; only the edges and the middle
+        stretch. Leave Slice top and bottom at 0 for a bar that stretches
+        sideways only.
+      </p>
+      <div className="field-row">
+        <NumberField
+          label="Slice left"
+          value={node.props.left}
+          min={0}
+          onChange={(left) => setProp({ left })}
+        />
+        <NumberField
+          label="Slice right"
+          value={node.props.right}
+          min={0}
+          onChange={(right) => setProp({ right })}
+        />
+      </div>
+      <div className="field-row">
+        <NumberField
+          label="Slice top"
+          value={node.props.top}
+          min={0}
+          onChange={(top) => setProp({ top })}
+        />
+        <NumberField
+          label="Slice bottom"
+          value={node.props.bottom}
+          min={0}
+          onChange={(bottom) => setProp({ bottom })}
+        />
+      </div>
+
+      <div className="panel__section">Appearance</div>
+      <ColorField label="Tint" value={node.props.tint} onChange={(tint) => setProp({ tint })} />
+      <NumberField
+        label="Alpha"
+        value={node.props.alpha}
+        step={0.05}
+        min={0}
+        max={1}
+        onChange={(alpha) => setProp({ alpha })}
+      />
+    </>
+  );
+}
+
+/**
+ * The tile-sprite section.
+ *
+ * "Tile offset" and "Tile scale" rather than "Offset" and "Scale": the
+ * transform's own Scale X/Y is a few rows up the same panel and does something
+ * genuinely different — it stretches the box and the pattern together, where
+ * these leave the box alone. Two fields called Scale would be ambiguous to a
+ * reader and to the suite's exact-match label locator alike, which is the
+ * "Animation name, not Name" rule.
+ */
+function TileSpriteSection({
+  node,
+}: {
+  node: Extract<GameObjectNode, { type: 'tileSprite' }>;
+}) {
+  const updateProps = useEditorStore((s) => s.updateProps);
+  const setProp = (patch: Partial<TileSpriteProps>) => updateProps(node.id, patch);
+
+  return (
+    <>
+      <AssetSummary assetId={node.props.assetId} kind="tile" />
+      <AssetPicker
+        selectedAssetId={node.props.assetId}
+        onPick={(assetId) => setProp({ assetId })}
+      />
+
+      {node.props.assetId && (
+        <>
+          <div className="panel__section">Sprite sheet</div>
+          <SheetSection assetId={node.props.assetId} />
+          <FrameField node={node} />
+        </>
+      )}
+
+      <div className="panel__section">Size</div>
+      <div className="field-row">
+        <NumberField
+          label="Width"
+          value={node.props.width}
+          min={1}
+          onChange={(width) => setProp({ width })}
+        />
+        <NumberField
+          label="Height"
+          value={node.props.height}
+          min={1}
+          onChange={(height) => setProp({ height })}
+        />
+      </div>
+
+      <div className="panel__section">Pattern</div>
+      <p className="hint">
+        The image repeats to fill the box. Tile offset scrolls it inside the
+        box; tile scale changes how big one repeat is.
+      </p>
+      <div className="field-row">
+        <NumberField
+          label="Tile offset X"
+          value={node.props.tilePositionX}
+          onChange={(tilePositionX) => setProp({ tilePositionX })}
+        />
+        <NumberField
+          label="Tile offset Y"
+          value={node.props.tilePositionY}
+          onChange={(tilePositionY) => setProp({ tilePositionY })}
+        />
+      </div>
+      <div className="field-row">
+        <NumberField
+          label="Tile scale X"
+          value={node.props.tileScaleX}
+          step={0.1}
+          onChange={(tileScaleX) => setProp({ tileScaleX })}
+        />
+        <NumberField
+          label="Tile scale Y"
+          value={node.props.tileScaleY}
+          step={0.1}
+          onChange={(tileScaleY) => setProp({ tileScaleY })}
+        />
+      </div>
+
+      <div className="panel__section">Appearance</div>
+      <ColorField label="Tint" value={node.props.tint} onChange={(tint) => setProp({ tint })} />
+      <NumberField
+        label="Alpha"
+        value={node.props.alpha}
+        step={0.05}
+        min={0}
+        max={1}
+        onChange={(alpha) => setProp({ alpha })}
+      />
+    </>
   );
 }
 
@@ -1399,6 +1606,10 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
           </div>
         </>
       )}
+
+      {node.type === 'nineslice' && <NineSliceSection node={node} />}
+
+      {node.type === 'tileSprite' && <TileSpriteSection node={node} />}
 
       {node.type === 'particles' && <ParticlesSection node={node} />}
 
