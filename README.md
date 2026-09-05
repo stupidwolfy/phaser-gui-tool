@@ -68,9 +68,14 @@ on a desktop.
   until you press ▶ in the toolbar, so an emitter stays where you put it while you place
   the rest of the scene, and exports as a real `this.add.particles(...)` with every
   setting in one object
+- Give a scene **sound**: import an MP3, OGG, WAV, M4A or WebM under Audio in the scene
+  panel, press ▶ on its row to hear it, and add it to the scene to set its volume, whether
+  it loops and whether it starts with the scene. Exported code preloads exactly the sounds
+  a scene uses and gives each one a named handle, so `jumpSound.play()` is the one line you
+  write — the editor itself stays silent while you work
 - Build a game out of several **scenes**: `+ Scene` in the scene panel adds one, the
   chips beside it switch between them, and the inspector duplicates or deletes the one
-  you are in. Images, animations and prefabs are shared by all of them; the project
+  you are in. Images, sounds, animations and prefabs are shared by all of them; the project
   reopens on the scene you left it on
 - Duplicate, copy and paste objects, keeping their styling
 - Change draw order with the inspector's Arrange buttons, or by dragging rows in the
@@ -164,10 +169,13 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; sixteen iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; seventeen iterations in, it is a
 working editor but a small one.
 
-**Not built yet** — texture atlases, audio and cameras. Physics is in, with four limits:
+**Not built yet** — texture atlases and cameras. Audio is in, with four limits: no audio
+sprites, no per-play settings like rate or pan (those belong on the handle, in the line you
+write), no positional sound, and nothing stops a sound when a scene ends. Physics is in,
+with four limits:
 nothing is simulated in the editor, there are no colliders (the one line you write
 yourself), bodies are rectangles rather than circles, and only an object at the top level
 of a scene can have one — a body is positioned in world coordinates, and an object inside a

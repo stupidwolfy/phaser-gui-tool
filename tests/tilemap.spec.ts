@@ -178,7 +178,7 @@ test('filling lays every cell, and the eraser takes one back', async ({ editor }
   expect(erased.count).toBeLessThan(filled.count);
 });
 
-test('the map survives a save and an open, at schema 7', async ({ editor, page }, testInfo) => {
+test('the map survives a save and an open, at schema 8', async ({ editor, page }, testInfo) => {
   await setup(editor);
   await editor.setField('Name', 'Ground');
   await editor.pickTile(0);
@@ -191,11 +191,11 @@ test('the map survives a save and an open, at schema 7', async ({ editor, page }
 
   const saved = await editor.saveToFile();
   const parsed = JSON.parse(saved.contents);
-  // A literal, so that a bump is noticed and made deliberately. 7 as of
-  // particles, for the reason tilemaps took it to 6: a build with no
-  // `createDisplayObject` case for the type leaves the object undefined and
-  // crashes.
-  expect(parsed.schemaVersion).toBe(7);
+  // A literal, so that a bump is noticed and made deliberately. 8 as of audio,
+  // which is the other half of the rule: tilemaps took it to 6 because a build
+  // with no `createDisplayObject` case leaves the object undefined and crashes,
+  // where audio took it to 8 over a table an older build silently drops.
+  expect(parsed.schemaVersion).toBe(8);
 
   const map = parsed.scenes[0].children.find(
     (node: { name: string }) => node.name === 'Ground',

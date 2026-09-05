@@ -36,7 +36,10 @@ itself: a `particles` node drawn as a real `ParticleEmitter`, stopped by default
 running only under the preview toggle the animations already had. Iteration 16 (shipped)
 gave an object a body: an Arcade physics body on a top-level node, a gravity on the scene,
 and an export that emits real `physics.add.existing` — drawn on a canvas that still
-refuses to simulate. See the README for the user-facing feature list.
+refuses to simulate. Iteration 17 (shipped) gave a scene a sound: an audio table beside the
+images, a per-scene list of what a scene registers, and an export that hands the user a named
+handle to play — on a canvas that stays silent unless asked. See the README for the
+user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -259,7 +262,7 @@ document state, and the shape of them follows from where each thing actually bel
   a time, so a v3 build drops both on open and writes the file back without them — every
   grid and every clip gone, with nothing having said so. Guides survived an old build
   *because* scenes are the one thing passed through verbatim. These are not, so this
-  bumps. `animation.spec.ts` asserts the 4 in the saved artefact.
+  bumps. `animation.spec.ts` asserts the current version in the saved artefact.
 - **The texture key carries the grid, and the animation key carries the clip.** A Phaser
   texture's frames are cut once, when it is added, and an `Animation` is built from its
   frames at `create` time; neither can be re-cut in place. Folding a signature into the
@@ -509,7 +512,7 @@ change for that, which is the point of the shape — `activeScene`, `withActiveS
   does not: `parseProject` passes `scenes` through verbatim and validates `activeSceneId`
   against that array, so an old build opens a two-scene file on the same scene, draws it
   identically, and carries the other one back out on a re-save. Nothing is dropped and
-  nothing is undefined. `scenes.spec.ts` asserts the 5 in the saved artefact so a future
+  nothing is undefined. `scenes.spec.ts` asserts the current version in the saved artefact so a future
   bump is a deliberate act. **This stays contingent on `parseProject` not reconstructing
   the scenes field by field**, exactly as the guides decision is.
 - **The switcher is in the scene panel; duplicate and delete are in the inspector.** The
@@ -787,7 +790,7 @@ exported as real Arcade Physics, and neither is ever run here.
   fields back out on a re-save. **This stays contingent on `parseProject` not
   reconstructing scenes field by field**, exactly as the guides decision is — if it ever
   starts to, an old build silently loses every body on every save, which is data loss with
-  no crash. `physics.spec.ts` asserts the 7 in the saved artefact so a future bump is a
+  no crash. `physics.spec.ts` asserts the current version in the saved artefact so a future bump is a
   deliberate act.
 - **`physicsOf(node, topLevel)` is the only reader**, in the `guidesOf` / `frameGridOf` /
   `prefabChildrenOf` / `tileMapOf` family and answering three questions at once: may this
@@ -894,6 +897,170 @@ exported as real Arcade Physics, and neither is ever run here.
   never fires for this feature.** Every step of it is silent: the renderer, the exporter, the
   inspector and `PHYSICS_TYPES` alike. `physics.spec.ts` and `export.spec.ts` are what stand
   in for the compiler.
+
+## Audio
+
+A scene can register sounds, and the export hands each one a named handle. Nothing here
+ever makes a noise on its own.
+
+- **Registering a sound is layout; when it plays is game logic.** This is the
+  `scene.start` argument at its sharpest, because a sound is *nothing but* a thing that
+  happens over time — so if the rule were going to break anywhere it would break here. It
+  does not. `project.audio` holds the files and `scene.sounds` holds
+  `{ audioId, loop, volume, autoplay }`, and what the exporter emits is
+  `const jumpSound = this.sound.add('jump', { loop: false, volume: 1 })` and then stops.
+  `jumpSound.play()` is the user's line to write, exactly as the collider is — and this is
+  what Physics meant by emitting `mass` and `immovable` that nothing it generates reads.
+- **`autoplay` is not the `emitting` field an emitter deliberately has not got.** That one
+  was refused because `previewMotion` already answered the question and two fields over one
+  number is how they come to disagree; nothing here answers it, because the editor never
+  plays a sound. Nor is it `scene.start`: what makes *that* game logic is that the
+  destination is a choice the editor cannot know, while scene start is not a choice at all
+  — it is the one moment in a scene's life this exporter already emits a `create()` for.
+  The inspector labels it "Play on scene start" rather than "Autoplay", because the second
+  reads as the HTML `<audio autoplay>` attribute, which is a browser-policy idea a user
+  would reasonably confuse with this one.
+- **There is no `sound` node type, and the reason is bigger than the three obvious
+  ones.** `emitNode` emits `setName` unconditionally, `modifiersFor` emits `.setAlpha` and
+  `.setVisible` from fields a sound has not got, and `missingReason`'s catch-all says "no
+  image chosen" — but those are each one branch. The real cost is that a sound would be the
+  first *drawn* thing with no geometry, and "Measured bounds" and "Snapping" both rest on
+  the invariant that everything in the tree has a box: `localRectOf`, `hitAreaFor`,
+  `worldBoundsOf`, `publishMeasuredBounds`, `snapTargetsFor`, `containerBounds`, both
+  handles and `PHYSICS_TYPES` would each need a case. The particles wrapper exists (see
+  Particles) precisely because a bare `ParticleEmitter` broke that invariant, and the answer
+  there was to *give it a box* rather than teach the consumers about a boxless node. A sound
+  has no box you could give it. So it is scene state, beside `guides` and `physics`.
+- **`loop` and `volume` are on the scene entry, not on the asset — the opposite call from
+  `ImageAsset.sheet`, and worth knowing because a reader will want them together.** A frame
+  grid is a property of the *bytes*: how that image is cut, which two sprites drawing it must
+  not disagree about. A volume is a property of the *use* — one hit sound is a stinger in one
+  scene and a background layer in another — and looping is never a fact about a file.
+- **`soundsOf` is the only reader**, in the `guidesOf` / `frameGridOf` / `physicsOf` /
+  `tileMapOf` / `prefabChildrenOf` family, and it takes the project because it answers a
+  question the others do not: does this row name a sound that still exists. Everything else
+  it finds is repaired — a bad volume is clamped, a missing boolean is false — and a
+  dangling `audioId` is the one thing that costs the row, because `this.sound.add(undefined)`
+  is not something Phaser can be asked for and there is no placeholder state for a sound to
+  be. Dropping it there is what means **nothing downstream needs a guard**: `missingReason`
+  gains no branch, and `collectAudio` cannot miss. It builds a fresh array per call, so
+  `useEditorStore((s) => soundsOf(...))` is React error #185 — the `tileMapOf` trap, third
+  time.
+- **`SCHEMA_VERSION` bumped to 8, on the silent-data-loss half of the rule, and it is the
+  first bump since v4 to turn on that half rather than on a crash.** `parseProject` names
+  the project's fields one at a time, so a v7 build drops the whole `audio` table on open
+  and re-saves without it. `scene.sounds` alone would *not* have bumped it — it rides in on
+  `scenes`, verbatim, as guides and bodies do — and what makes that worse rather than
+  harmless is precisely that it survives: a v7 re-save keeps a list of sounds pointing at
+  bytes it has just thrown away. The table is what bumps this and the scene list is why the
+  bump is not a judgement call. There is no crash half at all: no new `NodeType`, so a v7
+  `createDisplayObject` has a case for everything in the file.
+- **Import allowlists on the way in, where an image's allowlist is a consequence of
+  re-encoding.** A canvas round-trip normalises every image to PNG or JPEG, which is what
+  lets the exporter and the parser stop sniffing. Web Audio decodes and does not encode, so
+  the only re-encode available is raw PCM into a WAV, which makes the file several times
+  *larger*. `audio.ts` therefore refuses anything outside its five mime types, and
+  `fileIO.ts`'s `AUDIO_DATA_URL` refuses the same set again on open — a **sibling** of
+  `ASSET_DATA_URL`, never a loosening of it, because one pattern covering both would let an
+  audio mime reach the `<img>` and the `ASSETS` literal.
+- **The cap is 2 MB, half an image's, and it is the only lever there is.** An oversized
+  image is scaled down; an oversized sound can only be refused. Audio is measured per
+  second — a minute of ordinary music outweighs a whole scene's worth of sprites — and
+  `autosave.ts`'s localStorage draft is about 5 MB for the entire project, so the cap is set
+  against that quota rather than against images' 4 MB.
+- **The import decodes before it accepts, and that decode is what a canvas round-trip is
+  for an image**: proof the stored bytes are ones a browser can read, said while the user is
+  still looking at the picker rather than in an exported game that plays nothing. It yields
+  `duration` in passing, which is stored for `ImageAsset.width`/`height`'s reason — decoding
+  is async and a panel row is not, so deriving it on demand would have every row read "—"
+  for a moment on every open.
+- **`this.sound.get(key) ?? this.sound.add(key, config)`, and the guard is not the
+  `anims.exists` one even though it looks like it.** That one buys a clean console:
+  `anims.create` on a key the manager already holds is refused with a warning. `sound.add`
+  on a duplicate key is *accepted* and answers with a second sound object — so a scene that
+  runs `create()` twice, which is the ordinary way a game returns to its menu, would end up
+  with two copies of a looping theme playing over each other. Audible, not untidy. The `??`
+  form was checked against Phaser 4's real types before being written, because `Scene.sound`
+  is a union of three managers and a union call across generic signatures is exactly what
+  TypeScript refuses; both `get` and `add` synthesise fine, and `export-toolchain.spec.ts`
+  is what keeps that true.
+- **`.play()` is its own statement and `autoplay` is not in the config literal — one
+  decision with two independent reasons.** `BaseSound.play()` answers with a boolean rather
+  than the sound, so it cannot join a constructor chain the way a Sprite's `.play` does; and
+  `autoplay` is not a `SoundConfig` key, so an excess property on a fresh object literal
+  would fail the exported `.ts` under `--strict` while the `.js` and the page both passed.
+  `modifiersFor` gains no branch and says so, by the rule that function already invokes
+  twice.
+- **`this` is hardcoded in the emit rather than `ctx.receiver`.** `receiver` exists because
+  *one* emitter runs in two places, in a Scene method and in a prefab factory; this one runs
+  in one, because a sound belongs to a scene and a definition has no scene of its own.
+  Writing `${ctx.receiver}` would read as though a factory could reach it, and the day one
+  did, its sound would be added against a key nothing in `usedIn` had loaded.
+- **Missing a preload is worse here than for an image, which is why `usedIn` grew a third
+  set rather than the gate being widened.** A texture a scene never loaded draws a
+  missing-texture square; `sound.add` on a key the cache does not hold **throws**, inside
+  `create()`, before a single object has been added. The sound block sits in the prologue
+  above the objects, so `export.spec.ts`'s existing colour assertions on the hostile project
+  are already a check that the audio path did not throw — which is why this feature needed
+  no runtime assertion about sound at all.
+- **`buildSceneClass` now gates `preload()` on the emitted body rather than on a set
+  size**, which is the smaller edit with two kinds of key and also the more correct one: a
+  set can hold an id no table matched, and a size check would emit an empty `preload() {}`.
+  That was already true of the images before there was a second way to get it wrong.
+- **Sound handles are allocated out of `create()`'s identifier set before any object draws
+  from it, and they are suffixed.** Both halves matter. Allocating first is the prefab
+  factories' rule one level down — an object the user named "jump" must not take a binding a
+  hand-written line is reaching for. Suffixing is what stops that precedence being a theft:
+  the sound gets `jumpSound`, the object keeps `jump`, and neither is `jump2` with nothing
+  saying which is which. The hostile project holds an object named "jump sound" for exactly
+  that, the way it already holds one named "arcade body".
+- **The key comes from the file name, and audio names are no more editable than image
+  names are.** An audio key is the one identifier in the whole output whose audience is a
+  person writing new code, which is a real argument for making it editable — and exactly the
+  same argument applies to a texture key today. Both or neither; this is neither, and
+  renaming belongs to an iteration whose subject is asset management. What the panel does
+  instead is *show* the derived key ("plays as jump"), since `Jump SFX (final).wav` keys as
+  `jumpSFXFinal` and nobody can guess that. `audioKeyOf` is exported from the exporter so
+  the row and the output cannot disagree about it.
+- **`collectAudio` walks no nodes and no prefab definitions**, and beside `collectAssets`
+  and `collectAnimations` — which both descend, and where not descending was a real bug that
+  exported a prefab full of sprites with no textures — that absence looks exactly like the
+  same mistake. It is not: a sound is registered by a scene, so there is nowhere in a
+  definition for one to hide. `countAudioUses` is the same shape for the same reason, and
+  `mapProjectNodes` and `mapProjectSprites` are both untouched.
+- **No `physicsNote` equivalent, and no game-config key.** `this.physics` is undefined
+  unless the config asks for Arcade; `this.sound` never is — Phaser builds a sound manager
+  for every game, and the No Audio manager accepts every call and plays nothing. So a module
+  dropped into someone else's game needs no change at all, and `exportPhaser.ts` says so in
+  a comment above `arcadeConfig`, where "no branch needed" and "forgot a branch" look
+  identical.
+- **The editor never plays a sound by itself, and audio is not on the ▶ toggle.**
+  `hasMotionIn` is untouched and says so in a comment — the second refusal it now records,
+  and the one a reader will most expect to be wrong, since a sound is obviously a thing that
+  happens over time in a way a static body is not. But that toggle exists so a canvas moving
+  by itself can be *stopped*, and a project full of sounds makes no noise there is anything
+  to stop. Auditioning is a press on a row that starts and ends inside one gesture, so there
+  is no new flag to argue about — and it means **`EditorScene.ts` is untouched by this whole
+  feature**, which a reader will otherwise go looking for the sync case of.
+- **One `HTMLAudioElement` for auditions, module-level.** Two would be two notions of what
+  is playing — the eraser rule from the tile bar and the marker rule from the emitters,
+  arriving a third time — and module-level rather than a ref so that closing the sheet or
+  switching scenes mid-play cannot strand a sound with no control left on screen. Its
+  accessible name is `Audition <name>`, never the bare file name, by the rule that already
+  gives prefab buttons a `+ ` prefix and scene chips a `Switch to `.
+- **The panel is in `SceneInspector`, with the gravity and the guides.** The prefab list
+  went into the scene panel instead because a prefab is *placed*, over and over, so reaching
+  it must not cost a deselect first; a sound is imported and tuned a handful of times in a
+  project's life. It is a scene setting, and it sits where the scene's other settings are.
+- **The suite's claims are on either side of the canvas, because there is no pixel to
+  check.** `tests/helpers/wav.ts` synthesises fixtures for `png.ts`'s reason, and WAV is
+  picked because it is the only audio format that can be built with no encoder at all — a
+  44-byte RIFF header and then the samples, which is simpler than `png.ts`'s CRCs. Keep them
+  short: every byte is base64'd into a project file, embedded again into an exported page,
+  and decoded by a real browser. And the hostile project's sounds set `autoplay: false`
+  deliberately — an autoplaying one would add an AudioContext-resume dependency to two
+  toolchain tests for no coverage, since the emitted `.play()` is one statement whose text
+  is what `export.spec.ts` asserts.
 
 ## Selection
 
@@ -1351,6 +1518,7 @@ tests/
   tilemap.spec.ts           slicing a tileset, painting it, filling and erasing
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
   physics.spec.ts           a body drawn, never simulated, and refused inside a group
+  audio.spec.ts             a sound imported, registered, saved, reopened and exported
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
@@ -1359,6 +1527,7 @@ tests/
   helpers/pixels.ts         canvas readback and colour centroids
   helpers/hostile.ts        the project made of everything a project should not contain
   helpers/png.ts            a solid-colour PNG, so image fixtures are readable in a diff
+  helpers/wav.ts            a synthesised WAV, for the same reason and with no encoder
 ```
 
 Adding a node type means adding to `editing.spec.ts` (it draws, it drags, it survives a
@@ -1374,6 +1543,15 @@ The first carries no free user text to escape and is not there for escaping: it 
 only place the emitted config literal's *shape* meets `ParticleEmitterConfig` under
 `tsc --strict`, which is where a Phaser config key renamed between versions would fail and
 nowhere else.
+
+It holds two sounds and four scene rows registering them, for the reasons the emitter and
+the bodies are there: a hostile *file name*, because that name becomes the audio cache key
+through `toIdentifier` and is the one identifier in the output a person is told to copy by
+hand; a plainly-named `jump.wav` beside an object called "jump sound", which is the only
+test that handles are allocated before object bindings are; two rows on one file, so the
+de-duplication runs; one row pointing at a sound that is not there, which only a hand-edited
+file can hold; and a third sound no scene registers at all, which is what proves the export
+carries the scene rather than the workbench.
 
 It holds five physics bodies for that same kind of reason: one dynamic with a non-default
 value in every field, because that toolchain is the only place the emitted setter chain
@@ -1591,7 +1769,21 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 Texture atlases (the asset table holds whole images cut on a regular grid; an atlas is
 named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
-than more of this one), audio, and cameras.
+than more of this one), and cameras.
+
+Audio shipped in iteration 17 with four deliberate holes. **No audio sprites** — Phaser's
+`load.audioSprite` takes a JSON of named `{ start, duration }` markers, which is a second
+sub-format inside the document with its own parser, picker and validator: the `.tmj`
+argument at a smaller scale, and the same one that keeps texture atlases out. **No `rate`,
+`detune`, `seek`, `delay`, `pan` or `mute`** — every one is a per-*play* adjustment a
+hand-written line makes on the handle this feature exists to hand it, where `loop` and
+`volume` are standing facts about how a scene uses a sound. A pure loosening later, and one
+that costs a field each and nothing else. **No spatial audio**, which would give a sound a
+position and therefore a node type, and is the thing the whole "no boxless node" argument
+above refuses. **And no stopping a sound on scene shutdown**: the handle is registered in
+`create()` and what happens to it afterwards is game logic, which is why the emitted block
+carries no `shutdown()` of its own — the one place this feature could have written the
+user's line for them and deliberately does not.
 
 Physics shipped in iteration 16 with five deliberate holes. **No simulation in the
 editor** — the argument is the whole of the Physics section above, and it is the one hole

@@ -177,9 +177,10 @@ test('a prefab survives a save and an open', async ({ editor }, testInfo) => {
   const saved = await editor.saveToFile();
   const parsed = JSON.parse(saved.contents);
   // A literal rather than the imported constant, so a bump stays a deliberate
-  // act. 7 as of particles; prefabs themselves took it to 5, which a v4 build
-  // would drop on open and re-save without.
-  expect(parsed.schemaVersion).toBe(7);
+  // act. 8 as of audio; prefabs themselves took it to 5, which a v4 build
+  // would drop on open and re-save without — the same half of the rule audio
+  // then took it to 8 on.
+  expect(parsed.schemaVersion).toBe(8);
   expect(parsed.prefabs).toHaveLength(1);
   expect(parsed.prefabs[0].name).toBe('Body');
   expect(parsed.prefabs[0].children).toHaveLength(1);

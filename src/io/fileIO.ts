@@ -2,6 +2,7 @@ import { DEFAULT_FRAME_RATE } from '../core/defaults';
 import {
   SCHEMA_VERSION,
   type AnimationClip,
+  type AudioAsset,
   type FrameGrid,
   type ImageAsset,
   type Prefab,
@@ -160,6 +161,18 @@ export class ProjectParseError extends Error {}
 const ASSET_DATA_URL = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/;
 
 /**
+ * The only data URLs a sound may carry.
+ *
+ * `ASSET_DATA_URL`'s sibling, and deliberately a second regex rather than one
+ * loosened to `data:(image|audio)/…`: the two guard different tables that reach
+ * different places, and a single pattern covering both would let an audio mime
+ * through to the `<img>` and the `ASSETS` literal, and an image through to the
+ * loader's audio path. The list is the same one `audio.ts` allows on import —
+ * one guards the picker, this guards the file.
+ */
+const AUDIO_DATA_URL = /^data:audio\/(mpeg|ogg|wav|mp4|webm);base64,[A-Za-z0-9+/]+=*$/;
+
+/**
  * An asset's frame grid, rebuilt field by field like the asset around it.
  *
  * Undefined for anything that is not four finite non-negative numbers with a
@@ -225,6 +238,47 @@ function parseAssets(raw: unknown): ImageAsset[] {
     });
   }
   return assets;
+}
+
+/**
+ * The audio table, on the terms the asset table is parsed on: drop the entry
+ * that is not usable, keep the project.
+ *
+ * The mime type is re-derived from the data URL rather than trusted from the
+ * file, exactly as `parseAssets` does — but as a lookup rather than that
+ * function's two-way ternary, because there are five of them here and a
+ * ternary's fallback would quietly relabel an OGG as an MP3. The regex has
+ * already established that the prefix is one of the five, so the map cannot
+ * miss.
+ *
+ * A scene's `sounds` list is deliberately *not* parsed here. It rides in on
+ * `scenes`, the one part of a file passed through verbatim, and `soundsOf` is
+ * its validator — the guides arrangement exactly, and the reason the scene half
+ * of this feature did not have to bump the schema version on its own.
+ */
+function parseAudio(raw: unknown): AudioAsset[] {
+  if (!Array.isArray(raw)) return [];
+
+  const table: AudioAsset[] = [];
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const asset = candidate as Partial<AudioAsset>;
+    if (typeof asset.id !== 'string' || !asset.id) continue;
+    if (typeof asset.dataUrl !== 'string' || !AUDIO_DATA_URL.test(asset.dataUrl)) continue;
+
+    table.push({
+      id: asset.id,
+      name: typeof asset.name === 'string' ? asset.name : 'sound',
+      mimeType: asset.dataUrl.slice('data:'.length, asset.dataUrl.indexOf(';')),
+      dataUrl: asset.dataUrl,
+      // A duration is a label rather than a load-bearing number, so a bad one
+      // costs the label and not the sound.
+      duration: Number.isFinite(Number(asset.duration)) && Number(asset.duration) > 0
+        ? Number(asset.duration)
+        : 0,
+    });
+  }
+  return table;
 }
 
 /**
@@ -350,6 +404,10 @@ export function parseProject(contents: string): Project {
       typeof candidate.phaserVersion === 'string' ? candidate.phaserVersion : 'unknown',
     // Absent in v1 files, which is a valid project with no images.
     assets,
+    // Absent before v8, which is a valid project that makes no noise. This is
+    // the line the version bump is about: an older build reaching this point
+    // does not have it, so it drops the table and re-saves without it.
+    audio: parseAudio(candidate.audio),
     // Absent before v4, which is a valid project whose sprites are all still.
     animations: parseAnimations(candidate.animations, assets),
     // Absent before v5, which is a valid project that uses no prefabs.
@@ -399,6 +457,9 @@ export async function openProject(): Promise<OpenResult | null> {
  * where the images are, and it is the one mechanism every browser has.
  */
 export const pickImageFile = (): Promise<File | null> => pickFileViaInput('image/*');
+
+/** The same, for a sound. `audio/*` is what opens a phone's music library. */
+export const pickAudioFile = (): Promise<File | null> => pickFileViaInput('audio/*');
 
 function pickFileViaInput(accept: string): Promise<File | null> {
   return new Promise((resolve) => {

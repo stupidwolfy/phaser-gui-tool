@@ -577,6 +577,29 @@ select {
   font-size: 11px;
 }
 
+/* One sound a scene registers: a boxed group of fields, because four controls
+   with no frame around them read as four unrelated rows the moment a second
+   sound is added. */
+.sound-row {
+  margin: 8px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.sound-row__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* The name takes the slack so the ✕ stays hard against the right edge, where
+   it is in every other row in this panel. */
+.sound-row__head .assets__name {
+  flex: 1;
+}
+
 /* ---------------------------------------------------------------- fields -- */
 
 .field {

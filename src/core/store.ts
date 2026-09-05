@@ -7,6 +7,7 @@ import {
   createNode,
   createScene,
   defaultPhysicsBody,
+  defaultSceneSound,
   newProject,
 } from './defaults';
 import {
@@ -35,8 +36,10 @@ import {
   newId,
   physicsOf,
   prefabChildrenOf,
+  soundsOf,
   worldTransformOf,
   type AnimationClip,
+  type AudioAsset,
   type FrameGrid,
   type GameObjectNode,
   type ImageAsset,
@@ -48,6 +51,7 @@ import {
   type Prefab,
   type Project,
   type SceneDoc,
+  type SceneSound,
   type SpriteProps,
   type TileCell,
   type TileMap,
@@ -336,6 +340,24 @@ export interface EditorState {
   updateAnimation: (id: string, patch: Partial<Omit<AnimationClip, 'id' | 'assetId'>>) => void;
   /** Removes a clip and stops every sprite playing it, in one undo step. */
   removeAnimation: (id: string) => void;
+
+  // -- audio -----------------------------------------------------------------
+  addAudio: (asset: AudioAsset) => void;
+  /**
+   * Removes a sound and every scene entry registering it, in one undo step.
+   *
+   * `removeAsset` settled that the document may never hold a dangling reference
+   * after any action in the editor. What differs is what is left behind: there,
+   * a sprite is an object that *has* an image, so clearing the reference leaves
+   * something on the canvas worth keeping. A `SceneSound` **is** a reference —
+   * an id and four settings for it — so when the file goes there is nothing for
+   * the entry to be, and it goes too.
+   */
+  removeAudio: (id: string) => void;
+  /** Registers a sound in the active scene, at rest. */
+  addSceneSound: (audioId: string) => void;
+  updateSceneSound: (id: string, patch: Partial<Omit<SceneSound, 'id'>>) => void;
+  removeSceneSound: (id: string) => void;
 
   // -- prefabs ---------------------------------------------------------------
   /**
@@ -1204,6 +1226,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
           // guides sharing one would have `moveGuide` and `removeGuide` reach
           // whichever scene's array they were handed first.
           guides: guidesOf(current).map((guide) => ({ ...guide, id: newId() })),
+          // And the sounds, for the reason the guides and the nodes are:
+          // `updateSceneSound` and `removeSceneSound` find an entry by id, so
+          // two scenes sharing one would have them reach whichever array they
+          // were handed first.
+          sounds: soundsOf(project, current).map((sound) => ({ ...sound, id: newId() })),
         };
         const index = project.scenes.indexOf(current);
         const scenes = [...project.scenes];
@@ -1448,6 +1475,60 @@ export const useEditorStore = create<EditorState>((set, get) => {
           { ...project, animations: project.animations.filter((clip) => clip.id !== id) },
           (props) => (props.animationId === id ? { animationId: null } : null),
         ),
+      ),
+
+    addAudio: (asset) =>
+      editProject((project) => ({ ...project, audio: [...project.audio, asset] })),
+
+    removeAudio: (id) =>
+      editProject((project) => ({
+        ...project,
+        audio: project.audio.filter((asset) => asset.id !== id),
+        // Every scene, because a sound registered in a scene the user is not
+        // looking at is exactly the dangling reference this is here to prevent.
+        // Prefabs are deliberately not walked, and that is not an oversight of
+        // the kind `removeAsset` had to fix: a definition holds nodes, and a
+        // sound is not one, so there is nowhere in a prefab for one to hide.
+        scenes: project.scenes.map((scene) => {
+          const kept = soundsOf(project, scene).filter((sound) => sound.audioId !== id);
+          // Array identity where nothing changed, which is `editProject`'s
+          // signal for "nothing happened" and therefore for "no undo step".
+          return kept.length === (scene.sounds?.length ?? 0)
+            ? scene
+            : { ...scene, sounds: kept };
+        }),
+      })),
+
+    // Through `editProject` and `withActiveScene` rather than `editScene`,
+    // because `soundsOf` validates against the project's own table and
+    // `editScene` hands its callback the scene alone.
+    addSceneSound: (audioId) =>
+      editProject((project) =>
+        withActiveScene(project, (scene) => ({
+          ...scene,
+          sounds: [...soundsOf(project, scene), defaultSceneSound(audioId)],
+        })),
+      ),
+
+    // Rebuilt rather than mutated in place, for the reason `moveGuide` is: the
+    // undo history is snapshots of this document, so an in-place edit would
+    // rewrite the past along with the present.
+    updateSceneSound: (id, patch) =>
+      editProject((project) =>
+        withActiveScene(project, (scene) => ({
+          ...scene,
+          sounds: soundsOf(project, scene).map((sound) =>
+            sound.id === id ? { ...sound, ...patch } : sound,
+          ),
+        })),
+      ),
+
+    removeSceneSound: (id) =>
+      editProject((project) =>
+        withActiveScene(project, (scene) => ({
+          ...scene,
+          sounds: soundsOf(project, scene).filter((sound) => sound.id !== id),
+        })),
       ),
 
     createPrefabFromSelection: () => {
@@ -2075,6 +2156,24 @@ export function countAssetUses(project: Project, assetId: string): number {
 }
 
 /**
+ * How many scene entries register a sound, for the removal warning.
+ *
+ * `countAssetUses`' sibling, and the two differences are worth stating because
+ * each of them looks like a mistake. It walks no nodes at all, because a sound
+ * is registered by a scene rather than held by an object; and it walks no
+ * prefab definitions, because there is nowhere in one for a sound to be.
+ * `countAssetUses` is a hand-matched list of object types that under-reports by
+ * a whole type if a case is forgotten — this has no list to forget.
+ */
+export function countAudioUses(project: Project, audioId: string): number {
+  return project.scenes.reduce(
+    (count, scene) =>
+      count + soundsOf(project, scene).filter((sound) => sound.audioId === audioId).length,
+    0,
+  );
+}
+
+/**
  * Whether anything in the project moves by itself — an animation clip, or a
  * particle emitter anywhere in it.
  *
@@ -2090,6 +2189,13 @@ export function countAssetUses(project: Project, assetId: string): number {
  * a function that walks the prefab bodies for the emitters: a body does not
  * animate the canvas, because the editor never simulates one. There is nothing
  * for a ▶ to start and nothing for it to stop.
+ *
+ * Blind to audio for the same reason, and this is the one a reader will most
+ * expect to be wrong — a sound is obviously a thing that happens over time in
+ * a way a static body is not. But this toggle exists so that a canvas moving by
+ * itself can be stopped, and the editor never plays a sound: a project full of
+ * them makes no noise there is anything to stop. Auditioning one is a press on
+ * its own row, which starts and ends inside the same gesture.
  */
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;

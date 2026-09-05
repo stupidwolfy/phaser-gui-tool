@@ -25,6 +25,7 @@ import {
   type ParticlesProps,
 } from '../core/schema';
 import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
+import { AudioSection } from './AudioPicker';
 import { TilePalette } from './TilePalette';
 import { AnimationEditor } from './AnimationEditor';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
@@ -309,6 +310,13 @@ function SceneInspector() {
       </div>
 
       <WorldSection />
+
+      {/* Here rather than in the scene panel beside the prefab list, which was
+          the other candidate: a prefab is *placed*, over and over, so reaching
+          it must not cost a deselect first, while a sound is imported and tuned
+          a handful of times in a project's life. It sits with the scene's own
+          fields, the gravity and the guides, which is what it is one of. */}
+      <AudioSection />
 
       <SnappingSection />
     </div>
