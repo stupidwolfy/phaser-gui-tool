@@ -282,15 +282,24 @@ export function cloneWithNewIds(node: GameObjectNode): GameObjectNode {
     ...node,
     id: newId(),
     transform: { ...node.transform },
-    // The spread is shallow, and a tilemap's `data` is the first prop that is
-    // an array — two copies sharing one would be a latent aliasing bug the
-    // moment anything here stopped being written immutably. Every path that
-    // copies a node runs through this one function, so it is copied here once.
-    props: node.type === 'tilemap' ? { ...node.props, data: [...node.props.data] } : { ...node.props },
-    // The same trap one field over: `physics` is an object, so the outer spread
-    // would leave the copy and the original sharing one, and editing the
-    // duplicate's bounce would edit the original's too.
+    // The spread is shallow, and a tilemap's `data` and `collides` are the only
+    // props that are arrays — two copies sharing one would be a latent aliasing
+    // bug the moment anything here stopped being written immutably. Every path
+    // that copies a node runs through this one function, so they are copied
+    // here once.
+    props:
+      node.type === 'tilemap'
+        ? {
+            ...node.props,
+            data: [...node.props.data],
+            ...(node.props.collides ? { collides: [...node.props.collides] } : {}),
+          }
+        : { ...node.props },
+    // The same trap one field over: `physics` and `controls` are objects, so the
+    // outer spread would leave the copy and the original sharing one, and
+    // editing the duplicate's bounce would edit the original's too.
     ...(node.physics ? { physics: { ...node.physics } } : {}),
+    ...(node.controls ? { controls: { ...node.controls } } : {}),
     children: node.children.map(cloneWithNewIds),
   } as GameObjectNode;
 }

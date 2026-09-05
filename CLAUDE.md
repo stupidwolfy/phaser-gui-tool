@@ -43,8 +43,10 @@ where the game looks: a per-scene camera with a scroll, a zoom, a follow target 
 scene for its bounds, drawn on the canvas as the frame it opens on and never once applied
 to the editor's own view. Iteration 19 (shipped) let an image be drawn at a size that is
 not its own: a `nineslice` panel whose corners hold while its middle stretches, and a
-`tileSprite` that repeats rather than scaling. See the README for the user-facing feature
-list.
+`tileSprite` that repeats rather than scaling. Iteration 20 (shipped) made the scene do
+something once the game runs: solid tiles, a per-scene collider table and a keyboard
+behaviour on a node — the first `update()` this exporter has ever emitted, on a canvas that
+still simulates nothing. See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -1015,6 +1017,175 @@ exported as real Arcade Physics, and neither is ever run here.
   inspector and `PHYSICS_TYPES` alike. `physics.spec.ts` and `export.spec.ts` are what stand
   in for the compiler.
 
+## Behaviour
+
+Three things that only mean anything once the game is running: which tiles are solid, which
+pairs collide, and which object the player drives. They are one feature because none of them
+is useful alone — a collider with nothing solid is half a floor, and controls with neither
+fall through it.
+
+- **The line moved; the argument did not.** For nineteen iterations `scene.start` stood for
+  everything refused: colliders, tile collision, input, anything over time. What this
+  iteration says is *where* that line falls. The document may state **standing facts about
+  the world** — what is solid, which pairs interact, which object the player drives, all of
+  them declared once at boot. It still may not state **a sequence of events** — what happens
+  when something is hit, when a scene ends, what a timer does. `setCollision`,
+  `add.collider` and a velocity read off a key are the first kind; `scene.start` is a choice
+  made at a moment and is still the user's line. A future reader adding an "on overlap,
+  destroy" field is crossing the line, not extending it.
+- **The editor still never simulates**, and nothing here is on the ▶ toggle. A body is
+  drawn and never run; a solid tile stops nothing here; a key press does nothing at all.
+  `hasMotionIn` is untouched and records its third refusal in a comment — physics, audio,
+  and now this — because that toggle exists so a canvas moving *by itself* can be stopped,
+  and none of this moves anything without a finger on a key in an exported game.
+- **`SCHEMA_VERSION` did not bump, and this is the guides case for the third time.** All
+  three additions are optional fields — `TilemapProps.collides`, `SceneDoc.colliders`,
+  `GameObjectNode.controls` — and none adds a `NodeType`. Every one rides in on `scenes`,
+  the one part of a file `parseProject` passes through verbatim, so a v9 build has a
+  `createDisplayObject` case for everything in the file, reads none of the three, draws
+  identically and carries them back out on a re-save. **Still contingent on `parseProject`
+  not reconstructing scenes field by field**, exactly as physics and cameras are.
+  `behaviour.spec.ts` asserts the 9 in the saved artefact so a future bump is deliberate.
+
+**Solid tiles** are `TilemapProps.collides: number[]` — frame indices, not cells.
+
+- **On the node, not the asset, which is the one place this contradicts
+  `ImageAsset.sheet`** — and it is the nine-slice insets' call rather than the frame grid's.
+  A grid decides how many frames an image *has*, which two maps must not disagree about;
+  solidity decides nothing about the bytes, and one tileset is a wall in the level and
+  scenery in the layer behind it. Frames rather than cells for the same kind of reason: a
+  wall tile is a wall wherever it was painted, and a per-cell flag would be a second array
+  the length of `data` for a distinction nobody draws.
+- **`tileMapOf` answers a fifth question**, and it drops an index the tileset does not have
+  rather than clamping it — the treatment an out-of-range *tile* already gets, and for its
+  reason: a re-cut must be able to blank the answer and hand it back whole rather than
+  rewriting what the user marked over a mistyped margin. Array identity is preserved when
+  the document's list is already normalised, or `editProject`'s "nothing happened" contract
+  breaks. `collides` is the second array-valued prop in the schema, so `cloneWithNewIds`
+  gained its second copy — `data` is no longer the only one.
+- **`removeAsset` leaves it alone**, exactly as it already leaves a tilemap's tile indices:
+  both still mean something the moment another tileset is picked.
+- **Drawn by `drawPaintGrid`, deliberately not by `drawBodies`.** That is the load-bearing
+  choice and the one a reader will want to reverse. `drawBodies` runs every frame and walks
+  the scene's children; a map is up to `MAX_TILEMAP_SIDE` squared cells, so a per-cell pass
+  there is sixty-five thousand fills a frame for a mark nobody is looking at while they
+  place a sprite. `drawPaintGrid` is signature-gated, so it costs that once per change —
+  and paint mode is where a person is deciding which tiles are walls. Outside the mode the
+  palette's own badges are what say which frames are solid. `data` and `collides` join that
+  signature **by identity**, because `tileMapOf` hands back the document's own arrays when
+  they are well formed and joining sixty-five thousand numbers into a string every frame is
+  the cost the gating exists to avoid.
+- **The mark is an outline over a wash, not the wash alone.** A translucent fill is a blend
+  of the tile's colour and the body green and lands on neither, so a solid tile would be
+  visible to a person and invisible to the colour assertion that proves it is drawn. This
+  is the "a one-pixel line never reaches full strength" trap wearing the opposite face, and
+  it cost the first version of `behaviour.spec.ts`.
+- **The export is `layer.setCollision([...])` inside the tilemap helper**, guarded on a
+  non-empty list because `setCollision([])` is a line that says nothing and most maps have
+  none. The list is emitted **inline at the call site** while the tile data stays in
+  `TILEMAPS`, and the split is the one that table was created by: the data is thousands of
+  numbers and the thing a reader moves out to a JSON file, while which frames are walls is
+  a handful of them and a fact about the tileset rather than about this level. Tabling it
+  would turn every row from an array into an object for one short line.
+
+**Colliders** are `SceneDoc.colliders: SceneCollider[]`, the fifth optional field on a scene.
+
+- **This is the line iteration 16 told the user to write by hand**, and the reason
+  `PhysicsBody` carries a `mass` and an `immovable` that nothing generated ever read. Those
+  two are now read by something this exporter emits.
+- **`collidersOf` is the only reader**, in the `guidesOf` / `physicsOf` / `soundsOf` /
+  `cameraOf` / `tileMapOf` family, and it takes `soundsOf`'s split rather than `cameraOf`'s
+  because there is nothing here to repair: a row is two references and a word.
+  `physics.add.collider(undefined, x)` is not something Phaser can be asked for, and unlike
+  a sprite with a missing image there is no placeholder state a collider could be in. Four
+  things cost a row — a side that is not a direct child of the scene, a side that is neither
+  a body nor a tilemap, the same node twice, and two tilemaps. The last is not tidiness:
+  **it is what keeps `physicsUsedIn` correct with no edit**, since a surviving row then
+  implies a body and the world it needs is already switched on.
+- **A tilemap is a valid side without being in `PHYSICS_TYPES`**, because a layer collides
+  through its solid tiles rather than through a body. That is the same sentence
+  `PHYSICS_TYPES`' comment used to give as the reason a tilemap gets nothing.
+- **Nothing prunes a dangling row**, exactly as nothing prunes a dangling `followId` or
+  `audioId`: `deleteNode`, `undo` and the scene switcher are all untouched. `duplicateScene`
+  is again the one place that has to think, and it uses the camera's index trick — the two
+  child lists are the same list in the same order, so no id map is built.
+- **Emitted in the epilogue, with the camera's `startFollow`**, because a collider names
+  bindings the object list has just made. `buildCreateBody` already kept `bindings` for the
+  camera, so this is a second consumer of an existing map — and `startFollow` is no longer
+  the only thing this exporter emits after the objects. A row whose side emitted no object
+  gets a comment, which is `missingReason`'s treatment and the follow's.
+- **The document stores `collide`; the exporter writes `collider`.** `ArcadeFactory`'s
+  method is `collider`, and "collide" is the word on the row a person reads. One is the
+  word and one is the API, and conflating them emits a method that does not exist — which
+  is what the first version did.
+
+**Controls** are `GameObjectNode.controls: NodeControls`, beside `physics` for `physics`'
+reason: not per-type, so not in `props`.
+
+- **`controlsOf(node, topLevel)` is the only reader**, and it is the physics rule arriving a
+  third time after the body and the camera's follow target: only a **top-level** node with a
+  **dynamic** body may be driven. A velocity moves an object in world coordinates and a node
+  inside a container has parent-relative ones; a `StaticBody` has no velocity at all.
+  Enforced the same way — **strip on read, refuse on write** — so a node dragged into a
+  group and back out keeps its controls, and `moveNode`, `groupSelection` and the tree's
+  drag-to-nest each need no guard. A prefab definition's children are container children by
+  the same mechanism, so this bans a driven node there with no second check and
+  `buildFactories` gained nothing.
+- **Two modes, not a row of booleans.** Top-down moves on four axes and never jumps; a
+  platformer moves on two and jumps, and only while `body.blocked.down` — Arcade's own flag
+  for "there is something under me this step", which is exactly the solid tile or the
+  collider. The combinations in between are ones nobody asks for and the exporter would have
+  to answer for.
+- **The mark on the canvas is two filled arrows, and filled is not a style choice.** It is
+  the emitter marker's rule arriving a second time: a thin line never reaches full strength
+  on screen, so an outlined arrow is hard to see under a thumb and — a diagonal being
+  antialiased along its whole length — very nearly invisible to a colour assertion. The
+  first version drew chevrons and moved a pure-green pixel count by six percent.
+- **The export is the first `update()` this project has ever emitted**, plus a keyboard
+  block in `create()`'s prologue and one `this.<field> = <binding>;` in the epilogue — the
+  third thing emitted after the objects, and the one with no alternative at all, since
+  `update()` runs outside `create()`'s scope. Gated on the emitted body exactly as
+  `preload()` is, so a project with nothing driven exports byte for byte what it exported
+  before.
+- **The `this.<field>` names come out of a set seeded with `SCENE_MEMBERS`**, which is the
+  prefab factories' precedence rule one namespace over: `this.player` lands beside
+  `this.physics` and `this.input`, so an object a user called "input" must not take a
+  property the line beside it reaches through. The keyboard fields are allocated before any
+  object's, as sound handles already are.
+- **The emitted block narrows with a plain `if`, and this is the constraint that shapes all
+  of it.** `this.input.keyboard` is `KeyboardPlugin | null` under `--strict`, and the
+  `create()`/`update()` body is the *same plain JavaScript* in the `.ts`, the `.js` and the
+  runnable page — so it can carry no `!`, no cast and no annotation. `const keyboard =
+  this.input.keyboard; if (keyboard) { … }` is valid in all three. `update()` guards each
+  driven object the same way with an `if` rather than an early `return`, so a second driven
+  object is still updated when the first is somehow missing.
+- **A WASD set is emitted as a whole `CursorKeys`**, six keys including `space` and `shift`,
+  and that is a type decision: `Phaser.Types.Input.Keyboard.CursorKeys` names all six and
+  none of them is optional, so a four-key literal could not be given that type.
+  `addKeys('W,A,S,D')` was the other route and is worse — its declared return is a bare
+  `object`, so every property access below it fails under `--strict`.
+- **Only the `.ts` declares the fields**, typed `… | undefined` rather than with a `!`,
+  which is what satisfies `strictPropertyInitialization` with no syntax the shared body
+  could not also carry. That is the existing `.ts`/`.js` difference — the `: void`s and the
+  factory parameter types — rather than a new kind of one.
+- **No game-config key and no header note**, unlike Arcade. `this.input.keyboard` is built
+  for every game that has a keyboard to read, so a module dropped into someone else's game
+  needs no change; it is nullable rather than absent, which is what the `if` above is for.
+  Said in the comment block beside `arcadeConfig`, where the audio and camera refusals are
+  already recorded and where "no branch needed" and "forgot a branch" look identical.
+- **`constructorFor` gains no case, so every step of this feature is silent** — the
+  renderer, the exporter, the inspector and the store alike. `behaviour.spec.ts` and
+  `export.spec.ts` are what stand in for the compiler, exactly as they are for physics and
+  cameras. The one thing only the *toolchain* spec can catch is the emitted `update()`
+  meeting `CursorKeys` and `Body` under `tsc --strict`, which is why the hostile project's
+  driven node has a non-default value in every field.
+- **The suite's positive claims are on the far side of the export**, because the editor
+  refuses to run any of this. "It lands" and "it plays" are in `export.spec.ts` beside "the
+  exported page runs the physics it was given"; `behaviour.spec.ts` carries only what the
+  canvas can be asked. And "it lands" asserts *where the object came to rest* rather than
+  *whether it has stopped moving* — a settled-yet reading compares two shots milliseconds
+  apart and goes red on a loaded machine for a reason that is not the collider.
+
 ## Audio
 
 A scene can register sounds, and the export hands each one a named handle. Nothing here
@@ -1765,6 +1936,7 @@ tests/
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   physics.spec.ts           a body drawn, never simulated, and refused inside a group
+  behaviour.spec.ts         solid tiles, a collision row, and an object the keys drive
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
   camera.spec.ts            a camera drawn, clamped, followed, saved and exported
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
@@ -2024,6 +2196,21 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
+Collisions and controls shipped in iteration 20 with four deliberate holes. **Nothing
+happens when two things touch** — no collider callback, no destroy-on-overlap, no scene
+transition. That is not deferred work but the line the whole iteration is drawn against:
+which pairs interact is a standing fact and what follows a touch is a sequence of events,
+so the export hands over the overlap and the line inside it stays the user's. A rule table
+of triggers and actions is the shape a later iteration would take, and it is a behaviour
+model rather than more of this one. **No touch or on-screen controls**, which is the honest
+hole for a mobile-first tool: the editor works under a thumb and the exported game's input
+is a keyboard. A pure loosening later — a third `scheme` and a pair of emitted zones — and
+it needs nothing about the format to change first. **No collision groups and no
+`setCollisionBetween` ranges**: a group is a second way of naming a set of objects that the
+scene tree already names one at a time, and a range is `collides` written shorter. **And no
+per-tile properties beyond solid** — a tile is a wall or it is not, and anything finer (ice,
+a one-way platform, damage) is the beginning of the behaviour model the first hole refuses.
+
 Texture atlases: the asset table holds whole images cut on a regular grid, and an atlas is
 named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
 than more of this one.
@@ -2070,12 +2257,14 @@ above refuses. **And no stopping a sound on scene shutdown**: the handle is regi
 carries no `shutdown()` of its own — the one place this feature could have written the
 user's line for them and deliberately does not.
 
-Physics shipped in iteration 16 with five deliberate holes. **No simulation in the
+Physics shipped in iteration 16 with five deliberate holes, one of which
+iteration 20 then closed. **No simulation in the
 editor** — the argument is the whole of the Physics section above, and it is the one hole
 here that is not a loosening: running the world rewrites the document, so "add a play
-button" is not a smaller version of this, it is a different editor. **No colliders or
-overlap callbacks** — which two objects collide is game logic, the `scene.start` argument,
-and it is also what `mass` and `immovable` are emitted for. **No circular bodies** —
+button" is not a smaller version of this, it is a different editor. **No colliders**, which
+is the one that closed: `SceneCollider` is that line now, and what stayed refused is the
+*callback* — see Behaviour above for where the line moved to and why. **No circular
+bodies** —
 `setCircle(radius, offsetX, offsetY)` defaults its offsets to the body's *current* offset
 rather than to centred, so a bare `setCircle(r)` parks the circle in the corner of a
 non-square object; getting it right means a radius and two offsets, and the radius is a
@@ -2100,14 +2289,17 @@ a format break, and the editor's whole clip story is built around a Sprite's
 array-valued prop in the schema and the second `cloneWithNewIds` special case, for a look a
 single frame mostly covers.
 
-Tilemaps shipped in iteration 14 with three deliberate holes: **one layer per map**, **no
-per-tile collision**, and **no Tiled import**. The first is a loosening rather than a
-format break — `TilemapProps` would grow a list of layers where it has one `data`, and the
-exporter a `createLayer` per entry — but each one is its own `putTileAt` diff and a layer
-picker in the paint bar, which is a second mode inside a mode. The second is game logic
-rather than layout, and the argument that keeps `scene.start` out of the document applies
-unchanged: `setCollision([1, 2, 3])` is a line the user writes, and a per-tile flag in the
-schema is the beginning of a behaviour model. Tiled import is not a loosening at all — a
+Tilemaps shipped in iteration 14 with three deliberate holes, one of which iteration 20
+then closed: **one layer per map**, **no per-tile collision**, and **no Tiled import**. The
+first is a loosening rather than a format break — `TilemapProps` would grow a list of layers
+where it has one `data`, and the exporter a `createLayer` per entry — but each one is its
+own `putTileAt` diff and a layer picker in the paint bar, which is a second mode inside a
+mode. The second is the one that closed, and it is worth reading what it used to say —
+"`setCollision([1, 2, 3])` is a line the user writes, and a per-tile flag in the schema is
+the beginning of a behaviour model" — beside where the line actually landed: which tiles are
+solid turned out to be a standing fact about the world, and what a solid tile *does* to
+whatever hits it is still nowhere in this schema. See Behaviour above. Tiled import is not a
+loosening at all — a
 `.tmj` carries named tilesets, object layers, per-tile properties and orientations this
 schema has nowhere to put, so it is a second document format rather than more of this one.
 

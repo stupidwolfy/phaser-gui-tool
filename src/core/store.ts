@@ -23,9 +23,12 @@ import {
   cameraOf,
   canHavePhysics,
   clampFrame,
+  collidersOf,
   composeTransform,
   containsInstance,
   containsNode,
+  controlsOf,
+  defaultControls,
   findAsset,
   findNode,
   findParent,
@@ -48,11 +51,13 @@ import {
   EMPTY_TILE,
   MAX_TILEMAP_SIDE,
   tileMapOf,
+  type NodeControls,
   type NodeType,
   type PhysicsBody,
   type Prefab,
   type Project,
   type SceneCamera,
+  type SceneCollider,
   type SceneDoc,
   type SceneSound,
   type SpriteProps,
@@ -469,10 +474,11 @@ export interface EditorState {
    * `guides` is excluded alongside `children` and `id`: they have their own
    * four actions below, and one patch path that could also rewrite the array
    * wholesale is how a second, undocumented way to edit them appears. `camera`
-   * is excluded for the same reason and has `setCamera` below.
+   * and `colliders` are excluded for the same reason and have `setCamera` and
+   * the three collider actions below.
    */
   updateScene: (
-    patch: Partial<Omit<SceneDoc, 'children' | 'id' | 'guides' | 'camera'>>,
+    patch: Partial<Omit<SceneDoc, 'children' | 'id' | 'guides' | 'camera' | 'colliders'>>,
   ) => void;
 
   // -- camera ----------------------------------------------------------------
@@ -504,6 +510,29 @@ export interface EditorState {
    */
   setNodePhysics: (id: string, patch: Partial<PhysicsBody> | null) => void;
 
+  // -- behaviour -------------------------------------------------------------
+  /**
+   * Adds, edits or removes what the player drives a node with. `null` removes
+   * it.
+   *
+   * It reaches into `scene.children` directly for `setNodePhysics`' reason, and
+   * it is the same rule: only a top-level node with a dynamic body can be
+   * driven, so a nested one is simply not in the array this searches. There is
+   * no second place to remember the guard.
+   */
+  setNodeControls: (id: string, patch: Partial<NodeControls> | null) => void;
+  /**
+   * Adds a collider row between two nodes, or edits or removes one.
+   *
+   * A row is added already pointing at the two nodes the caller names, which is
+   * what the inspector's "+ Collision" button has to hand — because a row naming
+   * nothing has nothing for `collidersOf` to keep, so there would be no row on
+   * screen to then fill in.
+   */
+  addCollider: (aId: string, bId: string) => void;
+  updateCollider: (id: string, patch: Partial<Omit<SceneCollider, 'id'>>) => void;
+  removeCollider: (id: string) => void;
+
   // -- tilemaps --------------------------------------------------------------
   /**
    * Lays `tile` in each of the given cells, or clears them when it is
@@ -528,6 +557,13 @@ export interface EditorState {
    * causes it.
    */
   resizeTilemap: (nodeId: string, columns: number, rows: number) => void;
+  /**
+   * Marks one of the tileset's frames solid, or lets it go back to being
+   * scenery. Which *frames* are solid, never which cells: a wall tile is a wall
+   * wherever it was painted, and a per-cell flag would be a second array the
+   * length of `data` for a distinction nobody draws.
+   */
+  setTileSolid: (nodeId: string, tile: number, solid: boolean) => void;
 
   // -- guides ----------------------------------------------------------------
   /**
@@ -1267,6 +1303,23 @@ export const useEditorStore = create<EditorState>((set, get) => {
             ...camera,
             followId: index < 0 ? null : copy.children[index].id,
           };
+        }
+        // And the colliders, whose two sides name nodes just cloned — the
+        // camera's argument twice over, and the same index trick. A row left
+        // pointing into the scene it was copied from is one `collidersOf`
+        // would drop on the next read, which is a collider silently lost on a
+        // duplicate.
+        if (current.colliders !== undefined) {
+          const side = (id: string) => {
+            const at = current.children.findIndex((child) => child.id === id);
+            return at < 0 ? id : copy.children[at].id;
+          };
+          copy.colliders = collidersOf(current).map((collider) => ({
+            ...collider,
+            id: newId(),
+            aId: side(collider.aId),
+            bId: side(collider.bId),
+          }));
         }
         const index = project.scenes.indexOf(current);
         const scenes = [...project.scenes];
@@ -2082,6 +2135,61 @@ export const useEditorStore = create<EditorState>((set, get) => {
         return { ...scene, children };
       }),
 
+    setNodeControls: (id, patch) =>
+      editScene((scene) => {
+        // `scene.children` directly, which *is* the top-level rule — the same
+        // shape `setNodePhysics` uses and for the same reason.
+        const index = scene.children.findIndex((child) => child.id === id);
+        if (index < 0) return scene;
+        const node = scene.children[index];
+        // A static body has no velocity to set, so there is nothing here to
+        // switch on. `controlsOf` says the same thing on the way out.
+        const body = physicsOf(node, true);
+        if (body === null || body.kind !== 'dynamic') return scene;
+
+        let next: GameObjectNode;
+        if (patch === null) {
+          if (!node.controls) return scene;
+          const stripped = { ...node } as GameObjectNode;
+          delete stripped.controls;
+          next = stripped;
+        } else {
+          const base = controlsOf(node, true) ?? defaultControls();
+          next = { ...node, controls: { ...base, ...patch } } as GameObjectNode;
+        }
+
+        const children = [...scene.children];
+        children[index] = next;
+        return { ...scene, children };
+      }),
+
+    addCollider: (aId, bId) =>
+      editScene((scene) => ({
+        ...scene,
+        colliders: [...collidersOf(scene), { id: newId(), aId, bId, kind: 'collide' }],
+      })),
+
+    // A row is rebuilt rather than mutated, for the reason `moveGuide` is: the
+    // undo history is snapshots of the document, so an in-place edit rewrites
+    // the past as well as the present.
+    updateCollider: (id, patch) =>
+      editScene((scene) => {
+        const colliders = collidersOf(scene);
+        const index = colliders.findIndex((collider) => collider.id === id);
+        if (index < 0) return scene;
+        const next = [...colliders];
+        next[index] = { ...colliders[index], ...patch, id };
+        return { ...scene, colliders: next };
+      }),
+
+    removeCollider: (id) =>
+      editScene((scene) => {
+        const colliders = collidersOf(scene);
+        const next = colliders.filter((collider) => collider.id !== id);
+        if (next.length === colliders.length) return scene;
+        return { ...scene, colliders: next };
+      }),
+
     paintTiles: (nodeId, cells, tile) =>
       editProject((project) =>
         editTilemapProps(project, nodeId, (map) => {
@@ -2132,6 +2240,23 @@ export const useEditorStore = create<EditorState>((set, get) => {
               : EMPTY_TILE;
           });
           return { columns: nextColumns, rows: nextRows, data };
+        }),
+      ),
+
+    setTileSolid: (nodeId, tile, solid) =>
+      editProject((project) =>
+        editTilemapProps(project, nodeId, (map) => {
+          const index = Math.floor(tile);
+          if (!Number.isFinite(index) || index < 0 || index >= map.tileCount) return null;
+          const has = map.collides.includes(index);
+          if (has === solid) return null;
+          // Ascending, which is the order `tileMapOf` normalises to — so a
+          // round trip through the reader changes nothing and the emitted
+          // `setCollision` reads the same whichever order they were marked in.
+          const collides = solid
+            ? [...map.collides, index].sort((a, b) => a - b)
+            : map.collides.filter((current) => current !== index);
+          return { collides };
         }),
       ),
 

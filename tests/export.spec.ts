@@ -429,6 +429,138 @@ test('the exported page runs the physics it was given', async ({ editor, page },
   await run.close();
 });
 
+test('the exported page lands on what it was told is solid', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // Built through the UI, exactly as the falling test above is and for its
+  // reason: this is the one assertion that the *whole* chain arrived — the
+  // world, two bodies, and the collider emitted after the object list. A
+  // store-level check would pass on a row that reached the document and never
+  // reached Arcade.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Faller');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 80);
+  await editor.setPhysics(true);
+  await editor.deselect();
+
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Ledge');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 400);
+  await editor.setField('Width', 400);
+  await editor.setField('Height', 60);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body', 'Static — never moves');
+  await editor.deselect();
+
+  await editor.setGravity(0, 900);
+  await editor.addCollider('Faller', 'Ledge');
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain('this.physics.add.collider(faller, ledge);');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('collide'), exported.contents);
+
+  const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+
+  // Twice over the ~0.73s the fall itself takes at 900px/s², so what is being
+  // measured is where it came to rest rather than where it had got to.
+  await run.page.waitForTimeout(1500);
+  const shot = await run.page.locator('canvas').screenshot();
+  const landed = await findColor(run.page, shot, RECT_FILL);
+  const ledge = await findColor(run.page, shot, ELLIPSE_FILL);
+
+  expect(landed.count).toBeGreaterThan(100);
+  // Where it ended up rather than whether it had stopped moving, which is the
+  // same claim without a stopwatch in it: a "has it settled" reading compares
+  // two shots taken milliseconds apart and goes red on a loaded machine for a
+  // reason that is not the collider. It fell — it started near the top — and it
+  // is *above* the ledge, where without the collider it would have gone
+  // straight through and come to rest on the world bounds below it.
+  expect(landed.y).toBeGreaterThan(before.y + 20);
+  expect(landed.y).toBeLessThan(ledge.y);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('the exported page plays the object it was given controls', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // The only assertion that the emitted `update()` is real. Everything else
+  // about controls is text, and text that compiles is not text that runs.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Walker');
+  await editor.setField('X', 200);
+  await editor.setField('Y', 270);
+  await editor.setPhysics(true);
+  await editor.setPhysicsFlag('Affected by gravity', false);
+  await editor.setControls(true);
+  await editor.setField('Walk speed', 300);
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain('createCursorKeys()');
+  expect(exported.contents).toContain('update() {');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('drive'), exported.contents);
+
+  const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+
+  // Held rather than pressed: the emitted block reads `isDown` every frame, so
+  // a keydown/keyup pair inside one frame is a press the game never sees.
+  await run.page.locator('canvas').click();
+  await run.page.keyboard.down('ArrowRight');
+  await run.page.waitForTimeout(500);
+  await run.page.keyboard.up('ArrowRight');
+
+  const after = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+  expect(after.count).toBeGreaterThan(100);
+  // At 300px/s it travels ~150 scene pixels in half a second, before the canvas
+  // scale is accounted for. Sideways only: gravity is off, so a vertical move
+  // would mean the wrong axis was driven.
+  expect(after.x).toBeGreaterThan(before.x + 20);
+  expect(Math.abs(after.y - before.y)).toBeLessThan(10);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('a hostile project emits its solid tiles and only the collisions it can', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+
+  // Normalised by `tileMapOf` on the way out: the document holds
+  // `[2, 0, 2, 99]`, and 99 is not a frame this tileset has.
+  expect(exported.contents).toContain(', [0, 2])');
+  expect(exported.contents).toContain('if (solid.length) layer.setCollision(solid);');
+
+  // Two of the fixture's seven rows are emitted, one is a comment, and the
+  // other four name something `collidersOf` refuses — a dangling id, the same
+  // node twice, a node inside a group, and two layers. None may leave a trace.
+  const calls = exported.contents.match(/this\.physics\.add\.(collider|overlap)\(/g) ?? [];
+  expect(calls).toHaveLength(2);
+  expect(exported.contents).toContain('// A collider names an object that could not be added.');
+
+  // The driven node is the hostilely named one, so its `this.<field>` has been
+  // through `toIdentifier` — and the nested and in-prefab controls the fixture
+  // also holds are stripped on read, so there is exactly one driven object.
+  const fields = exported.contents.match(/^\s+private \w+: Phaser\.GameObjects\.GameObject/gm) ?? [];
+  expect(fields).toHaveLength(1);
+  // Only the scene that has one gets an `update()`; the second scene has no
+  // driven object and so no method at all.
+  expect(exported.contents.match(/update\(\): void \{/g) ?? []).toHaveLength(1);
+});
+
 test('sounds are tabled once, loaded per scene, and named without collision', async ({
   editor,
 }, testInfo) => {

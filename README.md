@@ -171,9 +171,33 @@ out, `this.physics.world.gravity.set(...)` and `setBounds(...)` per scene. The r
 page enables Arcade in its own game config; a `.ts` or `.js` module cannot, so it says at
 the top what to add to yours.
 
-What it deliberately leaves to you is the **collider**: which two objects actually collide
-is a line of game logic, so the export sets each body up and you write
-`this.physics.add.collider(ball, platform)`.
+### Making it play
+
+Three things turn a scene into something you can actually play, and all three are settings
+rather than code.
+
+**Solid tiles.** Under Collision in a tilemap's inspector, pick the frames of its tileset
+that should stop things — walls, floors. They outline green on the map while you paint, and
+export as `layer.setCollision([...])`.
+
+**Collisions.** Under Collisions in the scene panel, name two things that should meet:
+Solid stops them, Overlap only reports the touch. A tilemap is a valid side, so "the player
+stands on the ground" is one row. It exports as a real `this.physics.add.collider(...)` or
+`overlap(...)`, written after the objects it names.
+
+**Controls.** Any object with a dynamic body can be given **Player controls** — Platformer
+(walk and jump) or Top-down (walk any way), on the arrow keys or WASD, with a walk speed and
+a jump speed. Green arrows on the body outline say which object the keys drive. It exports as an
+`update()` method that reads the keys and sets a velocity, with the jump gated on there being
+something underneath — which is what the solid tiles and the collisions are for.
+
+None of it runs in the editor. Nothing moves, nothing collides and no key does anything
+while you are placing objects: the document is what you are editing. Export the runnable
+page to play it.
+
+What is still deliberately yours is what *happens* — a coin that disappears, a scene that
+starts the next one. The export hands you the overlap and the handles; the line inside it is
+game logic and stays where you write it.
 
 ### Saving
 
@@ -184,7 +208,7 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; nineteen iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; twenty iterations in, it is a
 working editor but a small one.
 
 **Not built yet** — texture atlases. Panels and tiled images are in, with three limits: a
@@ -196,11 +220,14 @@ offset or dead zone, no way to grab the camera frame on the canvas, and no butto
 points your own view through it. Audio is in, with four limits: no audio
 sprites, no per-play settings like rate or pan (those belong on the handle, in the line you
 write), no positional sound, and nothing stops a sound when a scene ends. Physics is in,
-with four limits:
-nothing is simulated in the editor, there are no colliders (the one line you write
-yourself), bodies are rectangles rather than circles, and only an object at the top level
-of a scene can have one — a body is positioned in world coordinates, and an object inside a
-group is not.
+with three limits:
+nothing is simulated in the editor, bodies are rectangles rather than circles, and only an
+object at the top level of a scene can have one — a body is positioned in world coordinates,
+and an object inside a group is not.
+Collisions and controls are in, with three limits: nothing happens *when* two things touch
+(that line is yours, on the collider the export hands back), the keys are a keyboard and
+there are no on-screen controls for a phone, and a tile is either solid or it is not — there
+are no per-tile properties beyond that.
 Scenes are in, with one limit: nothing in the editor starts one scene from another, since
 that is a line of game logic rather than a piece of layout — the export registers them all
 and leaves `this.scene.start('Level 2')` to you. Prefabs are in, with two limits: a prefab cannot contain another prefab,
