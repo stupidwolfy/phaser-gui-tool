@@ -210,7 +210,7 @@ test('saves a file, starts over, and reopens it', async ({ editor, page }, testI
   // A literal rather than the imported constant: the point is that a bump is
   // noticed and made deliberately, which comparing the code against itself
   // could never catch. 8 as of audio.
-  expect(parsed.schemaVersion).toBe(8);
+  expect(parsed.schemaVersion).toBe(9);
   const names = parsed.scenes[0].children.map((node: { name: string }) => node.name);
   expect(names).toContain('Marker');
 

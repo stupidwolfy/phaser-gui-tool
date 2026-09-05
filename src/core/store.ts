@@ -1377,7 +1377,25 @@ export const useEditorStore = create<EditorState>((set, get) => {
               }
               return null;
             }
+            // Three branches rather than one condition over three types, and
+            // that is TypeScript's doing rather than a style choice: the
+            // discriminated union only narrows `props` when the check names one
+            // type, so a combined test widens the spread to a union of all
+            // three and the result matches none of them.
+            //
+            // A panel keeps its insets and its box, and a tile sprite its
+            // offset and tile scale: those describe how the *object* is built,
+            // not which picture it was built from, and they mean the same thing
+            // again the moment another image is chosen. Only the frame goes,
+            // for the reason it goes on an emitter — an index into a grid that
+            // is no longer there.
             if (node.type === 'particles' && node.props.assetId === id) {
+              return { ...node, props: { ...node.props, assetId: null, frame: 0 } };
+            }
+            if (node.type === 'nineslice' && node.props.assetId === id) {
+              return { ...node, props: { ...node.props, assetId: null, frame: 0 } };
+            }
+            if (node.type === 'tileSprite' && node.props.assetId === id) {
               return { ...node, props: { ...node.props, assetId: null, frame: 0 } };
             }
             if (node.type === 'tilemap' && node.props.assetId === id) {
@@ -2201,14 +2219,17 @@ export function countAssetUses(project: Project, assetId: string): number {
   let count = 0;
   const walk = (nodes: GameObjectNode[]) => {
     for (const node of nodes) {
-      // A tilemap uses its tileset and an emitter its particle texture exactly
-      // as a sprite uses its image, and the count is what the removal warning
-      // says out loud — so leaving either out would under-report by a whole
-      // object type.
+      // A tilemap uses its tileset, an emitter its particle texture, and a
+      // panel and a tile sprite the picture they are cut from and repeat —
+      // exactly as a sprite uses its image. The count is what the removal
+      // warning says out loud, so leaving any of them out would under-report by
+      // a whole object type.
       if (
         (node.type === 'sprite' ||
           node.type === 'tilemap' ||
-          node.type === 'particles') &&
+          node.type === 'particles' ||
+          node.type === 'nineslice' ||
+          node.type === 'tileSprite') &&
         node.props.assetId === assetId
       ) {
         count += 1;

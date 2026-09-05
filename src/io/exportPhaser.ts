@@ -11,6 +11,7 @@ import {
   isDefaultCamera,
   physicsOf,
   scenePhysicsOf,
+  sliceInsetsOf,
   soundsOf,
   tileMapOf,
   type AnimationClip,
@@ -274,9 +275,15 @@ function collectAssets(
       // there is nothing here for a grid to gate. Leaving emitters out is the
       // failure worth naming — an export that boots, runs, and throws
       // missing-texture squares.
+      //
+      // A panel and a tile sprite go the emitter's way rather than the
+      // tileset's, and for the same reason: frame 0 of a one-frame texture is
+      // the whole picture, which is a perfectly good source for either.
       const assetId =
         node.type === 'sprite' ||
         node.type === 'particles' ||
+        node.type === 'nineslice' ||
+        node.type === 'tileSprite' ||
         (node.type === 'tilemap' && frameGridOf(findAsset(project, node.props.assetId)))
           ? node.props.assetId
           : null;
@@ -471,6 +478,10 @@ function collectAnimations(
   const used = new Map<string, UsedAnimation>();
   const keys = new Set<string>();
 
+  // Only a sprite, and that is a fact about Phaser rather than a list that
+  // could go stale: a `NineSlice` and a `TileSprite` carry no AnimationState, so
+  // neither can play a clip and neither has an `animationId` to find. The same
+  // is why `usedIn`'s animation half gained nothing for them.
   const walk = (nodes: GameObjectNode[]) => {
     for (const node of nodes) {
       if (node.type === 'sprite' && node.props.animationId && !used.has(node.props.animationId)) {
@@ -530,7 +541,10 @@ function usedIn(
       // tilemap or an emitter missing from either is built on a texture the
       // scene never loaded, which throws before anything is drawn.
       if (
-        (node.type === 'tilemap' || node.type === 'particles') &&
+        (node.type === 'tilemap' ||
+          node.type === 'particles' ||
+          node.type === 'nineslice' ||
+          node.type === 'tileSprite') &&
         node.props.assetId
       ) {
         assets.add(node.props.assetId);
@@ -904,6 +918,35 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
         ? `${receiver}.add.image(${num(x)}, ${num(y)}, ${str(entry.key)})`
         : `${receiver}.add.image(${num(x)}, ${num(y)}, ${str(entry.key)}, ${num(frame)})`;
     }
+    case 'nineslice': {
+      const entry = node.props.assetId ? used.get(node.props.assetId) : undefined;
+      if (!entry) return null;
+      const p = node.props;
+      const insets = sliceInsetsOf(entry.asset, p);
+      // Emitted whole, insets included, and deliberately unlike `modifiersFor`,
+      // which emits only what differs from Phaser's defaults. These four
+      // numbers only mean anything beside each other and beside the box they
+      // are cut against — a reader widening the panel wants to see what is
+      // holding its corners — so this is the emitter config's call and the
+      // physics body's, not the chained modifier's.
+      return (
+        `${receiver}.add.nineslice(${num(x)}, ${num(y)}, ${str(entry.key)}, ` +
+        `${num(clampFrame(entry.asset, p.frame))}, ${num(p.width)}, ${num(p.height)}, ` +
+        `${num(insets.left)}, ${num(insets.right)}, ${num(insets.top)}, ${num(insets.bottom)})`
+      );
+    }
+    case 'tileSprite': {
+      const entry = node.props.assetId ? used.get(node.props.assetId) : undefined;
+      if (!entry) return null;
+      const p = node.props;
+      // The tile offset and the tile scale are not here: `add.tileSprite` has
+      // nowhere to take them, so they are `modifiersFor`'s and are emitted only
+      // when they differ from a plain repeat.
+      return (
+        `${receiver}.add.tileSprite(${num(x)}, ${num(y)}, ${num(p.width)}, ${num(p.height)}, ` +
+        `${str(entry.key)}, ${num(clampFrame(entry.asset, p.frame))})`
+      );
+    }
     case 'tilemap': {
       const entry = ctx.tilemaps.get(node.id);
       if (!entry) return null;
@@ -997,12 +1040,32 @@ function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimatio
   if (rotation !== 0) out.push(`.setAngle(${num(rotation)})`);
   if (scaleX !== 1 || scaleY !== 1) out.push(`.setScale(${num(scaleX)}, ${num(scaleY)})`);
 
-  if (node.type === 'sprite') {
-    // White is Phaser's untinted state under the default multiply mode, so
-    // emitting setTint(0xffffff) would be a no-op line on every sprite.
-    if (hexLiteral(node.props.tint) !== '0xffffff') {
-      out.push(`.setTint(${hexLiteral(node.props.tint)})`);
+  // White is Phaser's untinted state under the default multiply mode, so
+  // emitting setTint(0xffffff) would be a no-op line on every one of these.
+  if (
+    (node.type === 'sprite' || node.type === 'nineslice' || node.type === 'tileSprite') &&
+    hexLiteral(node.props.tint) !== '0xffffff'
+  ) {
+    out.push(`.setTint(${hexLiteral(node.props.tint)})`);
+  }
+
+  if (node.type === 'tileSprite') {
+    // The one pair of fields in either new type that `constructorFor` has
+    // nowhere to put: `add.tileSprite` takes the box and the texture and
+    // nothing else. Both setters return the object, so they chain like the
+    // rest, and both are emitted only when they differ from a plain repeat —
+    // this function's own rule, unlike the panel's insets.
+    if (node.props.tilePositionX !== 0 || node.props.tilePositionY !== 0) {
+      out.push(
+        `.setTilePosition(${num(node.props.tilePositionX)}, ${num(node.props.tilePositionY)})`,
+      );
     }
+    if (node.props.tileScaleX !== 1 || node.props.tileScaleY !== 1) {
+      out.push(`.setTileScale(${num(node.props.tileScaleX)}, ${num(node.props.tileScaleY)})`);
+    }
+  }
+
+  if (node.type === 'sprite') {
     if (node.props.flipX || node.props.flipY) {
       out.push(`.setFlip(${node.props.flipX}, ${node.props.flipY})`);
     }
@@ -1089,8 +1152,11 @@ function missingReason(node: GameObjectNode): string {
       ? 'its image is not sliced into tiles, so there is no tileset to build.'
       : 'no tileset chosen in the editor, so nothing to add.';
   }
-  // The fallback covers a sprite and an emitter alike, and says the same true
-  // thing about both: without an image there is no object to add.
+  // The fallback covers a sprite, an emitter, a panel and a tile sprite alike,
+  // and says the same true thing about all four: without an image there is no
+  // object to add. This is the one function on the export checklist that needed
+  // no edit for the two new types, which is worth saying — here "already
+  // covered" and "forgotten" read the same.
   return 'no image chosen in the editor, so nothing to add.';
 }
 

@@ -485,6 +485,121 @@ export function hostileProject(): Project {
             children: [],
           },
           {
+            id: 'r',
+            // A panel with a hostile name and a non-default value in all ten of
+            // its fields.
+            //
+            // Its point is the emitter's: the config carries no free user text,
+            // but `export-toolchain.spec` compiles the emitted `.ts` under
+            // `tsc --strict` against the real Phaser types, and this is the only
+            // place `add.nineslice`'s ten-argument shape is checked against
+            // them. Its arguments are all positional, so an argument inserted or
+            // reordered between Phaser versions is a panel drawn wrong with
+            // nothing failing — except here. Rotated and scaled so
+            // `modifiersFor` runs over one too, and tinted so its `setTint`
+            // does.
+            name: `${breakout} panel`,
+            type: 'nineslice',
+            visible: true,
+            transform: { x: 240, y: 300, rotation: 12.5, scaleX: 1.25, scaleY: 0.8 },
+            props: {
+              assetId: 'sheet-1',
+              frame: 1,
+              width: 220,
+              height: 140,
+              left: 3,
+              right: 2,
+              top: 2,
+              bottom: 3,
+              tint: '#88ccff',
+              alpha: 0.9,
+            },
+            children: [],
+          },
+          {
+            id: 's',
+            // Insets that do not fit: 6 + 6 is wider than the 8px frame they
+            // are cut from, and the box is narrower still. Only a hand-edited
+            // file can hold these — the inspector's fields cannot produce them
+            // — and `sliceInsetsOf` is what stops them reaching Phaser, which
+            // would draw the panel inside out. The export is the half that
+            // matters here: the editor could clamp on its own and still ship a
+            // broken game.
+            name: 'squeezed panel',
+            type: 'nineslice',
+            visible: true,
+            transform: { x: 520, y: 300, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: {
+              assetId: 'sheet-1',
+              frame: 0,
+              width: 10,
+              height: 10,
+              left: 6,
+              right: 6,
+              top: 6,
+              bottom: 6,
+              tint: '#ffffff',
+              alpha: 1,
+            },
+            children: [],
+          },
+          {
+            id: 't',
+            // Static, because a repeating wall is the thing a platformer stands
+            // on and because this is the only place a body reaches one of the
+            // two types iteration 19 added to `PHYSICS_TYPES` — that list is a
+            // silent step, so nothing else would notice if it were wrong.
+            physics: { kind: 'static' as const, ...NO_MOTION },
+            // A tile sprite with a non-default offset and tile scale, which is
+            // the only thing that runs `modifiersFor`'s `.setTilePosition` and
+            // `.setTileScale` — the one pair of fields `add.tileSprite` has
+            // nowhere to take, so a chain that failed to compile would fail
+            // only here.
+            name: `${breakout} wall`,
+            type: 'tileSprite',
+            visible: true,
+            transform: { x: 700, y: 300, rotation: 7, scaleX: 1, scaleY: 1 },
+            props: {
+              assetId: 'sheet-1',
+              frame: 3,
+              width: 180,
+              height: 90,
+              tilePositionX: 12,
+              tilePositionY: -6,
+              tileScaleX: 2,
+              tileScaleY: 1.5,
+              tint: '#ffcc00',
+              alpha: 0.75,
+            },
+            children: [],
+          },
+          {
+            id: 'u',
+            // No image, which is the panel half of `missingReason`: it takes
+            // `constructorFor`'s null return exactly as the unfinished emitter
+            // and the unsliced map do. Scoped assertions matter here — this
+            // makes "no image chosen in the editor" correct output for a third
+            // node, so a whole-file `not.toContain` on that string is a test
+            // about something else that this would break.
+            name: 'unfinished panel',
+            type: 'nineslice',
+            visible: true,
+            transform: { x: 900, y: 300, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: {
+              assetId: null,
+              frame: 0,
+              width: 120,
+              height: 60,
+              left: 8,
+              right: 8,
+              top: 8,
+              bottom: 8,
+              tint: '#ffffff',
+              alpha: 1,
+            },
+            children: [],
+          },
+          {
             id: 'p',
             // Named after the module-level body helper, so `toIdentifier`
             // collides with it. Without this the seeding of `bodyFn` into

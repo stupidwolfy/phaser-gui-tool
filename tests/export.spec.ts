@@ -222,6 +222,48 @@ test('an emitter exports as one add.particles with its whole config', async ({
   expect(exported.contents).toContain('this.load.spritesheet(');
 });
 
+test('a panel and a tiled image export as one add.* each, whole', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+
+  // Two panels reach the output: the fixture holds three and the third has no
+  // image, which takes `constructorFor`'s null return exactly as the unfinished
+  // emitter does.
+  expect(exported.contents.split('.add.nineslice(')).toHaveLength(3);
+  expect(exported.contents.split('.add.tileSprite(')).toHaveLength(2);
+
+  // The insets are emitted whole, beside the box they are cut against — the
+  // emitter config's call and the body's, deliberately unlike `modifiersFor`.
+  // All ten arguments are positional, which is why the whole call is asserted
+  // rather than the numbers one at a time: an argument inserted or reordered is
+  // a panel drawn wrong with nothing else failing.
+  expect(exported.contents).toMatch(/\.add\.nineslice\([^)]*, 220, 140, 3, 2, 2, 3\)/);
+
+  // The squeezed panel's insets are 6 and 6 against an 8px frame and a 10px
+  // box, which only a hand-edited file can hold. `sliceInsetsOf` scales the
+  // opposing pair down together against whichever limit binds — here the 8px
+  // frame — so 6 and 6 reach Phaser as 4 and 4. Clamping in the editor alone
+  // would still have shipped a game drawing the panel inside out.
+  expect(exported.contents).toMatch(/\.add\.nineslice\([^)]*, 10, 10, 4, 4, 4, 4\)/);
+
+  // The tile offset and the tile scale are `modifiersFor`'s, because
+  // `add.tileSprite` has nowhere to take them — and emitted only because this
+  // fixture's differ from a plain repeat.
+  expect(exported.contents).toContain('.setTilePosition(12, -6)');
+  expect(exported.contents).toContain('.setTileScale(2, 1.5)');
+  expect(exported.contents).toContain('.setTint(0xffcc00)');
+
+  // Both draw a texture the scene actually preloads. Missing either half of the
+  // `collectAssets`/`usedIn` pair gives an object built on a texture that was
+  // never loaded, which is a missing-texture square rather than an error.
+  expect(exported.contents).toContain('this.load.spritesheet(');
+});
+
 test('a tilemap exports as one helper, a data table and one call per map', async ({
   editor,
 }, testInfo) => {
@@ -312,13 +354,18 @@ test('a body exports as add.existing and its setters, and a nested one as nothin
 
   const exported = await editor.exportCode('ts');
 
-  // Three bodies reach the output and no more: the fixture holds five, and the
+  // Four bodies reach the output and no more: the fixture holds six, and the
   // two it leaves out are the one nested in a group and the one inside a prefab
   // definition. Both are container children, whose x/y are their parent's
   // coordinates rather than the world's — a count rather than a whole-file
   // `not.toContain`, which is a shared resource this file has already been
   // burned by once.
-  expect(exported.contents.match(/physics\.add\.existing\(/g) ?? []).toHaveLength(3);
+  //
+  // The fourth is the static body on the tile sprite, and it is the only check
+  // anywhere that `PHYSICS_TYPES` actually learned about the two types
+  // iteration 19 added. That list is a silent step: a type missing from it is
+  // simply never offered a body, which looks exactly like a decision.
+  expect(exported.contents.match(/physics\.add\.existing\(/g) ?? []).toHaveLength(4);
 
   // A static body is one call with nothing chained onto it, because Phaser's
   // StaticBody genuinely has no velocity, bounce, drag, mass or gravity.

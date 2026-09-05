@@ -100,3 +100,71 @@ export function stripPng(frameSize: number, hexes: string[]): Buffer {
 
   return encodePng(width, height, raw);
 }
+
+/**
+ * A square with a border in one colour and a middle in another — a nine-slice
+ * source whose corners can be told from its middle on the canvas.
+ *
+ * `stripPng`'s argument one feature over. What a nine-slice test has to see is
+ * that the *border keeps its size* while the middle grows, and no solid fixture
+ * can state that: stretched and sliced draw the same single colour. Two colours
+ * make the claim measurable — `findColorBox` on the middle says how far the
+ * middle reaches, and the border is what is left.
+ *
+ * `border` is in source pixels and is the inset a test then asks the panel for,
+ * so a fixture and the props that slice it cannot disagree.
+ */
+export function framePng(size: number, border: number, edgeHex: string, middleHex: string): Buffer {
+  const raw = Buffer.alloc(size * (1 + size * 4));
+  const edge = rgb(edgeHex);
+  const middle = rgb(middleHex);
+
+  for (let y = 0; y < size; y += 1) {
+    const start = y * (1 + size * 4);
+    raw[start] = 0;
+    for (let x = 0; x < size; x += 1) {
+      const inside = x >= border && x < size - border && y >= border && y < size - border;
+      const [r, g, b] = inside ? middle : edge;
+      const i = start + 1 + x * 4;
+      raw[i] = r;
+      raw[i + 1] = g;
+      raw[i + 2] = b;
+      raw[i + 3] = 255;
+    }
+  }
+
+  return encodePng(size, size, raw);
+}
+
+/**
+ * A square that is one colour with a block of another in its top-left quarter —
+ * a tile whose repeats can be counted on the canvas.
+ *
+ * The claim a tile-sprite test has to make is that the texture *repeats* rather
+ * than stretching, and a single motif cannot say it: one block stretched and one
+ * block tiled both put that colour on the canvas. Placed off-centre in the tile,
+ * the block appears once per repeat, so the marks span the whole object when it
+ * tiles and sit alone in the middle when it does not — which `findColorBox`
+ * reads as a width.
+ */
+export function tilePng(size: number, groundHex: string, markHex: string): Buffer {
+  const raw = Buffer.alloc(size * (1 + size * 4));
+  const ground = rgb(groundHex);
+  const mark = rgb(markHex);
+  const half = Math.floor(size / 2);
+
+  for (let y = 0; y < size; y += 1) {
+    const start = y * (1 + size * 4);
+    raw[start] = 0;
+    for (let x = 0; x < size; x += 1) {
+      const [r, g, b] = x < half && y < half ? mark : ground;
+      const i = start + 1 + x * 4;
+      raw[i] = r;
+      raw[i + 1] = g;
+      raw[i + 2] = b;
+      raw[i + 3] = 255;
+    }
+  }
+
+  return encodePng(size, size, raw);
+}

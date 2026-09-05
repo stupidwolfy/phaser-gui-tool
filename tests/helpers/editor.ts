@@ -174,7 +174,16 @@ export class EditorPage {
   }
 
   async addObject(
-    label: 'Rectangle' | 'Ellipse' | 'Text' | 'Image' | 'Group' | 'Tiles' | 'Particles',
+    label:
+      | 'Rectangle'
+      | 'Ellipse'
+      | 'Text'
+      | 'Image'
+      | 'Panel'
+      | 'Tiled'
+      | 'Group'
+      | 'Tiles'
+      | 'Particles',
   ): Promise<void> {
     await this.openPanel('scene');
     await this.panel('scene').getByRole('button', { name: `+ ${label}` }).click();
