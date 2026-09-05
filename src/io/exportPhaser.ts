@@ -9,6 +9,9 @@ import {
   findAsset,
   findAudio,
   findPrefab,
+  fontByFamily,
+  fontFormatOf,
+  fontStackOf,
   frameGridOf,
   isDefaultCamera,
   physicsOf,
@@ -20,6 +23,7 @@ import {
   touchZonesOf,
   type AnimationClip,
   type AudioAsset,
+  type FontAsset,
   type GameObjectNode,
   type ImageAsset,
   type NodeControls,
@@ -416,6 +420,88 @@ function buildAudioTable(used: Map<string, UsedAudio>, indent: string): string {
 }
 
 /**
+ * A font each scene draws some text in, by the family it is registered under.
+ *
+ * `collectAudio`' sibling, and **the one of the three tables with no `Used…`
+ * wrapper**, which is worth saying because its absence looks like the step that
+ * was skipped. `UsedAsset` and `UsedAudio` pair a thing with a `key`, because
+ * an image's and a sound's key is *derived here* from a file name and lives
+ * nowhere else — which is also why each gets an identifier set of its own, so
+ * that `coin.png` and `coin.wav` can both key as `coin`. A font's key is its
+ * stored `family`: chosen at import, unique across the table by `fontFamilyFor`,
+ * and re-checked by `parseFonts` on the way in. Carrying it a second time beside
+ * the asset would be two fields free to disagree about one string — and this is
+ * the one string in the file that must not move, since `this.load.font`
+ * registers the face under it and the text style beside it names it.
+ */
+function collectFonts(
+  project: Project,
+  scenes: SceneDoc[],
+  prefabs: Map<string, UsedPrefab>,
+): Map<string, FontAsset> {
+  const used = new Map<string, FontAsset>();
+  for (const scene of scenes) {
+    for (const family of familiesIn(project, scene, prefabs)) {
+      const font = fontByFamily(project, family);
+      // `familiesIn` has already dropped a family the project does not hold, so
+      // this cannot miss — kept because the alternative is a non-null assertion,
+      // which is `collectAudio`'s call in the same position.
+      if (font) used.set(font.family, font);
+    }
+  }
+  return used;
+}
+
+/**
+ * Every imported family the text in one scene asks for, definitions included.
+ *
+ * Shared by `collectFonts` and `usedIn` so the file-wide table and the
+ * per-scene preload cannot disagree about which fonts a scene needs — the
+ * `collectAssets`/`usedIn` pair written once instead of twice, because unlike
+ * an image a font has no second question (what is it called) for the first half
+ * to answer on its own.
+ */
+function familiesIn(
+  project: Project,
+  scene: SceneDoc,
+  prefabs: Map<string, UsedPrefab>,
+): Set<string> {
+  const known = new Set(project.fonts.map((asset) => asset.family));
+  const families = new Set<string>();
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'text') {
+        // Through the stack rather than the whole field: `Chunky, sans-serif`
+        // asks for one imported font and one the browser already has.
+        for (const family of fontStackOf(node.props.fontFamily)) {
+          if (known.has(family)) families.add(family);
+        }
+      }
+      walk(node.children);
+    }
+  };
+  for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+  return families;
+}
+
+/**
+ * The font table, `ASSETS`' and `AUDIO`' sibling and a named const for their
+ * reason.
+ */
+function buildFontTable(used: Map<string, FontAsset>, indent: string): string {
+  const lines = [
+    '/**',
+    ' * Fonts from the editor, embedded so this file needs nothing alongside it.',
+    ' * To serve them as real files instead, replace each value with its path.',
+    ' */',
+    'const FONTS = {',
+    ...[...used.values()].map((font) => `  ${str(font.family)}: ${str(font.dataUrl)},`),
+    '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
  * The body of `preload()`, or '' when the scene uses no images.
  *
  * Filtered to what *this* scene draws, out of a table built for the file: a
@@ -432,6 +518,8 @@ function buildPreloadBody(
   ids: ReadonlySet<string>,
   audio: Map<string, UsedAudio>,
   audioIds: ReadonlySet<string>,
+  fonts: Map<string, FontAsset>,
+  fontFamilies: ReadonlySet<string>,
 ): string {
   const images = [...used.values()]
     .filter(({ asset }) => ids.has(asset.id))
@@ -456,7 +544,26 @@ function buildPreloadBody(
     .filter((entry) => audioIds.has(entry.audio.id))
     .map(({ key }) => `    this.load.audio(${str(key)}, AUDIO[${str(key)}]);`);
 
-  return [...images, ...sounds].join('\n');
+  // After the sounds, so a project that predates fonts emits exactly the
+  // `preload` it always did — the rule the sounds themselves followed.
+  //
+  // The `format` argument is not optional and is not defaulted: Phaser's own
+  // default is `'truetype'`, so a WOFF2 left to it is refused by the browser
+  // and the text falls back with only a console warning to say so. That is the
+  // whole reason `fontFormatOf` sits beside the asset rather than being guessed
+  // at either call site.
+  //
+  // The key is the family, which is what makes the `fontFamily` in the text
+  // style a few lines below resolve at all — see `FontAsset`.
+  const faces = [...fonts.values()]
+    .filter((font) => fontFamilies.has(font.family))
+    .map(
+      (font) =>
+        `    this.load.font(${str(font.family)}, FONTS[${str(font.family)}], ` +
+        `${str(fontFormatOf(font.mimeType))});`,
+    );
+
+  return [...images, ...sounds, ...faces].join('\n');
 }
 
 /**
@@ -534,7 +641,12 @@ function usedIn(
   project: Project,
   scene: SceneDoc,
   prefabs: Map<string, UsedPrefab>,
-): { assets: Set<string>; animations: Set<string>; audio: Set<string> } {
+): {
+  assets: Set<string>;
+  animations: Set<string>;
+  audio: Set<string>;
+  fonts: Set<string>;
+} {
   const assets = new Set<string>();
   const animations = new Set<string>();
   const walk = (nodes: GameObjectNode[]) => {
@@ -568,7 +680,14 @@ function usedIn(
   // `sound.add` on a key the cache does not hold *throws*, inside `create()`,
   // before a single object has been added.
   const audio = new Set(soundsOf(project, scene).map((sound) => sound.audioId));
-  return { assets, animations, audio };
+
+  // A walk, where the sounds beside it are a read — a text node can sit inside
+  // a prefab definition exactly as a sprite can, so this half has the images'
+  // shape rather than the audio's. Missing it exports a scene whose text is
+  // drawn in a font the page never loaded, which is the failure this whole
+  // iteration exists to remove and would look identical to it.
+  const fonts = familiesIn(project, scene, prefabs);
+  return { assets, animations, audio, fonts };
 }
 
 /**
@@ -983,6 +1102,17 @@ interface EmitContext {
    * ever emitted is a Scene's own `create()`.
    */
   audio: Map<string, UsedAudio>;
+  /**
+   * The font table, file-wide like `assets`, and read only by `preload()`.
+   *
+   * It is here rather than passed alongside because both generators need it to
+   * decide whether to emit a `FONTS` const at all, which is where every other
+   * file-wide table is reached from. Nothing in `create()` names a font — a
+   * text object names its family in the style literal `constructorFor` already
+   * builds — so unlike `audio` there is no `receiver` question here even in
+   * principle, and no prefab factory ever reads it.
+   */
+  fonts: Map<string, FontAsset>;
   /** `'this'` inside a Scene method, `'scene'` inside a factory function. */
   receiver: string;
 }
@@ -1992,6 +2122,22 @@ function buildCreateBody(
  * and belongs to the whole game, where a module dropped into someone else's
  * game can only speak for its own scene. So there is no key and no note here
  * either, and the helper says it for itself.
+ *
+ * And a fifth time for the fonts, which is the one a reader is most likely to
+ * go looking for a missing piece of. A web font in a hand-written page means an
+ * `@font-face` rule, a `<link>`, or a `document.fonts.load` that has to settle
+ * before anything draws — and this exporter emits none of the three. It does
+ * not need to: `this.load.font` builds the `FontFace` itself, from the same
+ * data URL every other asset here travels as, and `create()` runs only once the
+ * loader has finished. The boot-order problem a web font usually brings is
+ * answered by the `preload()` this file has emitted since images existed.
+ *
+ * The absence is worth having on purpose rather than by luck. `preload()` is
+ * inside the one script `generateRunnableHtml` composes and escapes in a single
+ * pass, while the markup around it is guarded only by `escapeHtml` and
+ * `cssColor` — so an `@font-face` in a `<style>` block would be a new
+ * unescaped surface, carrying a family name and a data URL, in the half of that
+ * output where the escaping has historically been got wrong.
  */
 const arcadeConfig = (needed: boolean) =>
   needed ? "        physics: { default: 'arcade' },\n" : '';
@@ -2058,6 +2204,7 @@ function prepare(project: Project): Emission {
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
   const audio = collectAudio(project, project.scenes);
+  const fonts = collectFonts(project, project.scenes, prefabs);
   const animations = collectAnimations(project, project.scenes, assets, prefabs);
   const tilemaps = collectTilemaps(project, project.scenes, prefabs, assets);
   const current = activeScene(project);
@@ -2073,6 +2220,7 @@ function prepare(project: Project): Emission {
       tilemapFn,
       bodyFn,
       touchFn,
+      fonts,
       receiver: 'this',
     },
     boot: scenes.find((entry) => entry.scene.id === current.id) ?? scenes[0],
@@ -2108,7 +2256,14 @@ function buildSceneClass(
   // file names and does not contain — and a size check would then emit an empty
   // `preload() {}`. That was already true of the images before there was a
   // second way to get it wrong.
-  const preloadBody = buildPreloadBody(ctx.assets, usage.assets, ctx.audio, usage.audio);
+  const preloadBody = buildPreloadBody(
+    ctx.assets,
+    usage.assets,
+    ctx.audio,
+    usage.audio,
+    ctx.fonts,
+    usage.fonts,
+  );
   const preload = preloadBody
     ? `  preload()${returnType} {\n${preloadBody}\n  }\n\n`
     : '';
@@ -2179,6 +2334,7 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // the same kind of thing — embedded bytes a reader swaps for paths — and
   // before `TILEMAPS`, which is derived from an asset rather than being one.
   const audio = ctx.audio.size > 0 ? `\n${buildAudioTable(ctx.audio, '')}\n` : '';
+  const fonts = ctx.fonts.size > 0 ? `\n${buildFontTable(ctx.fonts, '')}\n` : '';
   // Same rule again: no tilemaps, no table and no helper, so every project that
   // predates them exports byte for byte what it always did.
   const tiles =
@@ -2204,7 +2360,7 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
 
   return `${header(project)}${physicsNote(physics.any)}
 import Phaser from 'phaser';
-${table}${audio}${tiles}${bodies}${buttons}${factories}
+${table}${audio}${fonts}${tiles}${bodies}${buttons}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -2230,6 +2386,8 @@ export function generateRunnableHtml(project: Project): string {
     ctx.assets.size > 0 ? `${buildAssetTable(ctx.assets, '      ')}\n\n` : '';
   const audio =
     ctx.audio.size > 0 ? `${buildAudioTable(ctx.audio, '      ')}\n\n` : '';
+  const fonts =
+    ctx.fonts.size > 0 ? `${buildFontTable(ctx.fonts, '      ')}\n\n` : '';
   const tiles =
     ctx.tilemaps.size > 0
       ? `${buildTilemapTable(ctx.tilemaps, '      ')}\n\n` +
@@ -2274,7 +2432,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${tiles}${bodies}${buttons}${factories}      ${classes}
+${table}${audio}${fonts}${tiles}${bodies}${buttons}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

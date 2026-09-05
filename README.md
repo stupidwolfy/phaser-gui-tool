@@ -15,6 +15,10 @@ on a desktop.
 - Style that text properly: bold and italic, a wrap width and an alignment, line and
   letter spacing, a stroke and a drop shadow — with room for the last two worked out for
   you so neither is clipped
+- Give that text a font of your own: import a TTF, OTF, WOFF or WOFF2 under the text
+  object's Font family and pick it from the list. The font travels inside the project file
+  and inside the export, so the words come out in the face you chose on a machine that has
+  never heard of it — where naming a font the browser has to already have is a coin toss
 - Select and drag objects on the canvas; pan and pinch-zoom the camera
 - Select several objects at once — turn on **Multi** in the scene tree and tap them, or
   Shift/Ctrl-click on a desktop — then move, group, duplicate, hide or delete all of them

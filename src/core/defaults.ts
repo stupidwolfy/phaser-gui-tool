@@ -362,6 +362,7 @@ export function newProject(name = 'Untitled Project'): Project {
     phaserVersion: TARGET_PHASER_VERSION,
     assets: [],
     audio: [],
+    fonts: [],
     animations: [],
     prefabs: [],
     scenes: [scene],

@@ -41,10 +41,12 @@ import {
   newId,
   physicsOf,
   prefabChildrenOf,
+  fontStackOf,
   soundsOf,
   worldTransformOf,
   type AnimationClip,
   type AudioAsset,
+  type FontAsset,
   type FrameGrid,
   type GameObjectNode,
   type ImageAsset,
@@ -366,6 +368,27 @@ export interface EditorState {
   addSceneSound: (audioId: string) => void;
   updateSceneSound: (id: string, patch: Partial<Omit<SceneSound, 'id'>>) => void;
   removeSceneSound: (id: string) => void;
+
+  // -- fonts -----------------------------------------------------------------
+  addFont: (asset: FontAsset) => void;
+  /**
+   * Removes a font, and touches nothing else.
+   *
+   * **Beside `removeAsset`'s walk of every node in the project this looks like
+   * a forgotten step, and it is the whole payoff of the design.** A sprite
+   * names an image by id, so an image that goes leaves an id pointing at
+   * nothing — the one thing the document is never allowed to hold. A text node
+   * names a *family*, which is the same field it uses to name Georgia, and a
+   * family naming nothing is not dangling: it is what every text node in every
+   * project made before this feature already says. So the text keeps the name
+   * the user chose, and goes back to being drawn in the browser's fallback,
+   * which is exactly the state it was in before the font was imported.
+   *
+   * The picker still warns first, through `countFontUses` — the change is
+   * visible even though it is not destructive, and a font is one press to
+   * import again but the family name is not one press to retype.
+   */
+  removeFont: (id: string) => void;
 
   // -- prefabs ---------------------------------------------------------------
   /**
@@ -1638,6 +1661,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
         })),
       ),
 
+    addFont: (asset) =>
+      editProject((project) => ({ ...project, fonts: [...project.fonts, asset] })),
+
+    // One line, and see the declaration above for why there is no traversal
+    // here: a text node names a family rather than an id, so there is no
+    // reference to clear and nothing to leave dangling.
+    removeFont: (id) =>
+      editProject((project) => ({
+        ...project,
+        fonts: project.fonts.filter((asset) => asset.id !== id),
+      })),
+
     createPrefabFromSelection: () => {
       const state = get();
       const scene = activeScene(state.project);
@@ -2382,6 +2417,37 @@ export function countAudioUses(project: Project, audioId: string): number {
       count + soundsOf(project, scene).filter((sound) => sound.audioId === audioId).length,
     0,
   );
+}
+
+/**
+ * How many text objects are drawn in a font, for the removal warning.
+ *
+ * The third of these, and it differs from both siblings in ways that each
+ * follow from a font being named rather than pointed at.
+ *
+ * It matches a **family** rather than an id, through `fontStackOf`, so a node
+ * whose `fontFamily` is `Chunky, sans-serif` counts — that node is drawn in the
+ * font and would visibly change if it went.
+ *
+ * And it walks `project.prefabs` as well as `project.scenes`, where
+ * `countAssetUses` walks only the scenes. That is not a difference of subject:
+ * a text node can sit in a prefab definition exactly as a sprite can, so the
+ * one that stops at the scenes under-reports by every object inside a prefab.
+ * Copying it here would carry that across rather than inherit it.
+ */
+export function countFontUses(project: Project, family: string): number {
+  let count = 0;
+  const walk = (nodes: GameObjectNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'text' && fontStackOf(node.props.fontFamily).includes(family)) {
+        count += 1;
+      }
+      walk(node.children);
+    }
+  };
+  for (const scene of project.scenes) walk(scene.children);
+  for (const prefab of project.prefabs) walk(prefab.children);
+  return count;
 }
 
 /**

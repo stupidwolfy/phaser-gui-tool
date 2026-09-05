@@ -35,6 +35,7 @@ import {
 } from '../core/schema';
 import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
 import { AudioSection } from './AudioPicker';
+import { FontPicker } from './FontPicker';
 import { SolidPalette, TilePalette } from './TilePalette';
 import { AnimationEditor } from './AnimationEditor';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
@@ -1321,6 +1322,10 @@ function TextSection({ node }: { node: Extract<GameObjectNode, { type: 'text' }>
         label="Font family"
         value={node.props.fontFamily}
         onChange={(fontFamily) => setProp({ fontFamily })}
+      />
+      <FontPicker
+        fontFamily={node.props.fontFamily}
+        onPick={(fontFamily) => setProp({ fontFamily })}
       />
       <div className="field-row">
         <CheckboxField

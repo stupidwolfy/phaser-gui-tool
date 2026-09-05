@@ -122,7 +122,7 @@ test('a sheet and its animation survive a save and an open', async ({ editor }, 
   // names the project's fields one at a time, so it would silently drop both of
   // these and write the file back without them. 9 as of the two stretchable
   // types, though the last bump for *this* reason was audio, one table over.
-  expect(parsed.schemaVersion).toBe(9);
+  expect(parsed.schemaVersion).toBe(10);
   expect(parsed.assets[0].sheet).toEqual({
     frameWidth: FRAME_SIZE,
     frameHeight: FRAME_SIZE,

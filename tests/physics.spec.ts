@@ -164,7 +164,7 @@ test('the types Arcade cannot simulate offer nothing', async ({ editor }) => {
   }
 });
 
-test('a body and the scene gravity survive a save and an open, at schema 9', async ({
+test('a body and the scene gravity survive a save and an open, at schema 10', async ({
   editor,
 }, testInfo) => {
   await setup(editor);
@@ -183,13 +183,13 @@ test('a body and the scene gravity survive a save and an open, at schema 9', asy
   const saved = await editor.saveToFile();
   const project = JSON.parse(saved.contents);
 
-  // Unbumped, and asserted so that a future bump is a deliberate act rather
-  // than something that happens to a file — the guides and scenes precedent.
-  // A body rides in on `scenes`, which the parser passes through verbatim, so
-  // a deployed older build opens this file and draws it identically. It reads 9
-  // because audio and then the two stretchable types bumped it; physics still
+  // Asserted so that a future bump is a deliberate act rather than something
+  // that happens to a file — the guides and scenes precedent. A body rides in
+  // on `scenes`, which the parser passes through verbatim, so a build that
+  // predates it opens this file and draws it identically. It reads 10 because
+  // audio, then the two stretchable types, then fonts bumped it; physics still
   // did not.
-  expect(project.schemaVersion).toBe(9);
+  expect(project.schemaVersion).toBe(10);
   expect(project.scenes[0].physics).toEqual({ gravityX: 0, gravityY: 600 });
   expect(project.scenes[0].children[0].physics).toMatchObject({
     kind: 'dynamic',

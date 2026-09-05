@@ -38,6 +38,7 @@ import {
   type TilemapProps,
 } from '../../core/schema';
 import { decodeImage, decodedImage } from '../../core/assets';
+import { decodeFont, decodedFont, fontFaceKey } from '../../core/fonts';
 import { publishBounds, unionRect, type Rect } from '../../core/bounds';
 import {
   snapMove,
@@ -600,6 +601,25 @@ export class EditorScene extends Phaser.Scene {
    */
   private animationForClip = new Map<string, string>();
   /**
+   * Font faces this scene registered with the document, by `fontFaceKey`.
+   *
+   * The `assetTextures` / `animationKeys` bookkeeping for the third time, and
+   * the widest version of it: a texture belongs to the game and an animation to
+   * the game's manager, while `document.fonts` belongs to the *page* and
+   * outlives the game entirely. So the same rule — remove exactly what this
+   * scene added, never by guesswork — matters more here rather than less.
+   *
+   * Keyed by family *and* bytes, which is `textureKeyForAsset`'s signature
+   * trick: keyed by family alone, opening a second project whose `Chunky` is a
+   * different file would find the name already registered and keep the first
+   * one's glyphs. Folding the bytes in means the diff below handles a change of
+   * face with no special case — the new key is missing so it is added, the old
+   * one is unwanted so it goes.
+   */
+  private fontFaces = new Map<string, FontFace>();
+  /** Faces currently loading, so a slow one is only started once. */
+  private loadingFonts = new Set<string>();
+  /**
    * The document and the preview flag for the sync in progress.
    *
    * Held here rather than threaded down through `syncNodes` because they are
@@ -972,6 +992,13 @@ export class EditorScene extends Phaser.Scene {
       for (const tilemap of this.tilemaps.values()) tilemap.destroy();
       this.tilemaps.clear();
       this.tileData.clear();
+      // Font faces belong to the document rather than to the game, so they
+      // outlive a teardown by more than a texture does — and a family left
+      // registered would go on resolving after the project that carried it was
+      // closed. Exactly the ones this scene added, never by guesswork.
+      for (const face of this.fontFaces.values()) document.fonts.delete(face);
+      this.fontFaces.clear();
+      this.loadingFonts.clear();
     });
   }
 
@@ -1125,6 +1152,68 @@ export class EditorScene extends Phaser.Scene {
       if (wanted.has(key)) continue;
       this.textures.remove(key);
       this.assetTextures.delete(key);
+    }
+  }
+
+  /**
+   * Brings the document's fonts in line with the browser's font set.
+   *
+   * `syncTextures` one table over and with the same three parts — add what is
+   * wanted, start a load for what is not ready, drop what is no longer named.
+   * A font that has not loaded yet draws in the fallback family, which is the
+   * placeholder's role played by a state the browser already has.
+   *
+   * **The `textStyles.clear()` is the whole reason this is not a copy of
+   * `syncTextures`, and leaving it out is a bug nothing else would catch.**
+   * `applyTextStyle` is cache-guarded on the style object, and a font landing
+   * does not change the style by a single character — the node still says
+   * `fontFamily: 'Chunky'`, exactly as it did while the font was loading. So
+   * the re-sync would find every signature unchanged and skip every `setStyle`,
+   * and Phaser's `Text` does not re-measure itself when `document.fonts` gains
+   * a family: it holds a canvas it rasterised in the fallback face and has no
+   * reason to think anything has changed. The text would stay wrong until some
+   * unrelated edit happened to alter its style.
+   *
+   * That is the `play(key, true)` and `setConfig` guard family arriving
+   * inverted. Those exist to stop an apply firing on every store change; this
+   * one has to *break* the guard, because the thing that changed is outside the
+   * document the signature is computed from. Opening a project always takes
+   * this path, so getting it wrong is not an edge case.
+   */
+  private syncFonts(project: Project): void {
+    const wanted = new Set<string>();
+
+    for (const asset of project.fonts) {
+      const key = fontFaceKey(asset);
+      wanted.add(key);
+      if (this.fontFaces.has(key)) continue;
+
+      const face = decodedFont(asset);
+      if (face) {
+        document.fonts.add(face);
+        this.fontFaces.set(key, face);
+        // The face arrived between one sync and the next, so every text object
+        // already on screen was measured without it. See above.
+        this.textStyles.clear();
+      } else if (!this.loadingFonts.has(key)) {
+        this.loadingFonts.add(key);
+        void decodeFont(asset)
+          .catch(() => undefined)
+          .then(() => {
+            this.loadingFonts.delete(key);
+            // A load that resolves after the scene is gone must not touch it.
+            if (this.alive) this.syncFromStore(useEditorStore.getState());
+          });
+      }
+    }
+
+    for (const [key, face] of this.fontFaces) {
+      if (wanted.has(key)) continue;
+      document.fonts.delete(face);
+      this.fontFaces.delete(key);
+      // A face that has *gone* changes what is drawn just as much as one that
+      // has arrived, and the style signature is just as unchanged either way.
+      this.textStyles.clear();
     }
   }
 
@@ -2487,6 +2576,11 @@ export class EditorScene extends Phaser.Scene {
     // Before the nodes: a sprite created this pass needs its texture to already
     // exist, or Phaser falls back to its own missing-texture green square.
     this.syncTextures(state.project);
+    // Before the nodes for `syncTextures`' reason exactly: a text object
+    // created this pass measures itself against whatever the document's font
+    // set holds at that moment, and one built a tick too early is laid out in
+    // the fallback face.
+    this.syncFonts(state.project);
     // And after the textures, because an animation is built from a texture's
     // frames — but still before the nodes, which play what it registers.
     this.syncAnimations(state.project);
