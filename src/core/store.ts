@@ -2407,6 +2407,12 @@ export function countAudioUses(project: Project, audioId: string): number {
  * itself can be stopped, and the editor never plays a sound: a project full of
  * them makes no noise there is anything to stop. Auditioning one is a press on
  * its own row, which starts and ends inside the same gesture.
+ *
+ * And blind to controls, keyboard and on-screen alike — the third refusal, and
+ * the same one twice. A driven object does not move here because nothing here
+ * simulates a body, and the buttons `touchZonesOf` puts on the canvas are
+ * drawn rather than pressed: rings the editor never reads. Neither is a canvas
+ * moving by itself, so neither is something a ▶ could stop.
  */
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;

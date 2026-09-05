@@ -24,6 +24,7 @@ import {
   prefabChildrenOf,
   sliceInsetsOf,
   tileMapOf,
+  touchZonesOf,
   worldTransformOf,
   type AnimationClip,
   type GameObjectNode,
@@ -117,6 +118,33 @@ const BODY_WIDTH = 2;
  */
 const CAMERA_COLOR = 0x9b7bff;
 const CAMERA_WIDTH = 2;
+
+/**
+ * Where the exported game will draw its on-screen buttons.
+ *
+ * The one place this feature declines the static-body rule — "one colour and
+ * more marks rather than a second palette entry". That rule is for telling two
+ * kinds of *the same thing* apart, and a touch zone is not a body: it is chrome
+ * saying where the game's own HUD will be, which is the camera frame's case,
+ * and the camera got a colour of its own for it.
+ *
+ * The practical half decides it either way. Drawn in `BODY_COLOR` the rings
+ * would share a colour with the body outlines and the control arrows, and a
+ * colour centroid over that mixture measures nothing — so the suite could see
+ * the buttons only by not being able to see anything else.
+ *
+ * Orange-red, and the first azure tried was wrong in the way this comment
+ * exists to prevent: `findColor` matches when *every* channel is within its
+ * tolerance, and `#4d9fff` is within 24 of the default rectangle fill
+ * `#4f8cff` on all three. So the test to apply is not "does this look
+ * different" but "does it differ by more than 24 on at least one channel from
+ * every fixture and chrome colour" — the rectangle and ellipse fills, the
+ * nested and prefab fixture colours, the cyan outline, the violet camera, the
+ * green bodies, both guide colours, the slate frame, the pink emitter marker,
+ * the scene background and white.
+ */
+const TOUCH_COLOR = 0xff5c33;
+const TOUCH_WIDTH = 2;
 
 /**
  * The grab band around a guide, in screen pixels.
@@ -741,6 +769,15 @@ export class EditorScene extends Phaser.Scene {
    * zoom, so a pinch has to redraw it, and a pinch is not a store change.
    */
   private cameraSignature = '';
+  private touchGraphics!: Phaser.GameObjects.Graphics;
+  /** The glyphs in the middle of the rings, pooled — one per drawn button. */
+  private touchLabels: Phaser.GameObjects.Text[] = [];
+  /**
+   * What the touch zones were last drawn for — `cameraSignature`'s sibling and
+   * for its reason: the rings' stroke is a screen width divided by the editor's
+   * zoom, so a pinch has to redraw them, and a pinch is not a store change.
+   */
+  private touchSignature = '';
   private isPanning = false;
   private pinchDistance = 0;
   /** Once the user has zoomed or panned, stop re-framing the view for them. */
@@ -834,6 +871,18 @@ export class EditorScene extends Phaser.Scene {
     // grabs: it is not interactive at all, so it must never cover something
     // that is.
     this.cameraGraphics = this.add.graphics().setDepth(997);
+
+    // Just above the camera frame and still below the paint grid and the placed
+    // guides, for the camera frame's two reasons at once: a ring hidden under a
+    // tilemap says nothing, and like that frame this is furniture nobody grabs
+    // — not interactive at all, so it must never cover something that is.
+    this.touchGraphics = this.add.graphics().setDepth(997.5);
+    // The pool holds display objects, which the scene destroys on shutdown, so
+    // a restart has to start from an empty one — and from an empty signature,
+    // or the first frame back would decide nothing had changed and skip the
+    // redraw onto a Graphics that is no longer the one it drew on.
+    this.touchLabels = [];
+    this.touchSignature = '';
 
     // Sits above the outline so it is never the outline that takes the press.
     this.scaleHandle = this.add
@@ -2336,6 +2385,7 @@ export class EditorScene extends Phaser.Scene {
     this.syncPlacedGuides();
     this.drawBodies();
     this.drawCamera();
+    this.drawTouchZones();
   }
 
   /** Two fingers down: zoom by how much the gap between them changed. */
@@ -2553,6 +2603,64 @@ export class EditorScene extends Phaser.Scene {
 
     this.cameraGraphics.lineStyle(CAMERA_WIDTH / zoom, CAMERA_COLOR, 1);
     this.cameraGraphics.strokeRect(view.x, view.y, view.width, view.height);
+  }
+
+  /**
+   * Where the exported game will draw its on-screen buttons.
+   *
+   * Drawn, never pressed — physics' "drawn, never run" and the camera's "drawn,
+   * never applied", one feature on. These rings are not interactive and nothing
+   * in the editor reads them: a button that moved an object here would move it
+   * in the document, which is the whole reason a physics step is not run either.
+   *
+   * In `update()` with `drawGrid`, `syncPlacedGuides`, `drawBodies` and
+   * `drawCamera`, and for their reason — the stroke is a *screen* width divided
+   * by the camera zoom, and a pinch changes the zoom without touching the
+   * store. Signature-gated like the camera, because on almost every frame none
+   * of it has moved.
+   *
+   * Stroked rather than filled, which is the opposite call from the emitter
+   * marker and the control arrows and is right for the opposite reason: those
+   * are small marks that have to survive antialiasing, where these are large
+   * and sit over the level being built. A filled disc would hide what the
+   * player is going to be standing on.
+   */
+  private drawTouchZones(): void {
+    const scene = activeScene(useEditorStore.getState().project);
+    const { zoom } = this.cameras.main;
+    const buttons = touchZonesOf(scene);
+    const signature = buttons.length
+      ? `${zoom}:${buttons.map((b) => `${b.key}@${b.x},${b.y}/${b.radius}`).join('|')}`
+      : '';
+    if (signature === this.touchSignature) return;
+    this.touchSignature = signature;
+
+    this.touchGraphics.clear();
+    // Parked rather than destroyed, the rotate readout's pool exactly: a scene
+    // resize republishes this several times a second while the field is edited.
+    for (const label of this.touchLabels) label.setVisible(false);
+    if (!signature) return;
+
+    this.touchGraphics.lineStyle(TOUCH_WIDTH / zoom, TOUCH_COLOR, 1);
+    buttons.forEach((button, index) => {
+      this.touchGraphics.strokeCircle(button.x, button.y, button.radius);
+
+      let label = this.touchLabels[index];
+      if (label === undefined) {
+        label = this.add
+          .text(0, 0, '', { color: '#ff5c33' })
+          .setOrigin(0.5)
+          .setDepth(997.6);
+        this.touchLabels.push(label);
+      }
+      // In scene units, so the glyph zooms with everything else and needs no
+      // per-frame rescale of its own — unlike the handles, which hold a fixed
+      // screen size and therefore have to fight the camera every frame.
+      label.setFontSize(Math.round(button.radius));
+      label.setText(button.label);
+      label.setPosition(button.x, button.y);
+      label.setVisible(true);
+    });
   }
 
   /**

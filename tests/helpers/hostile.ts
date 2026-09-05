@@ -134,6 +134,9 @@ export function hostileProject(): Project {
               scheme: 'arrows' as const,
               speed: 10,
               jump: 10,
+              // Asking for buttons from an illegal place, so `touchZonesOf`
+              // dropping it is asserted rather than assumed.
+              touch: true,
             },
             name: breakout,
             type: 'rectangle',
@@ -290,6 +293,10 @@ export function hostileProject(): Project {
               scheme: 'arrows' as const,
               speed: 260,
               jump: 520,
+              // On, because the touch helper and the widened `update()` — the
+              // keyboard read folded into an `||` — meet `Phaser.Scene`,
+              // `GameObjects.Arc` and `Body` under `tsc --strict` nowhere else.
+              touch: true,
             },
             children: [],
           },
@@ -360,6 +367,10 @@ export function hostileProject(): Project {
                   scheme: 'wasd' as const,
                   speed: 90,
                   jump: 0,
+                  // Likewise, and top-down: if `touchZonesOf` reached a nested
+                  // node the pad would sprout an up and a down that nothing in
+                  // the emitted `update()` ever reads.
+                  touch: true,
                 },
                 children: [],
               },

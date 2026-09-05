@@ -46,7 +46,10 @@ not its own: a `nineslice` panel whose corners hold while its middle stretches, 
 `tileSprite` that repeats rather than scaling. Iteration 20 (shipped) made the scene do
 something once the game runs: solid tiles, a per-scene collider table and a keyboard
 behaviour on a node — the first `update()` this exporter has ever emitted, on a canvas that
-still simulates nothing. See the README for the user-facing feature list.
+still simulates nothing. Iteration 21 (shipped) gave that behaviour a thumb: on-screen
+buttons, derived from the scene rectangle rather than stored, drawn by the editor as rings
+it will never press and by the export as a real HUD. See the README for the user-facing
+feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -1186,6 +1189,137 @@ reason: not per-type, so not in `props`.
   *whether it has stopped moving* — a settled-yet reading compares two shots milliseconds
   apart and goes red on a loaded machine for a reason that is not the collider.
 
+## Touch controls
+
+`NodeControls.touch` is a boolean beside `scheme`, and the exported game draws a D-pad and
+a jump button over its canvas. It is iteration 20's honest hole closed — for nineteen
+iterations "mobile is a first-class target" meant the *editor*, and the game it produced
+needed a keyboard.
+
+- **A boolean beside `scheme`, not a third value of it.** CLAUDE.md predicted "a third
+  `scheme`" and that prediction was wrong in a way worth recording: which keys drive an
+  object and whether there are also buttons are two questions, not two answers to one. A
+  mutually exclusive `'touch'` would mean picking it silently produced a game a desktop
+  cannot play, with nothing in the panel saying so — where a boolean means one export plays
+  in both places. It also leaves `controlsOf`'s `scheme` ternary and the inspector's
+  matching one untouched, which is the whole of what the other shape would have rewritten.
+- **Off by default**, the rule the asset table, the tilemap helper, the prefab factories
+  and the emitted `update()` itself already follow: switching it on puts visible buttons
+  into someone's game, so a project that predates the feature has to export byte for byte
+  what it exported before. `controlsOf` reads an absent field as `false` for the same
+  reason.
+- **`touchZonesOf(scene)` is the only reader**, in the `guidesOf` / `physicsOf` /
+  `cameraOf` / `soundsOf` / `tileMapOf` / `collidersOf` family, and it answers three
+  questions at once: does anything here want buttons, which buttons do the modes present
+  need, and where do they sit against this scene's size. Any one answered somewhere else is
+  a renderer drawing a pad the export does not build — the one failure a user cannot see
+  until the game is in their hand. It walks `scene.children` only, so `controlsOf`'s
+  top-level rule is inherited rather than repeated. It builds a fresh array per call, so
+  `useEditorStore((s) => touchZonesOf(...))` is React error #185 — the `tileMapOf` trap,
+  sixth time.
+- **One set of buttons per scene, not per object, and the modes are a union.** The buttons
+  belong to the canvas, so two driven objects read the same five flags — which is what a
+  player expects and what falls out of the geometry being the scene's. Any top-down node
+  puts up and down on the pad; any platformer puts a jump button on the right. A per-object
+  pad would be two D-pads in one corner the moment a project had two driven objects.
+- **The layout is derived, never stored, and that is the whole reason this cost no
+  format.** Radius is 7.5% of the shorter side with a floor — proportional because the canvas is scaled to fit whatever screen the game lands on — margin is one radius,
+  and the pad is a *cross* rather than a row so that adding a top-down object does not move
+  the left and right buttons a platformer was already using. That the scene rectangle *is*
+  the game canvas is not an assumption made here: it is the identity `cameraViewOf` already
+  rests on, and the reason a camera has no rectangle of its own.
+- **`SCHEMA_VERSION` did not bump, and this is the guides case for the fourth time.**
+  `touch` is a field on an optional field on a node and adds no `NodeType`, so it rides in
+  on `scenes` — the one part of a file `parseProject` passes through verbatim. A v9 build
+  has a `createDisplayObject` case for everything in the file, reads it nowhere, draws
+  identically and carries it back out on a re-save. **Still contingent on `parseProject` not
+  reconstructing scenes field by field**, exactly as physics, cameras and iteration 20 are.
+  `behaviour.spec.ts` asserts the 9 in the saved artefact so a future bump is deliberate.
+- **Drawn, never pressed** — Physics' "drawn, never run" and the camera's "drawn, never
+  applied", a third time. The rings are not interactive and nothing in the editor reads
+  them, because a button that moved an object here would move it *in the document*, which
+  is exactly why a physics step is not run either. `hasMotionIn` still answers false, and it
+  shares iteration 20's refusal rather than adding a fourth: that comment now names
+  controls of *either* kind, keyboard and on-screen alike, because it is one argument —
+  the toggle exists so a canvas moving by itself can be stopped, and a ring nobody can
+  press moves nothing.
+- **`drawTouchZones` is in `update()`** with `drawGrid`, `syncPlacedGuides`, `drawBodies`
+  and `drawCamera`, for their reason — the stroke is a screen width divided by the camera
+  zoom, and a pinch changes the zoom without touching the store. Signature-gated like the
+  camera, because on almost every frame none of it has moved. Depth **997.5**: just above
+  the camera frame at 997 and still below the paint grid and the placed guides at 998, which
+  is the camera frame's two arguments at once — a ring hidden under a tilemap says nothing,
+  and this is furniture nobody grabs, so it must never cover something that is.
+- **A colour of its own, where a static body got a cross instead.** That rule — "one colour
+  and more marks rather than a second palette entry" — is for telling two kinds of *the same
+  thing* apart, and a touch zone is not a body but chrome saying where the game's HUD will
+  be, which is the camera frame's case. The practical half settles it either way: in
+  `BODY_COLOR` the rings would share a colour with the body outlines and the control arrows,
+  and a colour reading over that mixture measures nothing.
+- **Picking that colour is a numeric test, not a visual one, and the first attempt failed
+  it.** `findColor` matches when *every* channel is within tolerance, and the obvious azure
+  `#4d9fff` is within 24 of the default rectangle fill `#4f8cff` on all three — it looked
+  clearly different and would have counted every rectangle in the scene. The test to apply
+  is "does this differ by more than the tolerance on at least one channel from every fixture
+  *and* chrome colour", and the list is longer than the chrome one: both default fills, the
+  nested and prefab fixture colours, and white as well.
+- **Stroked rings, where the emitter marker and the control arrows are filled.** The
+  opposite call, and right for the opposite reason: those are small marks that have to
+  survive antialiasing to be seen and counted, where these are large and sit over the level
+  being built — a filled disc would hide what the player is going to be standing on.
+- **The export is one module-level helper plus one call.** The tilemap helper's route and
+  for its reason: a pad is a dozen statements of circle geometry, and `create()` is meant to
+  stay a list of the objects in the scene. Its name comes out of the module's identifier set
+  immediately after `bodyFn`, by the rule the tilemap helper and `arcade body` follow, and
+  every prefab factory body's seed set and `update()`'s carry it. The button array is
+  emitted whole and inline — the physics body's call and the emitter config's — because five
+  short objects only mean anything beside each other; it is not tabled, since `TILEMAPS`
+  exists for thousands of numbers and this is twenty.
+- **A bare `setInteractive()` gives a Shape no hit area at all, and this is the trap the
+  whole export test exists to have caught.** With no arguments Phaser derives the hit area
+  from the object's *texture*, and an `Arc` has none — so the button renders perfectly,
+  reads perfectly, and can never be pressed. It has to be handed
+  `new Phaser.Geom.Circle(radius, radius, radius)` and `Geom.Circle.Contains` explicitly;
+  the centre is `(radius, radius)` because Phaser measures a hit area from
+  `-displayOrigin`, which is the container hit area's offset rule arriving one object type
+  over. Nothing about the emitted text or the `tsc --strict` pass could see this: only
+  `export.spec.ts` actually pressing one did.
+- **Three lines in that helper are load-bearing, and each one's absence is a bug visible
+  only on a phone.** `addPointer(2)`, because Phaser tracks a single active pointer unless
+  asked for more — without it a player cannot walk and jump at once, which reads as the jump
+  button being broken rather than as an input budget. `setScrollFactor(0)`, the first this
+  exporter has ever emitted, which is what makes these a HUD rather than three objects in
+  the level. And `pointerout` and `pointerupoutside` beside `pointerup`, because a finger
+  that slides off a button never fires `pointerup` *on that button*, so the direction would
+  stay held for the rest of the game.
+- **The emitted `update()` has two shapes, and the second one is a correctness fix rather
+  than a widening.** An object with no buttons emits what it always emitted, character for
+  character. An object *with* them has the keyboard guard moved out of the `if` and into
+  each condition — `(cursors && cursors.left.isDown) || touch.left` — because on a phone
+  `this.input.keyboard` is null, the key field is never assigned, and the old
+  `if (cursors && object)` would have left the buttons doing nothing on precisely the device
+  they exist for. The guard becomes `object && touch` instead: `create()` assigns the flags
+  unconditionally where it only *may* assign the keys, so that is the one that can be relied
+  on — and it is what narrows the exported `.ts`'s `| undefined` field for the reads below
+  it.
+- **The pad's up is not the platformer's jump.** A platformer reads `touch.jump` where it
+  reads `cursors.up`, and the jump button sits in the *other* corner — which is what lets a
+  thumb hold a direction and another thumb jump. Wiring the jump to the pad's up would have
+  made `addPointer(2)` pointless.
+- **No game-config key and no header note**, the fourth entry in the comment block above
+  `arcadeConfig` where the audio, camera and keyboard refusals already are. `scene.input` is
+  built for every Phaser game, and the extra pointers are asked for at runtime rather than
+  declared — which is not only convenience: `input: { activePointers: n }` belongs to the
+  whole game, and a module dropped into someone else's game can only speak for its own
+  scene.
+- **`constructorFor` gains no case, so every step of this feature is silent** — the
+  renderer, the exporter, the inspector and the store alike. `behaviour.spec.ts` and
+  `export.spec.ts` stand in for the compiler, as they do for physics, cameras and iteration
+  20, and the emitted helper meeting `Phaser.Scene` and `GameObjects.Arc` under
+  `tsc --strict` is what only the toolchain spec can catch — which is why the hostile
+  project's driven node now asks for buttons, and why its two *unemittable* driven nodes ask
+  for them too: `touchZonesOf` dropping a nested one is asserted rather than assumed.
+
 ## Audio
 
 A scene can register sounds, and the export hands each one a named handle. Nothing here
@@ -1936,7 +2070,8 @@ tests/
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   physics.spec.ts           a body drawn, never simulated, and refused inside a group
-  behaviour.spec.ts         solid tiles, a collision row, and an object the keys drive
+  behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
+                            the buttons a thumb will drive it with
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
   camera.spec.ts            a camera drawn, clamped, followed, saved and exported
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
@@ -2196,16 +2331,28 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
-Collisions and controls shipped in iteration 20 with four deliberate holes. **Nothing
-happens when two things touch** — no collider callback, no destroy-on-overlap, no scene
+On-screen controls shipped in iteration 21 with three deliberate holes. **The layout is
+fixed** — a D-pad in one corner and a jump button in the other, sized against the scene
+rectangle and not placeable. Making one draggable is not a loosening but the screen-space
+rectangle this iteration refused: a new geometry kind with its own hit area, drag gesture,
+snap targets and inspector rows, which is an iteration rather than a field. **No analogue
+stick and no swipe**, both of which are a *magnitude* where every direction here is a
+boolean the keyboard already made — reading one would mean `setVelocityX` taking a
+fraction of the walk speed, which is a change to what `speed` means. And **the buttons'
+appearance is the export's**, white at a quarter alpha with an arrow in the middle: the one
+piece of styling this exporter chooses, chosen to be the line a reader will most easily
+change. A skin picker in the editor would be a second answer to a question the generated
+code already answers legibly.
+
+Collisions and controls shipped in iteration 20 with four deliberate holes, one of which
+iteration 21 then closed. **Nothing happens when two things touch** — no collider callback, no destroy-on-overlap, no scene
 transition. That is not deferred work but the line the whole iteration is drawn against:
 which pairs interact is a standing fact and what follows a touch is a sequence of events,
 so the export hands over the overlap and the line inside it stays the user's. A rule table
 of triggers and actions is the shape a later iteration would take, and it is a behaviour
-model rather than more of this one. **No touch or on-screen controls**, which is the honest
-hole for a mobile-first tool: the editor works under a thumb and the exported game's input
-is a keyboard. A pure loosening later — a third `scheme` and a pair of emitted zones — and
-it needs nothing about the format to change first. **No collision groups and no
+model rather than more of this one. **No touch or on-screen controls** was the second, and
+it is the one that closed — see Touch controls above, including where its prediction of "a
+third `scheme`" turned out to be the wrong shape. **No collision groups and no
 `setCollisionBetween` ranges**: a group is a second way of naming a set of objects that the
 scene tree already names one at a time, and a range is `collides` written shorter. **And no
 per-tile properties beyond solid** — a tile is a wall or it is not, and anything finer (ice,

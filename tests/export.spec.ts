@@ -157,10 +157,12 @@ test('a prefab exports as one factory function, called once per instance', async
 
   const exported = await editor.exportCode('ts');
 
-  // The tilemap helper is a module-level `function create…` too, and is not
-  // what this test is about — the fixture's map is what puts it in the file.
+  // The tilemap helper and the on-screen-button helper are module-level
+  // `function create…`s too, and neither is what this test is about — the
+  // fixture's map and its driven object are what put them in the file.
+  const helpers = ['createTilemapLayer', 'createTouchControls'];
   const declarations = (exported.contents.match(/^function create\w*\(/gm) ?? []).filter(
-    (declaration) => !declaration.includes('createTilemapLayer'),
+    (declaration) => !helpers.some((helper) => declaration.includes(helper)),
   );
   expect(declarations).toHaveLength(1);
   const fn = (declarations[0] ?? '').slice('function '.length, -1);
@@ -528,6 +530,96 @@ test('the exported page plays the object it was given controls', async ({
   expect(run.errors).toEqual([]);
 
   await run.close();
+});
+
+test('the exported page plays the object it was given on-screen buttons', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // The sibling of the controls test above, and the only assertion that the
+  // emitted zones are real: everything else about them is text, and text that
+  // compiles is not text a thumb can press.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Walker');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 200);
+  await editor.setPhysics(true);
+  await editor.setPhysicsFlag('Affected by gravity', false);
+  await editor.setControls(true);
+  await editor.setField('Walk speed', 300);
+  await editor.setTouchControls(true);
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain('createTouchControls(this, [');
+  // The keyboard read folded into an `||` rather than left as the guard: on a
+  // phone `this.input.keyboard` is null, so the old shape would have left the
+  // buttons doing nothing on exactly the device they exist for.
+  expect(exported.contents).toContain('(cursors && cursors.left.isDown) || touchControls.left');
+  expect(exported.contents).toContain('addPointer(2)');
+  expect(exported.contents).toContain('setScrollFactor(0)');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('touch'), exported.contents);
+
+  const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+
+  // The page scales the 960x540 scene to fit its canvas and centres it, so a
+  // scene coordinate is a proportion of the canvas box — which is how the
+  // "right" button's own position, derived by `touchZonesOf`, becomes something
+  // a pointer can be aimed at. On a 960x540 scene the radius is 40.5, so the
+  // pad's centre is (162, 378) and its right button is two radii along.
+  const box = await run.page.locator('canvas').boundingBox();
+  if (!box) throw new Error('the exported page has no canvas');
+  const scale = box.width / 960;
+  const target = { x: box.x + 243 * scale, y: box.y + 378 * scale };
+
+  // Held rather than clicked, for the reason the keyboard test holds a key: the
+  // emitted block reads the flag every frame, so a press and a release inside
+  // one frame is a press the game never sees.
+  await run.page.mouse.move(target.x, target.y);
+  await run.page.mouse.down();
+  await run.page.waitForTimeout(500);
+  await run.page.mouse.up();
+
+  const after = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+  expect(after.count).toBeGreaterThan(100);
+  // At 300px/s it travels ~150 scene pixels in half a second. Sideways only:
+  // gravity is off, so a vertical move would mean the wrong flag was read.
+  expect(after.x).toBeGreaterThan(before.x + 20);
+  expect(Math.abs(after.y - before.y)).toBeLessThan(10);
+
+  // And it stops when the finger comes off, which is what the three release
+  // events in the helper are for — a flag left set is a character that walks
+  // into the wall for the rest of the game.
+  const settled = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+  await run.page.waitForTimeout(400);
+  const drifted = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+  // 400ms at the walk speed would be ~120 scene pixels, so a flag still set is
+  // not something this tolerance could miss.
+  expect(Math.abs(drifted.x - settled.x)).toBeLessThan(4);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('a project with nothing driven by touch exports no buttons at all', async ({ editor }) => {
+  // The rule the asset table, the tilemap helper and the prefab factories all
+  // follow, asserted the way "a project with no bodies exports no physics at
+  // all" already asserts its own: a project that predates this feature has to
+  // export byte for byte what it exported before.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Walker');
+  await editor.setPhysics(true);
+  await editor.setControls(true);
+
+  const exported = await editor.exportCode('ts');
+  expect(exported.contents).toContain('update()');
+  expect(exported.contents).not.toContain('createTouchControls');
+  expect(exported.contents).not.toContain('addPointer');
+  // Unchanged, not merely absent: the guard is still the keyboard one and the
+  // conditions are still bare, which is what "byte for byte" means here.
+  expect(exported.contents).toContain('if (cursors.left.isDown)');
 });
 
 test('a hostile project emits its solid tiles and only the collisions it can', async ({

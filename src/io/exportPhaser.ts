@@ -16,6 +16,7 @@ import {
   sliceInsetsOf,
   soundsOf,
   tileMapOf,
+  touchZonesOf,
   type AnimationClip,
   type AudioAsset,
   type GameObjectNode,
@@ -26,6 +27,7 @@ import {
   type Project,
   type SceneDoc,
   type TileMap,
+  type TouchButton,
 } from '../core/schema';
 
 /**
@@ -831,6 +833,92 @@ function buildBodyHelper(fn: string, language: SceneLanguage, indent: string): s
   return lines.join('\n').replace(/^(?!$)/gm, indent);
 }
 
+/** The type of the flags the buttons set, written once for three places. */
+const TOUCH_STATE_TYPE =
+  '{ left: boolean; right: boolean; up: boolean; down: boolean; jump: boolean }';
+
+/**
+ * The on-screen buttons, as a module-level helper.
+ *
+ * The tilemap helper's and the body helper's route, and for the tilemap
+ * helper's reason: a pad is a dozen statements of circle geometry, and
+ * `create()` is meant to stay a list of the objects in the scene rather than a
+ * wall of numbers. It answers with the flags `update()` reads, so the whole
+ * feature is one line in `create()` and one condition per direction.
+ *
+ * Three things in here are not stylistic, and each one's absence is a bug that
+ * only shows up on a phone:
+ *
+ * - `addPointer(2)`. Phaser tracks a single active pointer unless it is asked
+ *   for more, so without this the second finger is simply never delivered and
+ *   a player cannot walk and jump at once — which looks like the jump button
+ *   being broken rather than like an input budget.
+ * - `setScrollFactor(0)`. It is what makes these a HUD rather than three
+ *   objects sitting in the level, and it is the first one this exporter has
+ *   ever emitted. Without it the buttons scroll away the moment the camera
+ *   follows anything.
+ * - `pointerout` and `pointerupoutside` beside `pointerup`. A finger that
+ *   slides off a button never fires `pointerup` *on that button*, so the
+ *   direction would stay held for the rest of the game.
+ * - An explicit `Geom.Circle` hit area. A bare `setInteractive()` derives the
+ *   hit area from the object's *texture*, and a Shape has none — so the button
+ *   ends up with no hit area at all and can never be pressed. It looks exactly
+ *   like a working button and does nothing, which is how it got past a review
+ *   and was caught only by `export.spec` actually pressing one.
+ *
+ * White at a quarter alpha rather than a colour, because the buttons are drawn
+ * over whatever the user built and any hue would be one that clashed with some
+ * project. It is the one piece of appearance this exporter chooses, and it is
+ * chosen to be the one a reader will most easily change.
+ */
+function buildTouchHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const buttonType =
+    "{ key: 'left' | 'right' | 'up' | 'down' | 'jump'; label: string; " +
+    'x: number; y: number; radius: number }';
+  const signature = typed
+    ? `function ${fn}(scene: Phaser.Scene, buttons: ${buttonType}[]): ${TOUCH_STATE_TYPE} {`
+    : `function ${fn}(scene, buttons) {`;
+  const state = typed
+    ? `  const state: ${TOUCH_STATE_TYPE} = ` +
+      '{ left: false, right: false, up: false, down: false, jump: false };'
+    : '  const state = { left: false, right: false, up: false, down: false, jump: false };';
+  const lines = [
+    signature,
+    '  scene.input.addPointer(2);',
+    state,
+    '  for (const button of buttons) {',
+    '    const circle = scene.add.circle(button.x, button.y, button.radius, 0xffffff, 0.25);',
+    '    circle.setScrollFactor(0).setDepth(10000);',
+    '    circle.setInteractive(',
+    '      new Phaser.Geom.Circle(button.radius, button.radius, button.radius),',
+    '      Phaser.Geom.Circle.Contains,',
+    '    );',
+    "    circle.on('pointerdown', () => { state[button.key] = true; });",
+    "    circle.on('pointerup', () => { state[button.key] = false; });",
+    "    circle.on('pointerout', () => { state[button.key] = false; });",
+    "    circle.on('pointerupoutside', () => { state[button.key] = false; });",
+    '    scene.add',
+    "      .text(button.x, button.y, button.label, { color: '#ffffff' })",
+    '      .setFontSize(Math.round(button.radius))',
+    '      .setOrigin(0.5)',
+    '      .setScrollFactor(0)',
+    '      .setDepth(10001);',
+    '  }',
+    '  return state;',
+    '}',
+  ];
+  return lines.join('\n').replace(/^(?!$)/gm, indent);
+}
+
+/** One button, as the literal the helper is handed. */
+function touchButtonLine(button: TouchButton): string {
+  return (
+    `  { key: ${str(button.key)}, label: ${str(button.label)}, ` +
+    `x: ${num(button.x)}, y: ${num(button.y)}, radius: ${num(button.radius)} },`
+  );
+}
+
 /**
  * The lines that give one object its Arcade body, or none at all.
  *
@@ -882,6 +970,11 @@ interface EmitContext {
    * same identifier set and for the same reason as `tilemapFn`.
    */
   bodyFn: string;
+  /**
+   * What the on-screen button helper is called in this module, allocated from
+   * the same identifier set and for the same reason as `tilemapFn`.
+   */
+  touchFn: string;
   /**
    * The sound table, file-wide like `assets` and read by `buildSoundLines`
    * alone. No `receiver` question attaches to it: the only place a sound is
@@ -1226,6 +1319,7 @@ function buildFactories(
       'root',
       ctx.tilemapFn,
       ctx.bodyFn,
+      ctx.touchFn,
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
@@ -1441,6 +1535,7 @@ function buildKeyboardLines(
 function buildUpdateBody(
   driven: DrivenObject[],
   fields: { arrows: string; wasd: string },
+  touchField: string,
   ctx: EmitContext,
 ): string {
   if (driven.length === 0) return '';
@@ -1452,6 +1547,7 @@ function buildUpdateBody(
     'this',
     ctx.tilemapFn,
     ctx.bodyFn,
+    ctx.touchFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
 
@@ -1465,29 +1561,63 @@ function buildUpdateBody(
     lines.push(`const ${local} = this.${field};`);
   }
 
+  // One local for the whole scene, because there is one set of buttons for the
+  // whole scene — the flags belong to the canvas rather than to any one object,
+  // so two driven objects read the same five.
+  const touch = touchField && driven.some((entry) => entry.controls.touch)
+    ? toIdentifier(touchField, used)
+    : '';
+  if (touch) lines.push(`const ${touch} = this.${touchField};`);
+
   for (const { field, controls } of driven) {
     const keys = keyLocal.get(controls.scheme) as string;
     const object = toIdentifier(field, used);
     const body = toIdentifier(`${field} body`, used);
     const speed = num(controls.speed);
+    // An object with no buttons emits exactly what it emitted before this
+    // existed, byte for byte — the rule the asset table, the tilemap helper and
+    // the prefab factories all follow, and the reason this reads as two shapes
+    // rather than one widened one.
+    //
+    // For an object that *has* buttons the keyboard guard has to move out of
+    // the `if` and into each condition, and that is not tidiness: on a phone
+    // `this.input.keyboard` is null, so the field is never assigned, so the old
+    // guard fails and the object is not driven at all — which would leave the
+    // buttons doing nothing on precisely the device they exist for.
+    const held = (direction: string, flag: string) =>
+      touch && controls.touch
+        ? `(${keys} && ${keys}.${direction}.isDown) || ${touch}.${flag}`
+        : `${keys}.${direction}.isDown`;
+    // The buttons rather than the keys, and never both: `create()` assigns the
+    // flags unconditionally where it only *may* assign the key fields, so this
+    // is the one that can be relied on — and it is what narrows the `.ts`'s
+    // `| undefined` field for the reads below.
+    const guard = touch && controls.touch ? `${object} && ${touch}` : `${keys} && ${object}`;
 
     lines.push('');
     lines.push(`const ${object} = this.${field};`);
     // Both guarded together, and with an `if` rather than an early `return`:
     // a second driven object below must still be updated when the first one is
     // somehow missing.
-    lines.push(`if (${keys} && ${object}) {`);
+    lines.push(`if (${guard}) {`);
     lines.push(`  const ${body} = ${ctx.bodyFn}(${object});`);
     lines.push(`  ${body}.setVelocityX(0);`);
-    lines.push(`  if (${keys}.left.isDown) ${body}.setVelocityX(-${speed});`);
-    lines.push(`  else if (${keys}.right.isDown) ${body}.setVelocityX(${speed});`);
+    lines.push(`  if (${held('left', 'left')}) ${body}.setVelocityX(-${speed});`);
+    lines.push(`  else if (${held('right', 'right')}) ${body}.setVelocityX(${speed});`);
     if (controls.mode === 'topDown') {
       lines.push(`  ${body}.setVelocityY(0);`);
-      lines.push(`  if (${keys}.up.isDown) ${body}.setVelocityY(-${speed});`);
-      lines.push(`  else if (${keys}.down.isDown) ${body}.setVelocityY(${speed});`);
+      lines.push(`  if (${held('up', 'up')}) ${body}.setVelocityY(-${speed});`);
+      lines.push(`  else if (${held('down', 'down')}) ${body}.setVelocityY(${speed});`);
     } else {
+      // The pad's up is not a platformer's jump: the jump has a button of its
+      // own on the other side of the canvas, which is what lets a thumb hold a
+      // direction and jump at the same time.
+      // Parenthesised only when there is something to parenthesise, so an
+      // object with no buttons still emits this line character for character.
+      const pressed = held('up', 'jump');
+      const jumped = touch && controls.touch ? `(${pressed})` : pressed;
       lines.push(
-        `  if (${keys}.up.isDown && ${body}.blocked.down) ` +
+        `  if (${jumped} && ${body}.blocked.down) ` +
           `${body}.setVelocityY(-${num(controls.jump)});`,
       );
     }
@@ -1524,6 +1654,7 @@ function buildCreateBody(
     'this',
     ctx.tilemapFn,
     ctx.bodyFn,
+    ctx.touchFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
   const lines: string[] = [
@@ -1619,6 +1750,24 @@ function buildCreateBody(
     lines.push(...buildKeyboardLines(schemes, toIdentifier('keyboard', used), fields));
   }
 
+  // And the buttons immediately after them, out of the same set and at the same
+  // moment: they are the keys' other half, and the `this.<field>` has to be
+  // taken before any object binding is, for the keyboard fields' reason.
+  //
+  // The array is emitted whole and inline — the physics body's call and the
+  // emitter config's rather than `modifiersFor`'s — because five short objects
+  // only mean anything beside each other and beside the canvas they are
+  // measured against. It is not tabled: `TILEMAPS` exists because tile data is
+  // thousands of numbers, and this is twenty.
+  const zones = touchZonesOf(scene);
+  const touchField = zones.length > 0 ? toIdentifier('touch controls', fieldNames) : '';
+  if (touchField) {
+    if (lines.at(-1) !== '') lines.push('');
+    lines.push(`this.${touchField} = ${ctx.touchFn}(this, [`);
+    for (const button of zones) lines.push(touchButtonLine(button));
+    lines.push(']);');
+  }
+
   // The two blocks above each end on a blank, so this is the separator only
   // when there was neither to separate from.
   if (scene.children.length > 0 && lines.at(-1) !== '') lines.push('');
@@ -1696,6 +1845,7 @@ function buildCreateBody(
   while (lines.at(-1) === '') lines.pop();
 
   const declared: { name: string; type: string }[] = [];
+  if (touchField) declared.push({ name: touchField, type: TOUCH_STATE_TYPE });
   if (fields.arrows) {
     declared.push({ name: fields.arrows, type: 'Phaser.Types.Input.Keyboard.CursorKeys' });
   }
@@ -1708,7 +1858,7 @@ function buildCreateBody(
 
   return {
     body: lines.map((line) => (line ? `    ${line}` : '')).join('\n'),
-    update: buildUpdateBody(driven, fields, ctx),
+    update: buildUpdateBody(driven, fields, touchField, ctx),
     fields: declared,
   };
 }
@@ -1762,6 +1912,14 @@ function buildCreateBody(
  * input, and a browser can be one that has none — which is why the emitted
  * block narrows it with an `if` instead of assuming it, and that guard is the
  * whole of what a module dropped into a keyboard-less game needs.
+ *
+ * And the same a fourth time for the on-screen buttons. `scene.input` is built
+ * for every Phaser game, and the extra pointers the pad needs are asked for at
+ * runtime with `addPointer` rather than declared in the config — which is not
+ * only convenience: `input: { activePointers: n }` is the boot scene's config
+ * and belongs to the whole game, where a module dropped into someone else's
+ * game can only speak for its own scene. So there is no key and no note here
+ * either, and the helper says it for itself.
  */
 const arcadeConfig = (needed: boolean) =>
   needed ? "        physics: { default: 'arcade' },\n" : '';
@@ -1803,6 +1961,13 @@ interface Emission {
    * even though the world lines are per scene.
    */
   physics: { any: boolean; dynamic: boolean };
+  /**
+   * Whether any scene asks for on-screen buttons, and therefore whether the
+   * module carries the helper at all — the rule the asset table, the tilemap
+   * helper and the prefab factories all follow, so a project that predates this
+   * exports byte for byte what it always did.
+   */
+  touch: boolean;
 }
 
 function prepare(project: Project): Emission {
@@ -1815,6 +1980,8 @@ function prepare(project: Project): Emission {
   const tilemapFn = toIdentifier('create tilemap layer', moduleNames);
   // And immediately after it, by that same rule.
   const bodyFn = toIdentifier('arcade body', moduleNames);
+  // And immediately after that, by that same rule a fourth time.
+  const touchFn = toIdentifier('create touch controls', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
@@ -1825,12 +1992,23 @@ function prepare(project: Project): Emission {
   const worlds = project.scenes.map(physicsUsedIn);
   return {
     scenes,
-    ctx: { assets, audio, animations, prefabs, tilemaps, tilemapFn, bodyFn, receiver: 'this' },
+    ctx: {
+      assets,
+      audio,
+      animations,
+      prefabs,
+      tilemaps,
+      tilemapFn,
+      bodyFn,
+      touchFn,
+      receiver: 'this',
+    },
     boot: scenes.find((entry) => entry.scene.id === current.id) ?? scenes[0],
     physics: {
       any: worlds.some((world) => world.any),
       dynamic: worlds.some((world) => world.dynamic),
     },
+    touch: project.scenes.some((scene) => touchZonesOf(scene).length > 0),
   };
 }
 
@@ -1919,7 +2097,7 @@ ${created.body}
  * outputs cover the three real cases without overlapping.
  */
 export function generateScene(project: Project, language: SceneLanguage = 'ts'): string {
-  const { scenes, ctx, boot, physics } = prepare(project);
+  const { scenes, ctx, boot, physics, touch } = prepare(project);
 
   // A project with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
@@ -1945,13 +2123,16 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   const bodies = physics.dynamic
     ? `\n${buildBodyHelper(ctx.bodyFn, language, '')}\n`
     : '';
+  // Same rule again: no on-screen buttons, no helper, so every project that
+  // predates them exports byte for byte what it always did.
+  const buttons = touch ? `\n${buildTouchHelper(ctx.touchFn, language, '')}\n` : '';
   const classes = scenes
     .map((entry) => buildSceneClass(project, entry, ctx, language, true))
     .join('\n\n');
 
   return `${header(project)}${physicsNote(physics.any)}
 import Phaser from 'phaser';
-${table}${audio}${tiles}${bodies}${factories}
+${table}${audio}${tiles}${bodies}${buttons}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -1964,7 +2145,7 @@ export default ${boot.className};
  * the Phaser it was built for.
  */
 export function generateRunnableHtml(project: Project): string {
-  const { scenes, ctx, boot, physics } = prepare(project);
+  const { scenes, ctx, boot, physics, touch } = prepare(project);
   // phaserVersion comes from the project file, so it is not trustworthy input
   // for a URL. Anything that is not a plain version falls back to the version
   // this editor targets.
@@ -1989,6 +2170,7 @@ export function generateRunnableHtml(project: Project): string {
   const bodies = physics.dynamic
     ? `${buildBodyHelper(ctx.bodyFn, 'js', '      ')}\n\n`
     : '';
+  const buttons = touch ? `${buildTouchHelper(ctx.touchFn, 'js', '      ')}\n\n` : '';
   const classes = scenes
     .map((entry) =>
       buildSceneClass(project, entry, ctx, 'js', false).replace(/^(?!$)/gm, '      '),
@@ -2020,7 +2202,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${tiles}${bodies}${factories}      ${classes}
+${table}${audio}${tiles}${bodies}${buttons}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

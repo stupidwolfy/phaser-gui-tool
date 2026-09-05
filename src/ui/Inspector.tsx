@@ -2015,6 +2015,14 @@ function ControlsSection({ node }: { node: GameObjectNode }) {
               setNodeControls(node.id, { scheme: scheme === 'wasd' ? 'wasd' : 'arrows' })
             }
           />
+          {/* Beside the keys rather than a third option in them: which keys and
+              whether there are also buttons are two questions, and keeping them
+              apart is what lets one export play on a desktop and on a phone. */}
+          <CheckboxField
+            label="On-screen buttons"
+            value={controls.touch}
+            onChange={(touch) => setNodeControls(node.id, { touch })}
+          />
           <div className="field-row">
             <NumberField
               label="Walk speed"
@@ -2039,6 +2047,15 @@ function ControlsSection({ node }: { node: GameObjectNode }) {
             reads the keys, and a jump needs something under it, which is a
             collision or a solid tile.
           </p>
+          {controls.touch && (
+            <p className="hint">
+              The orange rings are where the exported game draws its buttons. They
+              are the game's, not the editor's — nothing here presses them — and
+              there is one set per scene, so everything driven in this scene
+              reads the same buttons. A top-down object puts up and down on the
+              pad; a platformer puts a jump button on the right.
+            </p>
+          )}
         </>
       )}
     </>
