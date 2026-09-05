@@ -73,6 +73,12 @@ on a desktop.
   it loops and whether it starts with the scene. Exported code preloads exactly the sounds
   a scene uses and gives each one a named handle, so `jumpSound.play()` is the one line you
   write — the editor itself stays silent while you work
+- Point the **camera**: under Camera in the scene panel, set where the game opens, how far
+  in it is zoomed, whether scrolling stays inside the scene, and which object it follows.
+  The violet frame on the canvas is the shot the scene starts on, and it exports as real
+  `this.cameras.main.setScroll(...)` / `setZoom(...)` / `startFollow(...)`. Nothing here
+  moves your own view of the scene — pan and pinch as usual, and press ⤢ to see all of it
+  again
 - Build a game out of several **scenes**: `+ Scene` in the scene panel adds one, the
   chips beside it switch between them, and the inspector duplicates or deletes the one
   you are in. Images, sounds, animations and prefabs are shared by all of them; the project

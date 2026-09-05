@@ -755,6 +755,11 @@ export interface SceneDoc {
    * read through `soundsOf`, never directly.
    */
   sounds?: SceneSound[];
+  /**
+   * Where the game looks when this scene starts. Optional for the reason
+   * `guides` is, and read through `cameraOf`, never directly.
+   */
+  camera?: SceneCamera;
 }
 
 /**
@@ -856,6 +861,170 @@ export function soundsOf(project: Project, scene: SceneDoc): SceneSound[] {
     });
   }
   return sounds;
+}
+
+/**
+ * Where the game looks when this scene starts.
+ *
+ * The scene already says how big the view is — a camera's viewport is the game
+ * canvas, which is this scene's own width and height — so what is left is where
+ * that view sits, how far in it is zoomed, what it may not scroll past and what
+ * it chases. Nothing here says *when*: an effect over time is game logic, the
+ * argument that keeps `scene.start` out of the document.
+ *
+ * `boundToScene` is a boolean rather than a rectangle for the reason
+ * `ScenePhysics` has no bounds of its own: the scene rectangle already says how
+ * big the scene is, and a second rectangle saying it again is two fields free
+ * to disagree about one number.
+ */
+export interface SceneCamera {
+  /** Top-left of the *unzoomed* viewport in world space, as Phaser stores it. */
+  scrollX: number;
+  scrollY: number;
+  /** Above 1 shows less of the world, below 1 shows more. Never 0. */
+  zoom: number;
+  /** Whether scrolling is held inside the scene rectangle. */
+  boundToScene: boolean;
+  /** Phaser's own pixel-art switch, passed on to `startFollow` as well. */
+  roundPixels: boolean;
+  /**
+   * A top-level node this camera follows, or null.
+   *
+   * Top-level for the reason an Arcade body is: following reads the target's
+   * `x`/`y` as world coordinates, and a node inside a container has
+   * parent-relative ones. It is the same rule arriving twice, and it is
+   * enforced the same way — stripped on read here, refused on write in the
+   * store.
+   */
+  followId: string | null;
+  /** How hard it chases: 1 snaps, lower is smoother. Phaser's `lerp`. */
+  followLerp: number;
+}
+
+/** What a scene's camera is when the file does not say. */
+export const DEFAULT_CAMERA: SceneCamera = {
+  scrollX: 0,
+  scrollY: 0,
+  zoom: 1,
+  boundToScene: false,
+  roundPixels: false,
+  followId: null,
+  followLerp: 1,
+};
+
+/**
+ * The scene's camera: defaulted, validated, and resolved against the scene.
+ *
+ * The `guidesOf` / `scenePhysicsOf` / `soundsOf` / `frameGridOf` / `tileMapOf` /
+ * `prefabChildrenOf` family, and it answers three questions at once — is there a
+ * camera, are its numbers ones Phaser can be given, and does it follow
+ * something a follow could actually work on. Any of the three forgotten is a
+ * `setZoom(0)`, which Phaser clamps behind your back, or a
+ * `startFollow(undefined)`, which it cannot be asked for at all.
+ *
+ * Numbers are repaired and the *reference* is dropped, which is `soundsOf`'s
+ * split: a nonsensical zoom has a sensible value to fall back to and a
+ * `followId` naming nothing has none. Dropping it here is what means nothing
+ * downstream needs a guard — no pruning in `deleteNode`, in `undo` or in the
+ * scene switcher, exactly as no action prunes a dangling `audioId`.
+ *
+ * A follow target found below the top level reads as *absent* rather than being
+ * deleted, which is the answer `physicsOf` gives a body on a nested node and for
+ * its reason: a node dragged into a group and back out is the same node, and
+ * throwing the setting away on the way in would be a deletion nothing asked for.
+ *
+ * A fresh object every call, exactly as `physicsOf` and `tileMapOf` build one —
+ * so `useEditorStore((s) => cameraOf(...))` compares unequal on every store
+ * change and loops forever (React error #185). Select the scene and derive
+ * outside the selector.
+ */
+export function cameraOf(scene: SceneDoc): SceneCamera {
+  const raw = scene.camera;
+  if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_CAMERA };
+
+  const numberOr = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+  const zoom = numberOr(raw.zoom, 1);
+  const lerp = numberOr(raw.followLerp, 1);
+  const followId =
+    typeof raw.followId === 'string' &&
+    scene.children.some((child) => child.id === raw.followId)
+      ? raw.followId
+      : null;
+
+  return {
+    scrollX: numberOr(raw.scrollX, 0),
+    scrollY: numberOr(raw.scrollY, 0),
+    // Phaser clamps a zoom of 0 to 0.001 rather than refusing it, which is a
+    // camera showing a thousand scenes at once and nothing saying why.
+    zoom: zoom > 0 ? zoom : 1,
+    boundToScene: raw.boundToScene === true,
+    roundPixels: raw.roundPixels === true,
+    followId,
+    // Clamped, and a zero repaired rather than kept: Phaser reads a lerp of 0
+    // as "do not track on this axis", which is a camera that says it follows
+    // something and then does not.
+    followLerp: lerp > 0 ? Math.min(1, lerp) : 1,
+  };
+}
+
+/** Whether a camera is the one every scene has by default. */
+export function isDefaultCamera(camera: SceneCamera): boolean {
+  return (
+    camera.scrollX === DEFAULT_CAMERA.scrollX &&
+    camera.scrollY === DEFAULT_CAMERA.scrollY &&
+    camera.zoom === DEFAULT_CAMERA.zoom &&
+    camera.boundToScene === DEFAULT_CAMERA.boundToScene &&
+    camera.roundPixels === DEFAULT_CAMERA.roundPixels &&
+    camera.followId === DEFAULT_CAMERA.followId &&
+    camera.followLerp === DEFAULT_CAMERA.followLerp
+  );
+}
+
+/**
+ * The part of the world the camera opens on, in scene coordinates.
+ *
+ * The arithmetic is Phaser's own, from `Camera.preRender` and `clampX`/`clampY`,
+ * and it has to stay copied for `frameLayoutOf`'s reason: this is what the
+ * editor draws, and a formula of our own would offer the user a shot their
+ * exported game does not open on. Two parts of it are easy to get wrong by
+ * guessing — the view is centred on the *unzoomed* viewport's middle rather
+ * than pinned to its top-left, so zooming closes in on the middle of the shot
+ * and not on its corner; and the bounds clamp moves the scroll rather than
+ * cropping the view.
+ *
+ * The viewport is the scene's own width and height because that is the size of
+ * the game canvas an export builds — the same "one number, one place" that
+ * gives a sprite no width of its own.
+ *
+ * Where a follow would take it is deliberately not in here. The frame is the
+ * shot the scene opens on; a camera in motion is the thing the editor does not
+ * run, exactly as it does not run a physics step.
+ */
+export function cameraViewOf(scene: SceneDoc): { x: number; y: number; width: number; height: number } {
+  const camera = cameraOf(scene);
+  const width = scene.width / camera.zoom;
+  const height = scene.height / camera.zoom;
+
+  // Phaser's `clampX`, where the viewport and the bounds are both the scene's
+  // own size — which is what makes the two arguments one number here.
+  const clamp = (scroll: number, display: number, size: number) => {
+    if (!camera.boundToScene) return scroll;
+    const low = (display - size) / 2;
+    const high = Math.max(low, low + size - display);
+    return Math.min(high, Math.max(low, scroll));
+  };
+
+  const scrollX = clamp(camera.scrollX, width, scene.width);
+  const scrollY = clamp(camera.scrollY, height, scene.height);
+
+  return {
+    x: scrollX + scene.width / 2 - width / 2,
+    y: scrollY + scene.height / 2 - height / 2,
+    width,
+    height,
+  };
 }
 
 /**

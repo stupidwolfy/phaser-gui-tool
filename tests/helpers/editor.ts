@@ -1,5 +1,5 @@
 import { expect, type CDPSession, type Locator, type Page } from '@playwright/test';
-import { findColor, type ColorBlob } from './pixels';
+import { findColor, findColorBox, type ColorBlob, type ColorBox } from './pixels';
 
 /** The default scene, from `src/core/defaults.ts`. */
 export const SCENE = { width: 960, height: 540 };
@@ -455,6 +455,27 @@ export class EditorPage {
     await this.setField('Gravity Y', y);
   }
 
+  /**
+   * The scene's camera, which lives in `SceneInspector` beside the gravity —
+   * so this deselects first, exactly as `setGravity` and the guide helpers do.
+   */
+  async setCamera(patch: { x?: number; y?: number; zoom?: number }): Promise<void> {
+    await this.deselect();
+    if (patch.x !== undefined) await this.setField('Camera X', patch.x);
+    if (patch.y !== undefined) await this.setField('Camera Y', patch.y);
+    if (patch.zoom !== undefined) await this.setField('Camera zoom', patch.zoom);
+  }
+
+  /** A checkbox in the scene panel, which is only rendered with nothing selected. */
+  async setSceneFlag(label: string, on: boolean): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    const box = this.checkbox(label);
+    if (on) await box.check();
+    else await box.uncheck();
+    await this.settle();
+  }
+
   /** A physics checkbox other than the on/off one, by its label. */
   async setPhysicsFlag(label: string, on: boolean): Promise<void> {
     await this.openPanel('inspect');
@@ -670,6 +691,19 @@ export class EditorPage {
     return blob.count === 0
       ? blob
       : { count: blob.count, x: blob.x + origin.x, y: blob.y + origin.y };
+  }
+
+  /**
+   * The box a colour is drawn in, in page coordinates.
+   *
+   * `findDrawn`'s reading for an *outline*, where a centroid is not the steady
+   * one: see `findColorBox`. Both edges have to be on screen for it to mean
+   * anything.
+   */
+  async findDrawnBox(hex: string, tolerance?: number): Promise<ColorBox> {
+    const { png, origin } = await this.shot();
+    const box = await findColorBox(this.page, png, hex, tolerance);
+    return box.count === 0 ? box : { ...box, x: box.x + origin.x, y: box.y + origin.y };
   }
 
   // -- pointer ---------------------------------------------------------------

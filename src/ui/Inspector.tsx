@@ -8,7 +8,9 @@ import {
   useSelectionNodes,
 } from '../core/store';
 import {
+  DEFAULT_CAMERA,
   EMPTY_TILE,
+  cameraOf,
   canHavePhysics,
   containsInstance,
   containsNode,
@@ -17,6 +19,7 @@ import {
   frameCountOf,
   frameGridOf,
   guidesOf,
+  isDefaultCamera,
   physicsOf,
   scenePhysicsOf,
   siblingsOf,
@@ -309,6 +312,8 @@ function SceneInspector() {
         </button>
       </div>
 
+      <CameraSection />
+
       <WorldSection />
 
       {/* Here rather than in the scene panel beside the prefab list, which was
@@ -320,6 +325,109 @@ function SceneInspector() {
 
       <SnappingSection />
     </div>
+  );
+}
+
+/**
+ * Where the game looks when this scene starts.
+ *
+ * Document state, in the panel about the space objects are placed in and above
+ * the gravity for the reason the gravity is above the guides: it belongs to
+ * every object at once. Unlike the gravity it is always shown — a camera is not
+ * a setting that can only ever do nothing, since every scene has one whether or
+ * not the file says so, and the frame it draws is the only place a user can see
+ * what the numbers mean.
+ *
+ * Every label carries "Camera", and that is not decoration: the object's own
+ * Name is a few rows up this same panel, so are Width, Height and the two
+ * Gravity fields, and the suite locates a field by its exact label. It is the
+ * "Animation name, not Name" rule arriving by a third route.
+ */
+function CameraSection() {
+  const scene = useActiveScene();
+  // Derived outside the selector, never inside one: `cameraOf` builds a fresh
+  // object every call, so `useEditorStore((s) => cameraOf(...))` would compare
+  // unequal on every store change and loop forever (React error #185).
+  const setCamera = useEditorStore((s) => s.setCamera);
+  const camera = cameraOf(scene);
+
+  // Top level only, which is the whole of "a camera follows world coordinates":
+  // a node inside a container has parent-relative ones, so following it would
+  // scroll to somewhere nothing is. The same rule an Arcade body follows, and
+  // the same `true` the exporter and the renderer pass.
+  const targets = scene.children;
+
+  return (
+    <>
+      <div className="panel__section">Camera</div>
+      <div className="field-row">
+        <NumberField
+          label="Camera X"
+          value={camera.scrollX}
+          onChange={(scrollX) => setCamera({ scrollX })}
+        />
+        <NumberField
+          label="Camera Y"
+          value={camera.scrollY}
+          onChange={(scrollY) => setCamera({ scrollY })}
+        />
+      </div>
+      <NumberField
+        label="Camera zoom"
+        value={camera.zoom}
+        step={0.1}
+        min={0.05}
+        onChange={(zoom) => setCamera({ zoom })}
+      />
+      <SelectField
+        label="Camera follows"
+        value={camera.followId ?? ''}
+        options={[
+          { value: '', label: 'Nothing' },
+          ...targets.map((node) => ({ value: node.id, label: node.name })),
+        ]}
+        onChange={(followId) => setCamera({ followId: followId === '' ? null : followId })}
+      />
+      {/* Only while something is followed. A smoothing with nothing to chase is
+          a field that does not apply rather than one that is switched off, which
+          is the call the dynamic-only body fields already make: they are absent
+          on a static body rather than disabled. */}
+      {camera.followId !== null && (
+        <NumberField
+          label="Camera smoothing"
+          value={camera.followLerp}
+          step={0.05}
+          min={0.01}
+          max={1}
+          onChange={(followLerp) => setCamera({ followLerp })}
+        />
+      )}
+      <CheckboxField
+        label="Limit camera to the scene"
+        value={camera.boundToScene}
+        onChange={(boundToScene) => setCamera({ boundToScene })}
+      />
+      <CheckboxField
+        label="Round camera to whole pixels"
+        value={camera.roundPixels}
+        onChange={(roundPixels) => setCamera({ roundPixels })}
+      />
+      {!isDefaultCamera(camera) && (
+        <button
+          className="btn btn--block"
+          onClick={() => setCamera(DEFAULT_CAMERA)}
+          title="Put the camera back to the whole scene at zoom 1"
+        >
+          Reset camera
+        </button>
+      )}
+      <p className="hint">
+        The violet frame is what the game opens on. Only objects at the top level
+        can be followed — one inside a group is positioned relative to that
+        group, not to the scene. Nothing here moves the editor's own view: pan
+        and pinch as usual, and press ⤢ to see the whole scene again.
+      </p>
+    </>
   );
 }
 
