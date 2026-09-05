@@ -38,8 +38,10 @@ gave an object a body: an Arcade physics body on a top-level node, a gravity on 
 and an export that emits real `physics.add.existing` — drawn on a canvas that still
 refuses to simulate. Iteration 17 (shipped) gave a scene a sound: an audio table beside the
 images, a per-scene list of what a scene registers, and an export that hands the user a named
-handle to play — on a canvas that stays silent unless asked. See the README for the
-user-facing feature list.
+handle to play — on a canvas that stays silent unless asked. Iteration 18 (shipped) said
+where the game looks: a per-scene camera with a scroll, a zoom, a follow target and the
+scene for its bounds, drawn on the canvas as the frame it opens on and never once applied
+to the editor's own view. See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -1062,6 +1064,135 @@ ever makes a noise on its own.
   toolchain tests for no coverage, since the emitted `.play()` is one statement whose text
   is what `export.spec.ts` asserts.
 
+## Cameras
+
+A scene says where the game looks: `scene.camera` holds a scroll, a zoom, whether
+scrolling is held inside the scene, whether it rounds to whole pixels, and what it
+follows. It is drawn on the canvas as a violet frame and exported as real
+`this.cameras.main` calls, and the editor never once applies it.
+
+- **Drawn, never applied — and this is Physics' "drawn, never run" one iteration on.**
+  The editor's `cameras.main` is the *user's view* of the scene: pan, pinch, ⤢ Fit,
+  `cameraTouched`. Applying the document's scroll and zoom to it would mean the user
+  could not look anywhere else without editing the document, and that panning would
+  rewrite it — which is exactly why a physics step is not run here either. So
+  `syncFromStore`'s `cameras.main.setBackgroundColor(scene.backgroundColor)` stays the
+  **only** thing the document has ever written to the editor's camera, and this feature
+  deliberately does not become the second. It is also what keeps the suite's
+  `sceneToScreen` honest: that helper derives the editor's zoom from `zoomToFit`, and a
+  document camera that moved the view would have made every drawn assertion in every spec
+  wrong by a factor nobody would have gone looking for.
+- **The camera has no rectangle of its own, and both halves of that follow from one
+  rule.** Its *viewport* is the game canvas, which is the scene's own width and height —
+  the sprite-has-no-width argument, and the reason `usedIn`'s exported page config already
+  reads those two numbers. Its *bounds* are a boolean rather than four numbers, for the
+  reason `ScenePhysics` has no bounds either: the scene rectangle already says how big the
+  scene is, and a second rectangle saying it again is two fields free to disagree. The
+  payoff is in the renderer, which draws nothing for the bounds at all — `sceneFrame`
+  already outlines exactly that box.
+- **`cameraOf` is the only reader**, in the `guidesOf` / `scenePhysicsOf` / `soundsOf` /
+  `frameGridOf` / `tileMapOf` / `prefabChildrenOf` family, and it splits repair from
+  dropping the way `soundsOf` does: a nonsensical zoom has a sensible value to fall back
+  to, and a `followId` naming nothing has none. A zoom of 0 is *repaired* rather than
+  passed on, because Phaser clamps it to 0.001 behind your back — a camera showing a
+  thousand scenes at once with nothing saying why — and a `followLerp` of 0 likewise,
+  since Phaser reads that as "do not track on this axis", which is a camera that says it
+  follows something and then does not. It builds a fresh object per call, so
+  `useEditorStore((s) => cameraOf(...))` is React error #185: the `tileMapOf` trap, fourth
+  time.
+- **Only a top-level node may be followed, and it is the physics rule arriving twice.** A
+  camera follow reads its target's `x`/`y` as world coordinates every frame, which is the
+  same thing an Arcade body does and the same reason a node inside a container cannot have
+  one — a prefab definition's children are container children by the same mechanism.
+  Enforced the same way too, **strip on read, refuse on write**: `cameraOf` searches
+  `scene.children` only, and `setCamera` ignores an id that is not in that array. The two
+  look redundant and are not — the second is what stops the UI offering something that
+  would do nothing, and the first is what lets `moveNode`, `groupSelection` and the tree's
+  drag-to-nest each need no guard. A target found deeper reads as *absent* rather than
+  being deleted, so a node dragged into a group and back out keeps the follow.
+- **A dangling `followId` is dropped on read, and that is what means nothing prunes it.**
+  `deleteNode`, `deleteSelection`, `undo` and the scene switcher all leave it alone, as no
+  action prunes a dangling `audioId`. `duplicateScene` is the one place that has to think:
+  a copied camera would otherwise point into the scene it was copied *from*, which
+  `cameraOf` would then drop — a follow silently lost on a duplicate. The two child lists
+  are the same list in the same order, so the target's index in the original gives its new
+  id, and no id map is built.
+- **`SCHEMA_VERSION` did not bump, and this is the guides case rather than any of the five
+  crash cases.** A camera is not a node type: it is an optional field on a scene, and
+  `scenes` is the one part of a file `parseProject` passes through verbatim. A v8 build has
+  a `createDisplayObject` case for every type in the file, reads `scene.camera` nowhere,
+  draws identically, and carries it back out on a re-save. **This stays contingent on
+  `parseProject` not reconstructing scenes field by field** — if it ever starts to, an old
+  build silently loses every camera on every save. `camera.spec.ts` asserts the version in
+  the saved artefact so a future bump is a deliberate act.
+- **`cameraViewOf` copies Phaser's arithmetic and has to stay copied**, which is
+  `frameLayoutOf`'s rule one module over: this is what the editor draws, and a formula of
+  our own would offer the user a shot their exported game does not open on. Two parts of
+  it are wrong if guessed. The view is centred on the *unzoomed* viewport's middle
+  (`midPoint = scroll + size / 2`), so zooming closes in on the middle of the shot rather
+  than on its top-left corner — which is why a camera at scroll (0, 0) and zoom 2 is
+  centred in the scene rather than parked in its corner. And the bounds clamp moves the
+  *scroll*, it does not crop the view, so a shot pushed past the edge comes back whole.
+- **The frame is drawn only while the camera is not the default.** At the default it lands
+  exactly on `sceneFrame` and says the same thing twice, and the grid already settles that
+  question — it stops drawing below `MIN_GRID_PIXELS` while the snapping carries on. It
+  also means every project that predates this feature draws byte for byte what it drew
+  before, which is what let the whole existing suite keep its colour assertions.
+- **`drawCamera` is in `update()`, with `drawGrid`, `syncPlacedGuides` and `drawBodies`**,
+  and for their reason: its stroke is a screen width divided by the camera zoom, and a
+  pinch changes the zoom without touching the store. Signature-gated like the grid, since
+  on almost every frame none of it has moved.
+- **Depth 997: above every object, below the paint grid and the placed guides at 998.**
+  Above, because a camera frame hidden under a tilemap is a camera frame that says nothing
+  — the argument that puts the guides over the objects. Below, because unlike a guide this
+  is furniture nobody grabs: it is not interactive at all, so it must never cover
+  something that is.
+- **There is no camera gesture, and the reason is mechanical rather than a matter of
+  taste.** A guide is grabbable because its band is 24 screen pixels wide; a camera frame's
+  *inside* is the whole scene, so a hit area over it would steal every press on the canvas.
+  Grabbing one by an edge band needs a custom hit callback, and it is a loosening for
+  later rather than something missing here.
+- **The export is a prologue and one epilogue, and the split is the interesting part.**
+  Scroll, zoom, rounding and bounds go in `create()`'s prologue beside the background
+  colour, which is the same camera. `startFollow` cannot: it names a binding the object
+  list has not made yet, so it is **the first thing this exporter has ever emitted after
+  the objects**. `emitNode` already returns the identifier it bound, so the loop records
+  them and the epilogue looks one up; a follow target that emitted no object gets a
+  comment saying so, which is `missingReason`'s treatment.
+- **The block is emitted whole, defaults included, and only when the camera is not the
+  default** — the physics body's call and the emitter config's, deliberately unlike
+  `modifiersFor`. These dials interact: a zoom moves the shot as well as tightening it, and
+  bounds only bite once the scroll would leave the scene, so a reader tuning one wants the
+  others beside it. The gate is the rule the asset table, the tilemap helper and the prefab
+  factories all follow.
+- **No game-config key and no header note, unlike Arcade.** `this.cameras.main` is built by
+  the Camera Manager when a scene boots, in every Phaser game there has ever been, so a
+  module dropped into someone else's game needs no change at all. Said in a comment beside
+  `arcadeConfig`, where the audio decision is already recorded and where "no branch needed"
+  and "forgot a branch" look identical.
+- **`constructorFor` gains no case, so every step of this feature is silent** — the
+  renderer, the exporter, the inspector and the store alike. `camera.spec.ts` and
+  `export.spec.ts` are what stand in for the compiler, exactly as they are for physics.
+- **`findColorBox` is new, and it is a better instrument than a centroid for anything
+  outlined.** A two-pixel stroke lands on a different sub-pixel phase on each of its four
+  edges, so one edge matches at full strength where the opposite one splits across two
+  half-strength pixels — which dragged the frame's centroid 14px sideways on the mobile
+  project for a reason that had nothing to do with where it was. An extent is immune to
+  that, since a one-pixel edge and a two-pixel edge start in the same place, and it is the
+  only reading that can say how *big* something is drawn — which for a camera frame is half
+  of what it means.
+- **The panel is in `SceneInspector`, with the gravity and the guides**, and always shown
+  rather than gated the way the gravity is: every scene has a camera whether or not the
+  file says so, and the frame is the only place a user can see what the numbers mean. Every
+  label carries "Camera", because Name, Width, Height and both Gravity fields are on that
+  same panel and the suite matches a label exactly — the "Animation name, not Name" rule
+  arriving by a third route.
+- **The editor never looks through the camera, and there is no button that does.** It was
+  the obvious convenience and it is the one thing this feature refuses: moving the editor's
+  view is what "drawn, never applied" rules out, and a "set the camera from my view" button
+  is the same coupling written backwards.
+
+
 ## Selection
 
 `selectedIds: string[]` is the selection, in the order it was picked; the **last** entry
@@ -1519,12 +1650,13 @@ tests/
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
   physics.spec.ts           a body drawn, never simulated, and refused inside a group
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
+  camera.spec.ts            a camera drawn, clamped, followed, saved and exported
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
   helpers/editor.ts         the page object: panels, fields, gestures, downloads
-  helpers/pixels.ts         canvas readback and colour centroids
+  helpers/pixels.ts         canvas readback, colour centroids and colour extents
   helpers/hostile.ts        the project made of everything a project should not contain
   helpers/png.ts            a solid-colour PNG, so image fixtures are readable in a diff
   helpers/wav.ts            a synthesised WAV, for the same reason and with no encoder
@@ -1722,6 +1854,15 @@ Traps, each of which produced a confident wrong answer at some point:
 - **Leave paint mode before reading pixels.** The cell grid is drawn over the map while the
   mode is on, and a colour assertion should not have to reason about the editor's own
   overlay — the same care the move bar's accent-coloured button already forced on `shot`.
+- **A colour centroid is the wrong instrument for an outline.** A two-pixel stroke lands on
+  a different sub-pixel phase on each of its four edges, so one edge matches at full
+  strength where the opposite one splits across two half-strength pixels — and the centroid
+  moves by a tenth of the shape's width for a reason that is not position. It cost the
+  camera frame 14px on the mobile project and nothing at all on the desktop one, which is
+  the shape of a wrong answer rather than a flaky one. `findColorBox` reports the extent
+  instead: immune to it, because a one-pixel edge and a two-pixel edge start in the same
+  place, and it is the only reading that can also say how big something is drawn. Both
+  edges have to be on screen for it to mean anything.
 - `@playwright/test` is pinned to `~1.56` because that is the release whose bundled
   Chromium (1194) is the one preinstalled in the container this repo is developed in — do
   not run `playwright install` there. `CHROMIUM_PATH` overrides the executable if a
@@ -1767,9 +1908,24 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
-Texture atlases (the asset table holds whole images cut on a regular grid; an atlas is
+Texture atlases: the asset table holds whole images cut on a regular grid, and an atlas is
 named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
-than more of this one), and cameras.
+than more of this one.
+
+Cameras shipped in iteration 18 with five deliberate holes. **No second camera** —
+`cameras.add` is a list of cameras with viewports of their own, plus an ignore list saying
+which objects each one draws, and a minimap is two of those decisions rather than more of
+this one. **No rotation, fade, flash, shake, pan or `zoomTo`** — every one is a thing the
+camera does *over time*, which is game logic and the `scene.start` argument; the handle
+they would act on is `this.cameras.main`, which the user already has. **No follow offset
+and no dead zone**, which are a pure loosening later: two numbers and a `setFollowOffset`,
+two more and a `setDeadzone`, with nothing about the format or the drawing that has to
+change first. **No camera gesture on the canvas** — see Cameras above for why a frame whose
+inside is the whole scene cannot simply be made grabbable, and why an edge band is the
+shape a later iteration would take. And **no looking through the camera**, which is not
+deferred work but the thing the whole feature refuses: moving the editor's own view is what
+"drawn, never applied" rules out, and a "set the camera from my view" button is the same
+coupling written backwards.
 
 Audio shipped in iteration 17 with four deliberate holes. **No audio sprites** — Phaser's
 `load.audioSprite` takes a JSON of named `{ start, duration }` markers, which is a second
@@ -1839,7 +1995,7 @@ Alignment and distribution shipped in iteration 6, snapping in iteration 7, equa
 and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9,
 persistent guides in iteration 10, sprite sheets with animations in iteration 11, prefabs
 in iteration 12, multiple scenes in iteration 13, tilemaps in iteration 14, particles in
-iteration 15 and physics bodies in iteration 16. The
+iteration 15, physics bodies in iteration 16 and the scene camera in iteration 18. The
 boxes the geometry family needs are in `src/core/bounds.ts`,
 which any further geometry tool can read. That family is complete in the sense that
 mattered — the user can now author a line of their own — and what is left of it is more of

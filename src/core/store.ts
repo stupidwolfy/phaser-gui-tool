@@ -20,6 +20,7 @@ import {
   type Rect,
 } from './bounds';
 import {
+  cameraOf,
   canHavePhysics,
   clampFrame,
   composeTransform,
@@ -32,6 +33,7 @@ import {
   frameCountOf,
   frameGridOf,
   guidesOf,
+  isDefaultCamera,
   localTransformIn,
   newId,
   physicsOf,
@@ -50,6 +52,7 @@ import {
   type PhysicsBody,
   type Prefab,
   type Project,
+  type SceneCamera,
   type SceneDoc,
   type SceneSound,
   type SpriteProps,
@@ -465,9 +468,28 @@ export interface EditorState {
   /**
    * `guides` is excluded alongside `children` and `id`: they have their own
    * four actions below, and one patch path that could also rewrite the array
-   * wholesale is how a second, undocumented way to edit them appears.
+   * wholesale is how a second, undocumented way to edit them appears. `camera`
+   * is excluded for the same reason and has `setCamera` below.
    */
-  updateScene: (patch: Partial<Omit<SceneDoc, 'children' | 'id' | 'guides'>>) => void;
+  updateScene: (
+    patch: Partial<Omit<SceneDoc, 'children' | 'id' | 'guides' | 'camera'>>,
+  ) => void;
+
+  // -- camera ----------------------------------------------------------------
+  /**
+   * Edits the scene's camera, merging over the validated read.
+   *
+   * `camera` is excluded from `updateScene`'s patch for the reason `guides` is:
+   * one path that could also rewrite it wholesale is how a second, undocumented
+   * way to edit it appears — and this one cleans a hand-edited field on its way
+   * past, which a wholesale patch would not.
+   *
+   * A `followId` naming anything but a direct child of the scene is ignored,
+   * which is `setNodePhysics` reaching into `scene.children` directly and for
+   * the same reason: a camera follows world coordinates, and a node inside a
+   * container has none of its own.
+   */
+  setCamera: (patch: Partial<SceneCamera>) => void;
 
   // -- physics ---------------------------------------------------------------
   /**
@@ -1232,6 +1254,20 @@ export const useEditorStore = create<EditorState>((set, get) => {
           // were handed first.
           sounds: soundsOf(project, current).map((sound) => ({ ...sound, id: newId() })),
         };
+        // And the camera, whose `followId` names one of the nodes just cloned.
+        // The two lists are the same list in the same order, so the follow
+        // target's index in the original gives its new id — no id map is needed
+        // and none is built. A camera left pointing into the scene it was
+        // copied from is the dangling reference `cameraOf` would then drop,
+        // which is a follow silently lost on a duplicate.
+        if (current.camera !== undefined) {
+          const camera = cameraOf(current);
+          const index = current.children.findIndex((child) => child.id === camera.followId);
+          copy.camera = {
+            ...camera,
+            followId: index < 0 ? null : copy.children[index].id,
+          };
+        }
         const index = project.scenes.indexOf(current);
         const scenes = [...project.scenes];
         // Beside the scene it came from rather than at the end: the switcher
@@ -1966,6 +2002,35 @@ export const useEditorStore = create<EditorState>((set, get) => {
       })),
 
     updateScene: (patch) => editScene((scene) => ({ ...scene, ...patch })),
+
+    setCamera: (patch) =>
+      editScene((scene) => {
+        // Merged over the validated read, not over the raw field, so a patch
+        // landing on a hand-edited camera cleans it up on its way past — the
+        // `setNodePhysics` rule.
+        const next = { ...cameraOf(scene), ...patch };
+        if (
+          next.followId !== null &&
+          !scene.children.some((child) => child.id === next.followId)
+        ) {
+          // Not a direct child of the scene, so not somewhere a follow means
+          // anything. `cameraOf` already reads such a target as absent; this is
+          // the other half, which is what stops the UI offering it.
+          next.followId = null;
+        }
+
+        if (isDefaultCamera(next)) {
+          if (scene.camera === undefined) return scene;
+          // Removed rather than stored as a camera that says nothing: an absent
+          // field is what every file written before this feature has, so "no
+          // camera" is one state rather than two. `setNodePhysics` strips a
+          // body the same way, and it is what the Reset button is.
+          const stripped = { ...scene };
+          delete stripped.camera;
+          return stripped;
+        }
+        return { ...scene, camera: next };
+      }),
 
     setNodePhysics: (id, patch) =>
       editScene((scene) => {

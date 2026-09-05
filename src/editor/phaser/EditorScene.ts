@@ -7,6 +7,8 @@ import {
   type EditorState,
 } from '../../core/store';
 import {
+  cameraOf,
+  cameraViewOf,
   clampFrame,
   containsNode,
   findAnimation,
@@ -16,6 +18,7 @@ import {
   EMPTY_TILE,
   frameGridOf,
   guidesOf,
+  isDefaultCamera,
   physicsOf,
   prefabChildrenOf,
   tileMapOf,
@@ -100,6 +103,18 @@ const PLACED_GUIDE_WIDTH = 2;
  */
 const BODY_COLOR = 0x00ff00;
 const BODY_WIDTH = 2;
+
+/**
+ * The scene camera's opening view, drawn and never applied.
+ *
+ * Violet because a colour on this canvas has to clear the editor's own chrome
+ * as well as the objects: the selection outline is cyan, the snap guides are
+ * magenta, the user guides amber, the scene frame slate, a physics body green
+ * and an emitter's marker pink. The suite matches it by name, so a shade that
+ * blended into any of those would be a wrong answer rather than a flaky one.
+ */
+const CAMERA_COLOR = 0x9b7bff;
+const CAMERA_WIDTH = 2;
 
 /**
  * The grab band around a guide, in screen pixels.
@@ -702,6 +717,13 @@ export class EditorScene extends Phaser.Scene {
    * the frames where nothing about it moved.
    */
   private gridSignature = '';
+  private cameraGraphics!: Phaser.GameObjects.Graphics;
+  /**
+   * What the camera frame was last drawn for — `gridSignature`'s sibling, for
+   * its reason: the frame's stroke is a screen width divided by the editor's
+   * zoom, so a pinch has to redraw it, and a pinch is not a store change.
+   */
+  private cameraSignature = '';
   private isPanning = false;
   private pinchDistance = 0;
   /** Once the user has zoomed or panned, stop re-framing the view for them. */
@@ -787,6 +809,14 @@ export class EditorScene extends Phaser.Scene {
     // the surface objects are placed on, so nothing in the scene may end up
     // behind it.
     this.gridGraphics = this.add.graphics().setDepth(-999);
+
+    // Above every object and below the paint grid, the placed guides and the
+    // gesture overlays. Above, because a camera frame hidden under a tilemap is
+    // a camera frame that says nothing — the argument that puts the guides over
+    // the objects. Below, because unlike a guide this is furniture nobody
+    // grabs: it is not interactive at all, so it must never cover something
+    // that is.
+    this.cameraGraphics = this.add.graphics().setDepth(997);
 
     // Sits above the outline so it is never the outline that takes the press.
     this.scaleHandle = this.add
@@ -2260,6 +2290,7 @@ export class EditorScene extends Phaser.Scene {
     this.drawPaintGrid();
     this.syncPlacedGuides();
     this.drawBodies();
+    this.drawCamera();
   }
 
   /** Two fingers down: zoom by how much the gap between them changed. */
@@ -2420,6 +2451,44 @@ export class EditorScene extends Phaser.Scene {
         this.bodyGraphics.lineBetween(x + w, y, x, y + h);
       }
     }
+  }
+
+  /**
+   * Draws the scene camera's opening view.
+   *
+   * One rectangle, and which rectangle it is comes entirely from
+   * `cameraViewOf`. The editor never applies the document's camera to its own,
+   * because the editor's camera is the user's view of the scene: applying it
+   * would mean the user could not look anywhere else without editing the
+   * document, and that panning would rewrite it. Physics' "drawn, never run",
+   * one iteration on — `setBackgroundColor` in `syncFromStore` stays the only
+   * thing the document has ever written to the editor's camera.
+   *
+   * Nothing is drawn for a camera still at its default. It would land exactly
+   * on `sceneFrame` and say the same thing twice, and the grid already settles
+   * that question: it stops drawing when it has nothing left to say, while the
+   * geometry carries on regardless.
+   *
+   * In `update()` with `drawGrid`, `syncPlacedGuides` and `drawBodies`, and for
+   * their reason — the stroke is a *screen* width divided by the camera zoom,
+   * and a pinch changes the zoom without touching the store. Signature-gated
+   * like the grid, because on almost every frame none of it has moved.
+   */
+  private drawCamera(): void {
+    const scene = activeScene(useEditorStore.getState().project);
+    const { zoom } = this.cameras.main;
+    const view = cameraViewOf(scene);
+    const signature = isDefaultCamera(cameraOf(scene))
+      ? ''
+      : `${view.x}:${view.y}:${view.width}:${view.height}:${zoom}`;
+    if (signature === this.cameraSignature) return;
+    this.cameraSignature = signature;
+
+    this.cameraGraphics.clear();
+    if (!signature) return;
+
+    this.cameraGraphics.lineStyle(CAMERA_WIDTH / zoom, CAMERA_COLOR, 1);
+    this.cameraGraphics.strokeRect(view.x, view.y, view.width, view.height);
   }
 
   /**

@@ -181,6 +181,23 @@ export function hostileProject(): Project {
         // Set here and deliberately absent from the second scene, so both
         // branches of `scenePhysicsOf` reach the exporter in one file.
         physics: { gravityX: -20, gravityY: 480 },
+        // Likewise for `cameraOf`, and with a non-default value in every field
+        // for the reason the body below has one: the toolchain specs compile
+        // the emitted `.ts` under `tsc --strict` against the real Phaser types,
+        // and that is the only place `setScroll`, `setZoom`, `setRoundPixels`,
+        // `setBounds` and `startFollow` ever meet
+        // `Phaser.Cameras.Scene2D.Camera`. The follow target is the hostilely
+        // named rectangle below, so the emitted call also has to name a binding
+        // that survived `toIdentifier`.
+        camera: {
+          scrollX: 120,
+          scrollY: -60,
+          zoom: 1.5,
+          boundToScene: true,
+          roundPixels: true,
+          followId: 'a',
+          followLerp: 0.15,
+        },
         // `autoplay` is deliberately false on both. It would add an
         // AudioContext-resume dependency to two toolchain tests for no
         // coverage at all — the emitted `.play()` line is one statement, and

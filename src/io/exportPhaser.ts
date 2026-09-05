@@ -1,12 +1,14 @@
 import { activeScene } from '../core/store';
 import {
   TARGET_PHASER_VERSION,
+  cameraOf,
   clampFrame,
   findAnimation,
   findAsset,
   findAudio,
   findPrefab,
   frameGridOf,
+  isDefaultCamera,
   physicsOf,
   scenePhysicsOf,
   soundsOf,
@@ -1255,6 +1257,31 @@ function buildCreateBody(
     `this.cameras.main.setBackgroundColor(${str(scene.backgroundColor)});`,
   ];
 
+  // With the background, because it is the same camera, and emitted whole —
+  // scroll, zoom and rounding, defaults included — where `modifiersFor` emits
+  // only what differs from Phaser's. The physics body and the emitter config
+  // made that call first and for this reason: these dials interact (a zoom
+  // moves the shot as well as tightening it, and bounds only bite once the
+  // scroll would leave the scene), so a reader tuning one wants the others
+  // beside it. A camera still at its default emits nothing at all, which is the
+  // rule the asset table, the tilemap helper and the body helper all follow.
+  //
+  // `setBounds` from the scene's own size rather than a second stored
+  // rectangle, exactly as the physics world does below it.
+  const camera = cameraOf(scene);
+  if (!isDefaultCamera(camera)) {
+    lines.push(
+      `this.cameras.main.setScroll(${num(camera.scrollX)}, ${num(camera.scrollY)});`,
+    );
+    lines.push(`this.cameras.main.setZoom(${num(camera.zoom)});`);
+    lines.push(`this.cameras.main.setRoundPixels(${camera.roundPixels});`);
+    if (camera.boundToScene) {
+      lines.push(
+        `this.cameras.main.setBounds(0, 0, ${num(scene.width)}, ${num(scene.height)});`,
+      );
+    }
+  }
+
   // Before the objects, for the reason the animation registrations are: a body
   // created below is added to this world, and one created against the default
   // gravity and then re-parented to another is a body that has already taken a
@@ -1302,7 +1329,31 @@ function buildCreateBody(
   // The two blocks above each end on a blank, so this is the separator only
   // when there was neither to separate from.
   if (scene.children.length > 0 && lines.at(-1) !== '') lines.push('');
-  for (const node of scene.children) emitNode(node, ctx, used, lines);
+  const bindings = new Map<string, string>();
+  for (const node of scene.children) {
+    const id = emitNode(node, ctx, used, lines);
+    if (id !== null) bindings.set(node.id, id);
+  }
+
+  // The one thing this exporter emits *after* the object list, and the reason
+  // is the whole of it: `startFollow` names a binding, and the line that makes
+  // that binding is above. Everything else about the camera is in the prologue
+  // with the background, where a reader looks for how the shot is set up.
+  if (camera.followId !== null) {
+    const target = bindings.get(camera.followId);
+    if (lines.at(-1) !== '') lines.push('');
+    if (target === undefined) {
+      // Say so rather than dropping it silently, the treatment `missingReason`
+      // gives an object that emitted nothing: the followed node is in the
+      // document, it just did not reach the output.
+      lines.push('// The camera follows an object that could not be added.');
+    } else {
+      lines.push(
+        `this.cameras.main.startFollow(${target}, ${camera.roundPixels}, ` +
+          `${num(camera.followLerp)}, ${num(camera.followLerp)});`,
+      );
+    }
+  }
 
   while (lines.at(-1) === '') lines.pop();
   return lines.map((line) => (line ? `    ${line}` : '')).join('\n');
@@ -1342,6 +1393,13 @@ function buildCreateBody(
  * `this.sound.add` are safe in a module dropped into someone else's game with
  * no config change at all. The `audio: { … }` config keys only *narrow* that
  * choice, and nothing emitted here needs them.
+ *
+ * The same goes for the camera, for the same kind of reason and with less room
+ * to doubt it: `this.cameras.main` is created by the Camera Manager when the
+ * scene boots, in every Phaser game there has ever been, at the size of the
+ * game canvas. So a scene that scrolls, zooms or follows needs no config key
+ * and no note — and the viewport it works against is the game's own size, which
+ * is why the camera's rectangle is never stored beside the scene's.
  */
 const arcadeConfig = (needed: boolean) =>
   needed ? "        physics: { default: 'arcade' },\n" : '';

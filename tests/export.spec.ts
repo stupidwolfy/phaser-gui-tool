@@ -420,6 +420,36 @@ test('sounds are tabled once, loaded per scene, and named without collision', as
   expect(exported.contents).not.toContain('"gone"');
 });
 
+test('the camera is emitted per scene, and the follow line after the objects', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile-camera.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+  const [, first, second] = exported.contents.split(/^export class /m);
+
+  expect(first).toContain('this.cameras.main.setScroll(120, -60);');
+  expect(first).toContain('this.cameras.main.setZoom(1.5);');
+  expect(first).toContain('this.cameras.main.setRoundPixels(true);');
+  expect(first).toContain('this.cameras.main.setBounds(0, 0, 960, 540);');
+
+  // The one thing this exporter emits after the object list, because it names a
+  // binding the list above makes — and the binding is whatever `toIdentifier`
+  // made of a hostile name, which is why this asserts the order rather than the
+  // text.
+  expect(first).toContain('this.cameras.main.startFollow(');
+  expect(first.indexOf('this.add.rectangle(')).toBeLessThan(
+    first.indexOf('startFollow'),
+  );
+
+  // Per scene, not per file: the second scene has no camera of its own, so
+  // `cameraOf`'s default branch reaches the same export and emits nothing.
+  expect(second).not.toContain('setZoom');
+  expect(second).not.toContain('startFollow');
+});
+
 test('a project with no bodies exports no physics at all', async ({ editor }) => {
   // The rule the asset table, the tilemap helper and the prefab factories all
   // follow: a project that predates a feature exports byte for byte what it
