@@ -191,6 +191,13 @@ a jump speed. Green arrows on the body outline say which object the keys drive. 
 `update()` method that reads the keys and sets a velocity, with the jump gated on there being
 something underneath — which is what the solid tiles and the collisions are for.
 
+**Touch controls.** Tick **On-screen buttons** beside the keys and the exported game draws a
+D-pad and — for a platformer — a jump button over its canvas, so what you built on a phone
+plays on one. The buttons are the game's, not the editor's: orange rings on the canvas show
+where they will land, and nothing here presses them. There is one set per scene, sized
+against the scene rectangle, and the keys still work alongside them — one export plays on a
+desktop and on a phone.
+
 None of it runs in the editor. Nothing moves, nothing collides and no key does anything
 while you are placing objects: the document is what you are editing. Export the runnable
 page to play it.
@@ -208,7 +215,7 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; twenty iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; twenty-one iterations in, it is a
 working editor but a small one.
 
 **Not built yet** — texture atlases. Panels and tiled images are in, with three limits: a
@@ -224,10 +231,12 @@ with three limits:
 nothing is simulated in the editor, bodies are rectangles rather than circles, and only an
 object at the top level of a scene can have one — a body is positioned in world coordinates,
 and an object inside a group is not.
-Collisions and controls are in, with three limits: nothing happens *when* two things touch
-(that line is yours, on the collider the export hands back), the keys are a keyboard and
-there are no on-screen controls for a phone, and a tile is either solid or it is not — there
-are no per-tile properties beyond that.
+Collisions and controls are in, with two limits: nothing happens *when* two things touch
+(that line is yours, on the collider the export hands back), and a tile is either solid or
+it is not — there are no per-tile properties beyond that. On-screen controls are in, with
+three: the layout is fixed rather than placeable, there is no analogue stick or swipe (every
+direction here is on or off, as a key is), and the buttons' look belongs to the exported
+code rather than to a setting in the editor.
 Scenes are in, with one limit: nothing in the editor starts one scene from another, since
 that is a line of game logic rather than a piece of layout — the export registers them all
 and leaves `this.scene.start('Level 2')` to you. Prefabs are in, with two limits: a prefab cannot contain another prefab,

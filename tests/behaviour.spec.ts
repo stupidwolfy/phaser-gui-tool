@@ -25,6 +25,9 @@ import { stripPng } from './helpers/png';
 /** `BODY_COLOR` in EditorScene: the body outline, and a solid tile's shading. */
 const BODY = '#00ff00';
 
+/** `TOUCH_COLOR` in EditorScene: where the export will draw its buttons. */
+const TOUCH = '#ff5c33';
+
 /** One colour per tile, so a colour centroid answers "which tile is drawn". */
 const TILES = ['#22cc44', '#cc2244', '#2244cc', '#cccc22'] as const;
 const TILE = 32;
@@ -124,6 +127,76 @@ test('a driven object is marked on its own body outline', async ({ editor }) => 
   expect(driven).toBeGreaterThan(plain * 1.5);
 });
 
+test('on-screen buttons are drawn where the game will draw them, and only when asked', async ({
+  editor,
+}) => {
+  await editor.clearScene();
+  await rectangle(editor, 'Player');
+  await editor.setPhysics(true);
+  await editor.setControls(true);
+
+  // Deselected before every reading, for the arrow test's reason: the scale
+  // handle keeps a 44px screen target over the object's corner, and at the
+  // mobile zoom that is most of the object.
+  await editor.deselect();
+  await editor.closePanels();
+  expect((await editor.findDrawn(TOUCH)).count).toBe(0);
+
+  await editor.selectInTree('Player');
+  await editor.setTouchControls(true);
+  await editor.deselect();
+  await editor.closePanels();
+
+  // An extent rather than a centroid, which is `camera.spec`'s instrument and
+  // for its reason: these are rings, and a two-pixel stroke lands on a
+  // different sub-pixel phase on each edge. It is also the only reading that
+  // can say *where on the canvas* the pad is, which is the whole claim.
+  const platformer = await editor.findDrawnBox(TOUCH);
+  expect(platformer.count).toBeGreaterThan(0);
+
+  // The geometry `touchZonesOf` derives: 7.5% of the shorter side is a radius
+  // of 40.5 on a 960x540 scene, the pad sits one radius in from the left and
+  // the jump button one in from the right. Asserted against the scene's own
+  // corners rather than against those numbers, so a change to the ratio moves
+  // the test with the feature rather than against it.
+  const middle = await editor.sceneToScreen({ x: SCENE.width / 2, y: SCENE.height / 2 });
+  const bottomLeft = await editor.sceneToScreen({ x: 0, y: SCENE.height });
+  const bottomRight = await editor.sceneToScreen({ x: SCENE.width, y: SCENE.height });
+
+  // Below the middle of the scene and inside both of its bottom corners: a HUD
+  // in the corners of the canvas, which is the one thing the drawing says that
+  // the numbers in the panel do not.
+  expect(platformer.y).toBeGreaterThan(middle.y);
+  expect(platformer.x).toBeGreaterThanOrEqual(bottomLeft.x - 2);
+  expect(platformer.x + platformer.width).toBeLessThanOrEqual(bottomRight.x + 2);
+  // A platformer reaches the right-hand corner, because its jump button is
+  // there. Half the scene's width is a wide margin around that claim.
+  expect(platformer.x + platformer.width).toBeGreaterThan(middle.x);
+
+  // Top-down has no jump, so the right-hand button goes; it walks on four axes,
+  // so up and down join the pad. The pad's own left and right do not move,
+  // which is why `touchZonesOf` builds a cross rather than a row.
+  await editor.selectInTree('Player');
+  await editor.setChoice('Control mode', 'Top-down — walk any way');
+  await editor.deselect();
+  await editor.closePanels();
+
+  const topDown = await editor.findDrawnBox(TOUCH);
+  expect(topDown.count).toBeGreaterThan(0);
+  expect(topDown.height).toBeGreaterThan(platformer.height);
+  expect(topDown.width).toBeLessThan(platformer.width);
+  expect(topDown.x + topDown.width).toBeLessThan(middle.x);
+  expect(Math.abs(topDown.x - platformer.x)).toBeLessThan(4);
+
+  // And off again leaves nothing behind, which is what says the rings are
+  // derived every frame rather than drawn once and forgotten.
+  await editor.selectInTree('Player');
+  await editor.setTouchControls(false);
+  await editor.deselect();
+  await editor.closePanels();
+  expect((await editor.findDrawn(TOUCH)).count).toBe(0);
+});
+
 test('a collision row names two objects, and a deleted one takes the row with it', async ({
   editor,
 }) => {
@@ -199,6 +272,7 @@ test('solid tiles, a collision and controls survive a save and an open, at schem
   await editor.setPhysics(true);
   await editor.setControls(true);
   await editor.setChoice('Control keys', 'W A S D');
+  await editor.setTouchControls(true);
   await editor.setField('Jump speed', 505);
   await editor.deselect();
 
@@ -226,6 +300,7 @@ test('solid tiles, a collision and controls survive a save and an open, at schem
     scheme: 'wasd',
     speed: 200,
     jump: 505,
+    touch: true,
   });
   expect(project.scenes[0].children[1].props.collides).toEqual([0, 2]);
   expect(project.scenes[0].colliders).toHaveLength(1);
@@ -237,6 +312,7 @@ test('solid tiles, a collision and controls survive a save and an open, at schem
 
   await editor.selectInTree('Player');
   expect(await editor.numberValue('Jump speed')).toBe(505);
+  await expect(editor.checkbox('On-screen buttons')).toBeChecked();
   await editor.deselect();
   await editor.openPanel('inspect');
   await expect(editor.choice('Collides 1')).toHaveCount(1);

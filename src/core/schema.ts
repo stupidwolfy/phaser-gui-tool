@@ -890,6 +890,21 @@ export interface NodeControls {
    * thing people build, so it is not repaired to a default.
    */
   jump: number;
+  /**
+   * Whether the exported game also draws on-screen buttons for this object.
+   *
+   * A boolean *beside* `scheme` rather than a third value of it, and the two
+   * are genuinely orthogonal questions: which keys drive this, and whether
+   * there are also buttons to press. A mutually exclusive `'touch'` would mean
+   * picking it silently produced a game a desktop cannot play, with nothing in
+   * the panel saying so — where this way one export plays in both places.
+   *
+   * Off by default, because switching it on puts visible buttons into the
+   * exported game. That is the rule the asset table, the tilemap helper, the
+   * prefab factories and the emitted `update()` itself all already follow: a
+   * project that predates a feature exports byte for byte what it always did.
+   */
+  touch: boolean;
 }
 
 /** Phaser's own default, and the speed a body of a few tens of pixels reads at. */
@@ -942,12 +957,23 @@ export function controlsOf(
     // sensible number to fall back to.
     speed: Math.max(0, numberOr(raw.speed, DEFAULT_SPEED)),
     jump: Math.max(0, numberOr(raw.jump, DEFAULT_JUMP)),
+    // Absent reads as off, which is what keeps every file written before this
+    // existed exporting exactly what it exported then. The `scheme` ternary
+    // above is untouched, which is the whole payoff of not making the buttons
+    // a third value of it.
+    touch: raw.touch === true,
   };
 }
 
 /** The controls a node gets the moment one is switched on. */
 export function defaultControls(): NodeControls {
-  return { mode: 'platformer', scheme: 'arrows', speed: DEFAULT_SPEED, jump: DEFAULT_JUMP };
+  return {
+    mode: 'platformer',
+    scheme: 'arrows',
+    speed: DEFAULT_SPEED,
+    jump: DEFAULT_JUMP,
+    touch: false,
+  };
 }
 
 /**
@@ -1253,6 +1279,108 @@ export function collidersOf(scene: SceneDoc): SceneCollider[] {
 /** The nodes a collider row may name, which is what the inspector offers. */
 export function collidableNodes(scene: SceneDoc): GameObjectNode[] {
   return scene.children.filter(canCollide);
+}
+
+/** What one on-screen button does. */
+export type TouchKey = 'left' | 'right' | 'up' | 'down' | 'jump';
+
+/** A button, in scene coordinates — which are the game canvas' own. */
+export interface TouchButton {
+  key: TouchKey;
+  /** The glyph drawn in the middle of it, in the editor and in the export. */
+  label: string;
+  x: number;
+  y: number;
+  radius: number;
+}
+
+/**
+ * A button is 7.5% of the scene's shorter side, with a floor: a scene small
+ * enough for the proportion to put a button under a fingernail gets the floor
+ * instead, and one big enough for the proportion to matter gets a thumb.
+ * Proportional rather than fixed because the canvas is scaled to fit whatever
+ * screen the game lands on, so a fixed radius would be a different physical
+ * size on every device.
+ */
+const TOUCH_MIN_RADIUS = 24;
+const TOUCH_RADIUS_RATIO = 0.075;
+
+/**
+ * Where the exported game draws its on-screen buttons, or `[]` for a scene that
+ * asks for none.
+ *
+ * The `guidesOf` / `physicsOf` / `cameraOf` / `soundsOf` / `tileMapOf` /
+ * `collidersOf` family, and it answers three questions at once: does anything
+ * in this scene want buttons, which buttons do the modes present in it need,
+ * and where do they sit against this scene's size. Any one of them answered
+ * somewhere else is a renderer drawing a pad the export does not build, which
+ * is the one failure a user cannot see until the game is in their hand.
+ *
+ * **One set per scene, not per object.** The buttons belong to the canvas, so
+ * two driven objects read the same five flags — which is what a player expects,
+ * and what falls out of the geometry being the scene's rather than the node's.
+ * The modes are therefore a union: any top-down node puts up and down on the
+ * pad, any platformer puts a jump button on the right.
+ *
+ * `scene.children` only, so the top-level rule `controlsOf` enforces is
+ * inherited here rather than repeated — a driven node inside a group is not
+ * driven, so it asks for no buttons either.
+ *
+ * That the scene rectangle *is* the game canvas is not an assumption made here:
+ * it is the identity `cameraViewOf` already rests on, and the reason a camera
+ * has no rectangle of its own.
+ *
+ * A fresh array every call, exactly as `collidersOf` builds one — so
+ * `useEditorStore((s) => touchZonesOf(...))` compares unequal on every store
+ * change and loops forever (React error #185). Select the scene and derive
+ * outside the selector.
+ */
+export function touchZonesOf(scene: SceneDoc): TouchButton[] {
+  let pad = false;
+  let vertical = false;
+  let jump = false;
+  for (const child of scene.children) {
+    const controls = controlsOf(child, true);
+    if (controls === null || !controls.touch) continue;
+    pad = true;
+    if (controls.mode === 'topDown') vertical = true;
+    else jump = true;
+  }
+  if (!pad) return [];
+
+  const radius = Math.max(
+    TOUCH_MIN_RADIUS,
+    Math.min(scene.width, scene.height) * TOUCH_RADIUS_RATIO,
+  );
+  const margin = radius;
+  // The cross's centre, placed so that the whole cross — up and down included —
+  // sits inside the margin whether or not this scene has them. That is what
+  // keeps left and right where they were when a top-down object joins a
+  // platformer one: adding a row must not move the buttons already in use.
+  const padX = margin + radius * 3;
+  const padY = scene.height - margin - radius * 3;
+
+  const buttons: TouchButton[] = [
+    { key: 'left', label: '\u2190', x: padX - radius * 2, y: padY, radius },
+    { key: 'right', label: '\u2192', x: padX + radius * 2, y: padY, radius },
+  ];
+  if (vertical) {
+    buttons.push({ key: 'up', label: '\u2191', x: padX, y: padY - radius * 2, radius });
+    buttons.push({ key: 'down', label: '\u2193', x: padX, y: padY + radius * 2, radius });
+  }
+  if (jump) {
+    // On the pad's own line rather than in the very corner, so both thumbs rest
+    // at the same height — and on the far side, because a jump reached with the
+    // hand already holding a direction is the one thing `addPointer(2)` is for.
+    buttons.push({
+      key: 'jump',
+      label: '\u25b2',
+      x: scene.width - margin - radius,
+      y: padY,
+      radius,
+    });
+  }
+  return buttons;
 }
 
 /**

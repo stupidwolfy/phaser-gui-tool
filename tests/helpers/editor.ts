@@ -499,6 +499,18 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * The selected object's on-screen buttons, which live under Controls and are
+   * therefore offered only where controls are.
+   */
+  async setTouchControls(on: boolean): Promise<void> {
+    await this.openPanel('inspect');
+    const box = this.checkbox('On-screen buttons');
+    if (on) await box.check();
+    else await box.uncheck();
+    await this.settle();
+  }
+
   /** Whether the selected object is offered controls at all. */
   async controlsOffered(): Promise<boolean> {
     await this.openPanel('inspect');
