@@ -48,8 +48,11 @@ something once the game runs: solid tiles, a per-scene collider table and a keyb
 behaviour on a node — the first `update()` this exporter has ever emitted, on a canvas that
 still simulates nothing. Iteration 21 (shipped) gave that behaviour a thumb: on-screen
 buttons, derived from the scene rectangle rather than stored, drawn by the editor as rings
-it will never press and by the export as a real HUD. See the README for the user-facing
-feature list.
+it will never press and by the export as a real HUD. Iteration 22 (shipped) went back to
+the one type that had not changed since iteration 1 and made text into typography: weight
+and slant, a wrap and an alignment, spacing, a stroke and a shadow — the first iteration to
+widen an existing node type's props rather than add a type. See the README for the
+user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -788,6 +791,132 @@ where each one's fields live and why.
   actually needs is that the border did not scale with the panel — near 1x is the answer,
   near 3x is the failure — and an absolute tolerance tight enough to mean that sits inside
   the noise on one project and passes trivially on the other.
+
+## Typography
+
+A `text` node carries a weight, a slant, a wrap, an alignment, two spacings, a stroke and a
+shadow. It is the first iteration to widen an **existing** node type's props rather than
+add a type, which is what makes it worth writing down: most of the "Adding a Phaser object
+type" checklist does not apply, and on that checklist "already covered" and "forgotten"
+read identically.
+
+- **`textStyleOf` is the only reader, and it is the first one with two consumers.** It
+  joins the `guidesOf` / `frameGridOf` / `sliceInsetsOf` / `physicsOf` / `soundsOf` /
+  `cameraOf` / `tileMapOf` family, and it is the sharpest version of their argument
+  because the renderer *and* the exporter both read it. Before it existed each built its
+  own style object out of the same three keys, written twice, in `EditorScene.applyNode`
+  and in `constructorFor` — two places free to disagree about how the text looks, which is
+  the one kind of failure a user cannot see until the game is in their hand. It answers
+  three questions at once: what shape Phaser takes these in, whether a hand-edited file's
+  numbers are ones Phaser can be handed, and how much padding the stroke and the shadow
+  need. A fresh object per call, so `useEditorStore((s) => textStyleOf(...))` is React
+  error #185 — the `tileMapOf` trap, sixth time.
+- **It returns the whole style, every key, defaults included, and that is load-bearing
+  rather than tidiness.** `TextStyle.setStyle` reads each key with
+  `GetValue(style, key, this[key])` and its `setDefaults` argument is false, so an
+  *omitted* key keeps whatever it already had. A style built from only the non-default
+  keys could switch a stroke on and could never switch one off. What to *print* is a
+  separate question and it is the exporter's — which is the one place this feature splits
+  a decision the emitter config and the physics body keep together.
+- **`setStyle` does not carry `padding`, `lineSpacing` or `letterSpacing`.** Phaser's
+  `TextStyle` has a `propertyMap` of the keys it copies out of a style object and those
+  three are not in it; they live on the `Text` game object. The *constructor* reads them —
+  `new Text(...)` checks `style.padding` and the other two by hand — which is why the
+  exported code can put everything in one config literal and `applyTextStyle` cannot.
+  Handing them to `setStyle` silently does nothing, and "the wrap works but the line
+  spacing is ignored" is exactly what that looks like from the canvas.
+- **A shadow set through a style object needs `stroke: true, fill: true` or it is never
+  painted.** `Text.setShadow()` defaults `fill` to true, but `propertyMap` defaults *both*
+  `shadow.fill` and `shadow.stroke` to false — so a shadow given an offset, a colour and a
+  blur and nothing else is computed, stored, and invisible. Both are emitted explicitly,
+  and the export asserts the pair rather than the offsets.
+- **`bold` and `italic` are two booleans, not one `fontStyle` string.** Phaser's key is a
+  string, but its value is nothing more than those two independent facts joined by a
+  space. A free string field would accept `oblique 350` and every other CSS token, which
+  the editor cannot draw predictably and the exporter would pass straight into a game. Two
+  questions, two answers — `NodeControls.touch`'s argument, which was the same refusal of
+  a third `scheme` value.
+- **There is no `padding` prop, and that is not an omission.** Phaser sizes a text object's
+  canvas from the glyphs alone, so a stroke and a shadow are drawn outside it and clipped.
+  The room they need is a *function* of the stroke and the shadow — `ceil(max(thickness/2,
+  |offset| + blur))` per axis — not a decision anyone makes, so `textStyleOf` derives it. A
+  stored one would be two fields free to disagree about one number: the argument that gives
+  a sprite no width of its own and a tilemap no tile size of its own. The panel says so
+  rather than offering a field that would mostly be wrong.
+- **`wordWrapWidth: 0` means off**, a first-class sentinel like `EMPTY_TILE`, because a
+  wrap width of zero has no other meaning. It becomes Phaser's own `wordWrap.width: null`
+  in the derived style — `0` there would be a width every word is wider than.
+- **Word wrap changes the object's measured box, and nothing had to learn about it.** That
+  is the connection to `bounds.ts`, and the answer is a comment rather than code:
+  `hitAreaFor` reads `object.width`/`height` live, `applyHitArea` re-runs every sync, and
+  `publishMeasuredBounds` already said in as many words that a text object's size is
+  whatever the font measured to — because it has always followed the content as it was
+  typed. A wrapped paragraph is just a text object that measured differently, so the
+  outline, both handles, the published bounds, snapping and align/distribute all follow it
+  with no edit. Said out loud in `Renderable`, beside the nine-slice and tile-sprite note
+  that exists for the same reason.
+- **`shapeOf` gains nothing.** A `Text` re-lays itself out on `setStyle`, so every dial is
+  an in-place setter — the emitter's `setConfig` case rather than the nine-slice's and the
+  tile sprite's, which bake their geometry at construction. Folding a style signature in
+  would rebuild the object on every keystroke in the inspector.
+- **`applyTextStyle` is cache-guarded, which is `setConfig`'s guard one type over.**
+  Applying a style re-rasterises the text's own canvas and the scene syncs on *every* store
+  change, so without it a selection, or a nudge of some unrelated object, re-renders every
+  piece of text in the scene. That was already true of the three keys this replaced; a
+  fresh object per call would have made it unconditional.
+- **The export is one config literal, so `modifiersFor` gains no branch** and says so.
+  Every typography field is a `TextStyle` key, so the whole feature lands in the call
+  `constructorFor` already made and nothing chains. `.setOrigin(0.5)` stays its only text
+  branch.
+- **Each new key is printed only where it differs from Phaser's default — the opposite call
+  from the emitter config and the physics body, which are emitted whole.** Those two are
+  dials that interact: drag only bites while acceleration is zero, a lifespan only means
+  anything beside a frequency. A stroke tells a reader nothing about an alignment, so here
+  a line restating a default is just a line to check. Two things stay grouped for the
+  interaction reason: `stroke` with `strokeThickness`, since a colour with no thickness
+  draws nothing and a thickness with no colour is black by accident; and the shadow's six
+  keys as one object. The payoff is the property every feature here has had to keep — a
+  text node made before iteration 22 derives a style whose every new key is at its default,
+  so it prints the same three keys in the same order and its export does not move by a
+  byte. `typography.spec.ts` asserts that rather than assuming it.
+- **`SCHEMA_VERSION` did not bump, and this is the guides case for the fifth time.** These
+  are fields on `props`, and `props` rides in on `scenes` — the one part of a file
+  `parseProject` passes through verbatim. A v9 build has a `case 'text'` in
+  `createDisplayObject`, draws the text with the three keys it knows, reads the rest
+  nowhere, and carries them back out on a re-save. **Still contingent on `parseProject` not
+  reconstructing scenes field by field**, exactly as physics, cameras, behaviour and touch
+  controls are.
+- **Almost none of the "Adding a Phaser object type" checklist applies**, and listing which
+  is half of what a reader needs. `text` was already in `NodeType`, `ADDABLE`, the
+  `.tree__type` colour chip, `PHYSICS_TYPES`, `createDisplayObject`, `constructorFor`,
+  `localRectOf`/`hitAreaFor` and `editing.spec.ts`; and typography adds no asset, no
+  texture and no animation, so `collectAssets`, `usedIn`, `countAssetUses`, `removeAsset`,
+  `mapProjectNodes`, `collectAnimations` and `missingReason` are all untouched. The one
+  step the compiler catches is `defaults.ts`, because the new props are required. The three
+  that carry real risk — the renderer's `applyNode` case, the exporter's `constructorFor`
+  case and the inspector — are **all silent**, as the whole of physics and cameras were.
+- **The labels were renamed, and that is the "Animation name, not Name" rule.** "Size"
+  became "Font size", "Color" became "Text colour" and "Font" became "Font family",
+  because the panel now carries three colours and two widths and the suite matches a label
+  exactly. Nothing in `tests/` read the old three, so the rename was free — which it will
+  not be next time.
+- **The suite's claims pick their instrument per claim.** An **extent** for the wrap,
+  because what is asserted is how big something is drawn and a centroid moves by a tenth of
+  a shape's width on antialiasing phase alone. A **centroid** for the alignment, because
+  there the box is pinned by the longest line and what moves is the distribution of glyphs
+  inside it — an extent would assert nothing. And weight and slant are asserted through the
+  document and the export rather than through pixels, because a font's bold face is the
+  browser's and a headless container may synthesise it, which would make a pixel claim
+  about weight a claim about the machine.
+- **The hostile project gained two things.** Its existing text node's `fontFamily` is now
+  hostile — free user text that reaches a JS string literal *and* the runnable page's
+  `<script>` body, and until now the one field on that node nobody had made hostile, which
+  is exactly where the holes have always been. And a second node carries a non-default
+  value in all twelve new fields while carrying no hostile string at all: it is the only
+  place the emitted style literal's *shape* meets
+  `Phaser.Types.GameObjects.Text.TextStyle` under `tsc --strict`, which is where a key
+  renamed between Phaser versions fails and nowhere else. The hostile emitter's argument,
+  one type over.
 
 ## Particles
 
@@ -2069,6 +2198,7 @@ tests/
   tilemap.spec.ts           slicing a tileset, painting it, filling and erasing
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
+  typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
   physics.spec.ts           a body drawn, never simulated, and refused inside a group
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
@@ -2330,6 +2460,26 @@ gives a blank page with 404ing assets — the single most likely deploy failure.
 with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
+
+Typography shipped in iteration 22 with six deliberate holes, and the first of them is the
+one that matters. **No web-font loading** — `fontFamily` names a font the *page* already
+has, which is why a project that looks right on the machine it was made on can render in
+Courier on somebody else's. Loading one means font bytes in the document, which is the
+asset table again for a second kind of asset with its own mime allowlist and its own size
+cap, plus a `document.fonts.load` that has to finish before `create()` — a boot-order
+question this exporter has never had to answer, and the one hole here that is an iteration
+rather than a field. **No BitmapText**, which is a second node type with a `.fnt` and its
+own parser: the texture-atlas argument, and it does not become smaller by sitting next to a
+`Text`. **No background colour behind the text** — a coloured box behind something is a
+rectangle, which this editor has had since iteration 1 and which has a draw order of its
+own; the field would be a second answer to "what is behind this object" that no other type
+gets. **No gradient or texture fill** — `color` can be a `CanvasGradient`, which is a
+runtime object the document has nowhere to put: the emit-zone argument. **No rich text or
+per-run styling**, which is markup inside a field and therefore a second document format.
+And **no `useAdvancedWrap` toggle** — the difference only shows on CJK and on unbroken
+URLs, so it is a field that costs more to explain than it gives. Note what is *not* on this
+list: `padding` is absent because it is derived rather than deferred, and per-side padding
+is not a loosening but a way to get it wrong.
 
 On-screen controls shipped in iteration 21 with three deliberate holes. **The layout is
 fixed** — a D-pad in one corner and a jump button in the other, sized against the scene

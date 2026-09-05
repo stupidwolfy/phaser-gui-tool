@@ -30,6 +30,7 @@ import {
   type GameObjectNode,
   type NineSliceProps,
   type ParticlesProps,
+  type TextProps,
   type TileSpriteProps,
 } from '../core/schema';
 import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
@@ -1266,6 +1267,158 @@ function TileSpriteSection({
 }
 
 /**
+ * The text panel: what it says, and how it is set.
+ *
+ * Its own component rather than the inline block it was until iteration 22,
+ * because twelve more fields do not belong in the middle of `NodeInspector`.
+ *
+ * Split into three by what a person is doing. The top group is the object —
+ * the words, their size and their colour — and is what almost every visit to
+ * this panel is for. Paragraph is the group that only means anything once the
+ * text has more than one line, which is why the wrap field sits beside the
+ * alignment that it is usually what enables. Stroke and shadow are the two
+ * decorations, last because most text has neither.
+ *
+ * Every label is unique by exact match within the panel, which the suite's
+ * locator requires: "Font size" rather than "Size" and "Text colour" rather
+ * than "Color", because this panel is now carrying three colours and two
+ * widths, and Name, X, Y, Rotation, Alpha and the physics section's own
+ * Bounce/Drag pairs are all a scroll away. The "Animation name, not Name" rule.
+ */
+function TextSection({ node }: { node: Extract<GameObjectNode, { type: 'text' }> }) {
+  const updateProps = useEditorStore((s) => s.updateProps);
+  const setProp = (patch: Partial<TextProps>) => updateProps(node.id, patch);
+
+  return (
+    <>
+      <TextField
+        label="Content"
+        value={node.props.text}
+        onChange={(text) => setProp({ text })}
+      />
+      <div className="field-row">
+        <NumberField
+          label="Font size"
+          value={node.props.fontSize}
+          min={1}
+          onChange={(fontSize) => setProp({ fontSize })}
+        />
+        <NumberField
+          label="Alpha"
+          value={node.props.alpha}
+          step={0.05}
+          min={0}
+          max={1}
+          onChange={(alpha) => setProp({ alpha })}
+        />
+      </div>
+      <ColorField
+        label="Text colour"
+        value={node.props.color}
+        onChange={(color) => setProp({ color })}
+      />
+      <TextField
+        label="Font family"
+        value={node.props.fontFamily}
+        onChange={(fontFamily) => setProp({ fontFamily })}
+      />
+      <div className="field-row">
+        <CheckboxField
+          label="Bold"
+          value={node.props.bold}
+          onChange={(bold) => setProp({ bold })}
+        />
+        <CheckboxField
+          label="Italic"
+          value={node.props.italic}
+          onChange={(italic) => setProp({ italic })}
+        />
+      </div>
+
+      <div className="panel__section">Paragraph</div>
+      <p className="hint">
+        Wrap width 0 means the text runs on in one line. Align only shows itself
+        on text with more than one line — wrapped, or with a line break in it.
+      </p>
+      <div className="field-row">
+        <NumberField
+          label="Wrap width"
+          value={node.props.wordWrapWidth}
+          min={0}
+          onChange={(wordWrapWidth) => setProp({ wordWrapWidth })}
+        />
+        <SelectField
+          label="Align"
+          value={node.props.align}
+          options={[
+            { value: 'left', label: 'Left' },
+            { value: 'center', label: 'Centre' },
+            { value: 'right', label: 'Right' },
+          ]}
+          onChange={(align) => setProp({ align: align as TextProps['align'] })}
+        />
+      </div>
+      <div className="field-row">
+        <NumberField
+          label="Line spacing"
+          value={node.props.lineSpacing}
+          onChange={(lineSpacing) => setProp({ lineSpacing })}
+        />
+        <NumberField
+          label="Letter spacing"
+          value={node.props.letterSpacing}
+          onChange={(letterSpacing) => setProp({ letterSpacing })}
+        />
+      </div>
+
+      <div className="panel__section">Stroke and shadow</div>
+      <p className="hint">
+        A stroke draws only while its width is above zero. Room for both is
+        worked out from the numbers you set, so neither is clipped.
+      </p>
+      <div className="field-row">
+        <ColorField
+          label="Stroke colour"
+          value={node.props.strokeColor}
+          onChange={(strokeColor) => setProp({ strokeColor })}
+        />
+        <NumberField
+          label="Stroke width"
+          value={node.props.strokeThickness}
+          min={0}
+          onChange={(strokeThickness) => setProp({ strokeThickness })}
+        />
+      </div>
+      <div className="field-row">
+        <NumberField
+          label="Shadow X"
+          value={node.props.shadowOffsetX}
+          onChange={(shadowOffsetX) => setProp({ shadowOffsetX })}
+        />
+        <NumberField
+          label="Shadow Y"
+          value={node.props.shadowOffsetY}
+          onChange={(shadowOffsetY) => setProp({ shadowOffsetY })}
+        />
+      </div>
+      <div className="field-row">
+        <ColorField
+          label="Shadow colour"
+          value={node.props.shadowColor}
+          onChange={(shadowColor) => setProp({ shadowColor })}
+        />
+        <NumberField
+          label="Shadow blur"
+          value={node.props.shadowBlur}
+          min={0}
+          onChange={(shadowBlur) => setProp({ shadowBlur })}
+        />
+      </div>
+    </>
+  );
+}
+
+/**
  * The emitter panel.
  *
  * Long, because an emitter is eighteen numbers rather than a position and a
@@ -1756,41 +1909,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
 
       {node.type === 'tilemap' && <TilemapSection node={node} />}
 
-      {node.type === 'text' && (
-        <>
-          <TextField
-            label="Content"
-            value={node.props.text}
-            onChange={(text) => setProp({ text })}
-          />
-          <div className="field-row">
-            <NumberField
-              label="Size"
-              value={node.props.fontSize}
-              min={1}
-              onChange={(fontSize) => setProp({ fontSize })}
-            />
-            <NumberField
-              label="Alpha"
-              value={node.props.alpha}
-              step={0.05}
-              min={0}
-              max={1}
-              onChange={(alpha) => setProp({ alpha })}
-            />
-          </div>
-          <ColorField
-            label="Color"
-            value={node.props.color}
-            onChange={(color) => setProp({ color })}
-          />
-          <TextField
-            label="Font"
-            value={node.props.fontFamily}
-            onChange={(fontFamily) => setProp({ fontFamily })}
-          />
-        </>
-      )}
+      {node.type === 'text' && <TextSection node={node} />}
 
       <PhysicsSection node={node} />
     </div>

@@ -23,6 +23,7 @@ import {
   physicsOf,
   prefabChildrenOf,
   sliceInsetsOf,
+  textStyleOf,
   tileMapOf,
   touchZonesOf,
   worldTransformOf,
@@ -31,6 +32,7 @@ import {
   type ImageAsset,
   type ParticlesProps,
   type Project,
+  type TextProps,
   type TileCell,
   type TileMap,
   type TilemapProps,
@@ -395,6 +397,14 @@ function hexToNumber(hex: string, fallback = 0xffffff): number {
 type Renderable =
   | Phaser.GameObjects.Rectangle
   | Phaser.GameObjects.Ellipse
+  // Word wrap changes how big a text object is drawn, and `localRectOf`,
+  // `hitAreaFor` and `applyHitArea` still need no case for it — they read
+  // `object.width`/`height` live and are re-applied every sync, because a text
+  // object's size has always followed its content as it was typed. A wrapped
+  // paragraph is just a text object that measured differently, so the outline,
+  // the handles, the published bounds, snapping and align all follow it with no
+  // edit at all. Worth saying, because here "no branch needed" and "forgot a
+  // branch" look identical.
   | Phaser.GameObjects.Text
   // A Sprite rather than an Image: only a Sprite carries an AnimationState, and
   // a sprite node has to be able to play whether or not it does today. The two
@@ -513,6 +523,18 @@ export class EditorScene extends Phaser.Scene {
    * ignoreIfPlaying by another route: compare, and only then apply.
    */
   private emitterConfigs = new Map<string, string>();
+
+  /**
+   * The style each text object was last given, by display key.
+   *
+   * `emitterConfigs`' guard, one type over and for a plainer reason: applying a
+   * style re-rasterises the text's own canvas, and the scene syncs on *every*
+   * store change — so without this, selecting an object or nudging an unrelated
+   * one re-renders every piece of text in the scene. That was already true of
+   * the three keys this used to set inline; a fresh object from `textStyleOf`
+   * per call would have made it unconditional.
+   */
+  private textStyles = new Map<string, string>();
 
   /**
    * The display keys belonging to real document nodes, rebuilt every sync.
@@ -1198,6 +1220,13 @@ export class EditorScene extends Phaser.Scene {
    * Undefined for every type but `tilemap`, which is what lets `syncNodes`
    * compare it unconditionally: the stored value is undefined too, so the
    * comparison is trivially equal and costs nothing for the other five.
+   *
+   * Typography adds nothing here, deliberately. A `Text` re-lays itself out on
+   * `setStyle`, so every one of its dials is an in-place setter — the emitter's
+   * `setConfig` case rather than the nine-slice's and the tile sprite's, which
+   * bake their geometry when they are constructed and so have to be rebuilt.
+   * Folding a style signature in would rebuild the object on every keystroke in
+   * the inspector, which is what `applyTextStyle`'s cache is for instead.
    */
   private shapeOf(node: GameObjectNode): string | undefined {
     // A panel and a tile sprite both build their geometry from the texture when
@@ -1236,9 +1265,12 @@ export class EditorScene extends Phaser.Scene {
     this.tilemaps.delete(key);
     this.tileData.delete(key);
     // The container's own `destroy` takes the emitter and the marker with it,
-    // so only the two lookups have to be dropped by hand.
+    // so only the lookups have to be dropped by hand.
     this.emitters.delete(key);
     this.emitterConfigs.delete(key);
+    // A text style cache entry outliving its object would have the next node to
+    // land on this key skip the style it has never actually been given.
+    this.textStyles.delete(key);
   }
 
   /**
@@ -3314,17 +3346,48 @@ export class EditorScene extends Phaser.Scene {
       case 'text': {
         const text = object as Phaser.GameObjects.Text;
         if (text.text !== node.props.text) text.setText(node.props.text);
-        text.setStyle({
-          fontSize: `${node.props.fontSize}px`,
-          color: node.props.color,
-          fontFamily: node.props.fontFamily,
-        });
+        this.applyTextStyle(text, node.props, key);
         text.setAlpha(node.props.alpha);
         break;
       }
     }
 
     this.applyHitArea(object);
+  }
+
+  /**
+   * Brings one text object in line with its node's typography.
+   *
+   * Cache-guarded, for `applyEmitter`'s reason: every one of these calls
+   * re-rasterises the text's canvas, and the scene syncs on every store change.
+   *
+   * **`setStyle` does not carry `padding`, `lineSpacing` or `letterSpacing`,
+   * and that is the whole reason this is a method rather than one line.**
+   * Phaser's `TextStyle` keeps a `propertyMap` of the keys it copies out of a
+   * style object, and those three are not in it — they live on the `Text` game
+   * object instead. The *constructor* reads them (`new Text(...)` checks
+   * `style.padding` and the other two by hand), which is why the exported code
+   * can put everything in one config literal and this cannot. Handing them to
+   * `setStyle` here silently does nothing, and "the wrap works but the line
+   * spacing is ignored" is exactly how that looks from the canvas.
+   *
+   * The three setters come first and `setStyle` last so that its own
+   * `updateText` is the one that lays out the final result.
+   */
+  private applyTextStyle(
+    text: Phaser.GameObjects.Text,
+    props: TextProps,
+    key: string,
+  ): void {
+    const style = textStyleOf(props);
+    const signature = JSON.stringify(style);
+    if (this.textStyles.get(key) === signature) return;
+    this.textStyles.set(key, signature);
+
+    text.setPadding(style.padding.x, style.padding.y, style.padding.x, style.padding.y);
+    text.setLineSpacing(style.lineSpacing);
+    text.setLetterSpacing(style.letterSpacing);
+    text.setStyle(style);
   }
 
   /**

@@ -324,8 +324,58 @@ export function hostileProject(): Project {
               text: `${breakout}<!--\u2028\u2029"quoted" \\ backslash`,
               fontSize: 28,
               color: '#ffffff',
-              fontFamily: 'system-ui, sans-serif',
+              // Free user text that reaches a JS string literal *and* the
+              // runnable page's `<script>` body, and until iteration 22 it was
+              // the one field on this node nobody had made hostile \u2014 which is
+              // exactly where the holes have always been.
+              fontFamily: `${breakout}", cursive`,
               alpha: 1,
+              bold: false,
+              italic: false,
+              align: 'left',
+              wordWrapWidth: 0,
+              lineSpacing: 0,
+              letterSpacing: 0,
+              strokeColor: '#000000',
+              strokeThickness: 0,
+              shadowColor: '#000000',
+              shadowOffsetX: 0,
+              shadowOffsetY: 0,
+              shadowBlur: 0,
+            },
+            children: [],
+          },
+          {
+            id: 'c-styled',
+            name: 'styled text',
+            type: 'text',
+            visible: true,
+            transform: { x: 700, y: 300, rotation: 0, scaleX: 1, scaleY: 1 },
+            // A non-default value in every one of the twelve typography fields,
+            // and carrying no hostile string at all \u2014 it is not here for
+            // escaping. It is the only place the emitted style literal's
+            // *shape* meets `Phaser.Types.GameObjects.Text.TextStyle` under
+            // `tsc --strict`, which is where a key renamed between Phaser
+            // versions fails and nowhere else. The hostile emitter's argument,
+            // one type over.
+            props: {
+              text: 'wrapped\nand styled',
+              fontSize: 24,
+              color: '#ffe066',
+              fontFamily: 'Georgia, serif',
+              alpha: 0.9,
+              bold: true,
+              italic: true,
+              align: 'center',
+              wordWrapWidth: 180,
+              lineSpacing: 6,
+              letterSpacing: 2,
+              strokeColor: '#7a1fa2',
+              strokeThickness: 3,
+              shadowColor: '#123456',
+              shadowOffsetX: 4,
+              shadowOffsetY: -2,
+              shadowBlur: 5,
             },
             children: [],
           },
@@ -716,6 +766,21 @@ export function hostileProject(): Project {
               color: '#ffb84f',
               fontFamily: 'system-ui, sans-serif',
               alpha: 1,
+              // Every field at its default, on purpose: this is the node that
+              // proves a text object made before iteration 22 still exports the
+              // three keys it always did and nothing more.
+              bold: false,
+              italic: false,
+              align: 'left',
+              wordWrapWidth: 0,
+              lineSpacing: 0,
+              letterSpacing: 0,
+              strokeColor: '#000000',
+              strokeThickness: 0,
+              shadowColor: '#000000',
+              shadowOffsetX: 0,
+              shadowOffsetY: 0,
+              shadowBlur: 0,
             },
             children: [],
           },
