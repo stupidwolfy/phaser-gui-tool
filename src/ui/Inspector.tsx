@@ -12,8 +12,11 @@ import {
   EMPTY_TILE,
   cameraOf,
   canHavePhysics,
+  collidableNodes,
+  collidersOf,
   containsInstance,
   containsNode,
+  controlsOf,
   findAsset,
   findParent,
   frameCountOf,
@@ -31,7 +34,7 @@ import {
 } from '../core/schema';
 import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
 import { AudioSection } from './AudioPicker';
-import { TilePalette } from './TilePalette';
+import { SolidPalette, TilePalette } from './TilePalette';
 import { AnimationEditor } from './AnimationEditor';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
 
@@ -318,6 +321,8 @@ function SceneInspector() {
 
       <WorldSection />
 
+      <CollidersSection />
+
       {/* Here rather than in the scene panel beside the prefab list, which was
           the other candidate: a prefab is *placed*, over and over, so reaching
           it must not cost a deselect first, while a sound is imported and tuned
@@ -478,6 +483,104 @@ function WorldSection() {
         Positive Y falls downward, as everywhere else here. The world's bounds
         are the scene's own width and height, so an object set to collide with
         them stops at the frame you can see.
+      </p>
+    </>
+  );
+}
+
+/**
+ * Which pairs of objects Arcade keeps apart, or watches for a touch.
+ *
+ * A scene setting, where the scene's other settings are — the gravity is
+ * directly above it and is the world these rows act in. It is the line
+ * iteration 16 told the user to write by hand, and it is here now for the
+ * reason that iteration emitted a `mass` and an `immovable` nothing it
+ * generated read: which pairs interact is a standing fact about the world,
+ * where what should *happen* when they touch is a sequence of events and stays
+ * the user's, on the handle `add.overlap` hands them.
+ *
+ * The pickers offer exactly what `collidersOf` would keep — a top-level node
+ * with a body, or a tilemap — so the panel cannot produce a row that vanishes
+ * on the next read. Hidden entirely below two such nodes: with one there is no
+ * pair to make, and a "+ Collision" button that could only ever produce nothing
+ * is worth less than the rows it costs.
+ */
+function CollidersSection() {
+  const scene = useActiveScene();
+  // Derived outside the selector, never inside one: `collidersOf` builds a
+  // fresh array every call, so `useEditorStore((s) => collidersOf(...))` would
+  // compare unequal on every store change and loop forever (React error #185).
+  const addCollider = useEditorStore((s) => s.addCollider);
+  const updateCollider = useEditorStore((s) => s.updateCollider);
+  const removeCollider = useEditorStore((s) => s.removeCollider);
+
+  const candidates = collidableNodes(scene);
+  if (candidates.length < 2) return null;
+  const rows = collidersOf(scene);
+  const options = candidates.map((node) => ({ value: node.id, label: node.name }));
+
+  return (
+    <>
+      <div className="panel__section">Collisions</div>
+      {/* Every label is numbered, and that is not decoration: a second row puts
+          a second field reading exactly "Collides" on the page, and the suite
+          locates a field by its exact label — the trap the prefab buttons' "+ "
+          prefix and the scene chips' "Switch to " both exist for, arriving here
+          by a third route. It also gives the remove button something to name. */}
+      {rows.map((row, index) => (
+        // Two rows of two rather than one row of four: at 390px a flex row
+        // shares its width equally, so four controls are ~85px each and every
+        // object name in the picker is truncated to nothing. The pair that has
+        // to be read together — what collides with what — gets a row of its
+        // own.
+        <div key={row.id}>
+          <div className="field-row">
+            <SelectField
+              label={`Collides ${index + 1}`}
+              value={row.aId}
+              options={options}
+              onChange={(aId) => updateCollider(row.id, { aId })}
+            />
+            <SelectField
+              label={`With ${index + 1}`}
+              value={row.bId}
+              options={options}
+              onChange={(bId) => updateCollider(row.id, { bId })}
+            />
+          </div>
+          <div className="field-row field-row--foot">
+            <SelectField
+              label={`How ${index + 1}`}
+              value={row.kind}
+              options={[
+                { value: 'collide', label: 'Solid' },
+                { value: 'overlap', label: 'Overlap' },
+              ]}
+              onChange={(kind) => updateCollider(row.id, { kind: kind as 'collide' | 'overlap' })}
+            />
+            <button
+              className="btn btn--block btn--danger"
+              onClick={() => removeCollider(row.id)}
+              aria-label={`Remove collision ${index + 1}`}
+              title="Remove this collision"
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+      {/* The first two candidates rather than a blank row, because a row naming
+          nothing is one `collidersOf` drops on the next read — so there would
+          be nothing on screen left to fill in. */}
+      <button
+        className="btn btn--block"
+        onClick={() => addCollider(candidates[0].id, candidates[1].id)}
+      >
+        + Collision
+      </button>
+      <p className="hint">
+        Solid stops them; Overlap only reports the touch. What happens then is
+        yours to write, on the collider the export hands back.
       </p>
     </>
   );
@@ -1422,6 +1525,22 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
         {erasing ? 'Clear every tile' : 'Fill with this tile'}
       </button>
 
+      {/* "Collision", not "Physics": a tilemap carries no Arcade body — its
+          collision is `setCollision([...])`, which is about which *tiles* are
+          solid rather than about a box round the layer. Naming it Physics would
+          say the map has the thing it deliberately has not got. */}
+      <div className="panel__section">Collision</div>
+      <SolidPalette
+        nodeId={node.id}
+        assetId={node.props.assetId}
+        collides={map.collides}
+      />
+      <p className="hint">
+        {map.collides.length > 0
+          ? 'Solid tiles are outlined green while you paint. Add a collision in the Scene panel between this map and whatever should stand on it.'
+          : 'Pick the tiles that should stop things — walls, floors. Then add a collision in the Scene panel between this map and whatever should stand on it.'}
+      </p>
+
       <div className="panel__section">Appearance</div>
       <NumberField
         label="Alpha"
@@ -1831,6 +1950,94 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
             rotate with what it belongs to. Nothing moves in the editor — the
             document is what you are editing, so the simulation is left to the
             game you export.
+          </p>
+
+          {/* Only for a dynamic body, and absent rather than disabled for the
+              reason the velocity rows above are: a StaticBody has no velocity
+              for a key to change, so this does not exist for that kind of body
+              rather than being switched off for it. */}
+          {body.kind === 'dynamic' && <ControlsSection node={node} />}
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * What the player drives this object with.
+ *
+ * The first thing in this editor that is about the game *running*, and it is
+ * here — under the body it needs — rather than in a panel of its own, because
+ * it is a property of that body: a velocity is what a key changes, and a static
+ * body has none. Only a top-level node can have one, which `PhysicsSection`
+ * has already established by the time this renders.
+ *
+ * Two modes rather than a row of switches, for the reason `NodeControls` says:
+ * a top-down game moves on four axes and never jumps, a platformer moves on two
+ * and jumps, and the combinations in between are ones nobody asks for and the
+ * exporter would have to answer for.
+ */
+function ControlsSection({ node }: { node: GameObjectNode }) {
+  const setNodeControls = useEditorStore((s) => s.setNodeControls);
+  // Derived outside the selector: `controlsOf` builds a fresh object every
+  // call, the `tileMapOf` trap.
+  const controls = controlsOf(node, true);
+
+  return (
+    <>
+      <div className="panel__section">Controls</div>
+      <CheckboxField
+        label="Player controls"
+        value={controls !== null}
+        onChange={(on) => setNodeControls(node.id, on ? {} : null)}
+      />
+      {controls && (
+        <>
+          <SelectField
+            label="Control mode"
+            value={controls.mode}
+            options={[
+              { value: 'platformer', label: 'Platformer — walk and jump' },
+              { value: 'topDown', label: 'Top-down — walk any way' },
+            ]}
+            onChange={(mode) =>
+              setNodeControls(node.id, { mode: mode === 'topDown' ? 'topDown' : 'platformer' })
+            }
+          />
+          <SelectField
+            label="Control keys"
+            value={controls.scheme}
+            options={[
+              { value: 'arrows', label: 'Arrow keys' },
+              { value: 'wasd', label: 'W A S D' },
+            ]}
+            onChange={(scheme) =>
+              setNodeControls(node.id, { scheme: scheme === 'wasd' ? 'wasd' : 'arrows' })
+            }
+          />
+          <div className="field-row">
+            <NumberField
+              label="Walk speed"
+              value={controls.speed}
+              min={0}
+              onChange={(speed) => setNodeControls(node.id, { speed })}
+            />
+            {/* Absent in top-down for the rule this panel already follows twice
+                over: there is no jump in a game with no down. */}
+            {controls.mode === 'platformer' && (
+              <NumberField
+                label="Jump speed"
+                value={controls.jump}
+                min={0}
+                onChange={(jump) => setNodeControls(node.id, { jump })}
+              />
+            )}
+          </div>
+          <p className="hint">
+            The green arrows on the body are which object the keys drive. Nothing
+            moves here either — the export gets an <code>update()</code> that
+            reads the keys, and a jump needs something under it, which is a
+            collision or a solid tile.
           </p>
         </>
       )}

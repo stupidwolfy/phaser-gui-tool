@@ -579,6 +579,21 @@ export interface TilemapProps {
    * per row.
    */
   data: number[];
+  /**
+   * The frame indices that are solid, in ascending order and without repeats.
+   *
+   * On the node rather than on the asset, which is the call
+   * `NineSliceProps`' insets made and the opposite of `ImageAsset.sheet`'s. A
+   * frame grid is a property of the *bytes* — it decides how many frames the
+   * image has, which two maps drawing it must not disagree about. Solidity
+   * decides nothing about the image: one tileset is a wall in the level and
+   * scenery in the layer behind it, and nothing downstream indexes a solid
+   * flag the way a tile index indexes a frame. So it belongs to the use.
+   *
+   * Optional for the reason `guides` is: every file written before this
+   * existed has no such field. Read it through `tileMapOf`, never directly.
+   */
+  collides?: number[];
   alpha: number;
 }
 
@@ -694,6 +709,16 @@ export type GameObjectNode = {
      */
     physics?: PhysicsBody;
     /**
+     * What the player drives this object with, or absent for everything the
+     * player does not drive.
+     *
+     * Beside `physics` rather than in `props` for `physics`' reason: it is not
+     * a per-type setting, and only a node that already carries a dynamic body
+     * can have one at all. Optional for the reason `guides` is, and read
+     * through `controlsOf`, never directly.
+     */
+    controls?: NodeControls;
+    /**
      * Nested nodes, positioned relative to this one. Only a `container`
      * renders them, but the array is present on every node so that traversal,
      * cloning and the parser never have to branch on the type.
@@ -720,8 +745,10 @@ export type GameObjectNode = {
  * - a `particles` node has no ComputedSize at all (see EditorScene's wrapper),
  *   so it has no width or height for a body to take;
  * - a `tilemap`'s collision is `setCollision([...])` — a different API about
- *   which *tiles* are solid, and a per-tile flag in the schema is the beginning
- *   of a behaviour model rather than more of this one.
+ *   which *tiles* are solid, and giving the whole layer one rectangular box
+ *   would be a half-answer that looks like the real one. That is
+ *   `TilemapProps.collides`, and it is why a tilemap is a thing a collider row
+ *   may name without ever being in this set.
  */
 const PHYSICS_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
   'rectangle',
@@ -739,11 +766,14 @@ const PHYSICS_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
  * this object with the setters wrapped round it — the rule `AnimationClip` and
  * `ParticlesProps` already follow.
  *
- * What is deliberately *not* here is behaviour over time: no colliders, no
- * overlap callbacks, no `stopAfter`. Which two objects collide is a line of
- * game logic, and the argument that keeps `scene.start` out of the document
- * applies here unchanged. What is here is the body's own standing state, which
- * is layout: how big it is, where it starts, and how it responds.
+ * What is here is the body's own standing state: how big it is, where it
+ * starts, and how it responds. *Which* pairs collide is not per-body and lives
+ * on the scene, in `SceneCollider` — it was refused outright until iteration
+ * 20, on the argument that keeps `scene.start` out of the document, and what
+ * changed is not that argument but where its line falls: which pairs interact
+ * is a standing fact about the world, where what happens when they touch is a
+ * sequence of events and is still nowhere in this schema. There are still no
+ * overlap callbacks and no `stopAfter`.
  */
 export interface PhysicsBody {
   /**
@@ -764,12 +794,12 @@ export interface PhysicsBody {
   angularVelocity: number;
   mass: number;
   /**
-   * `mass` and `immovable` only ever matter inside a collision, and this editor
-   * emits no `collider` or `overlap` anywhere — deciding what collides with
-   * what is game logic, the `scene.start` argument. They are here anyway, and
-   * that is the point: the collider is the one line the user adds by hand, and
-   * these two are the body properties that line reads. Emitting them means the
-   * line they write is the only thing they have to write.
+   * `mass` and `immovable` only ever matter inside a collision, and for four
+   * iterations this editor emitted no `collider` or `overlap` anywhere — they
+   * were here for a line the user was told to write by hand, on the argument
+   * that deciding what collides with what is game logic. `SceneCollider` is
+   * that line now, so these two are read by something this file generates
+   * rather than by something a reader was asked to add.
    */
   immovable: boolean;
   /** False exempts this body from the scene's world gravity. */
@@ -833,6 +863,94 @@ export function canHavePhysics(type: NodeType): boolean {
 }
 
 /**
+ * What the player drives an object with.
+ *
+ * The first thing in this schema that is about what happens while the game is
+ * *running*, and it is here because it is a standing fact about the world
+ * rather than a sequence of events: which object the player drives, and how it
+ * answers the keys. What happens *when* it reaches something is still the
+ * user's line to write, exactly as the collider used to be.
+ *
+ * `mode` is two presets rather than a pile of booleans, because that is how a
+ * person picks: a top-down game moves on four axes and never jumps, and a
+ * platformer moves on two and jumps, and only while it is standing on
+ * something. Splitting them into `moveVertically` and `canJump` would let a
+ * user ask for a fifth combination nobody wants and the exporter would have to
+ * answer for it.
+ */
+export interface NodeControls {
+  mode: 'platformer' | 'topDown';
+  /** Which keys drive it. Both read the same four directions. */
+  scheme: 'arrows' | 'wasd';
+  /** Pixels per second, applied as a velocity rather than an acceleration. */
+  speed: number;
+  /**
+   * The upward velocity a jump is given, in pixels per second. Platformer
+   * only, and zero is a platformer character that cannot jump — which is a
+   * thing people build, so it is not repaired to a default.
+   */
+  jump: number;
+}
+
+/** Phaser's own default, and the speed a body of a few tens of pixels reads at. */
+const DEFAULT_SPEED = 200;
+/** Enough to clear about two tiles under the gravity `defaultProject` ships. */
+const DEFAULT_JUMP = 450;
+
+/**
+ * The node's controls, defaulted and validated in one place.
+ *
+ * The `physicsOf` / `guidesOf` / `soundsOf` / `cameraOf` / `tileMapOf` family,
+ * and it answers three questions at once: is this node somewhere driving would
+ * mean anything, is it something Arcade can push, and is the stored object well
+ * formed. Any one of them forgotten is an exported `update()` calling
+ * `setVelocityX` on a `StaticBody`, which does not have one.
+ *
+ * The top-level rule is the physics rule arriving a third time, after the body
+ * and the camera's follow target, and it is the same rule for the same reason:
+ * a velocity moves an object in *world* coordinates, and a node inside a
+ * container has parent-relative ones. A prefab definition's children are
+ * container children by the same mechanism, so this bans a driven node there
+ * too without a second check. Found deeper it reads as *absent* rather than
+ * being deleted, so a node dragged into a group and back out again keeps it.
+ *
+ * A fresh object every call, exactly as `physicsOf` builds one — so
+ * `useEditorStore((s) => controlsOf(...))` is an infinite render loop (React
+ * error #185). Select the node and derive outside the selector.
+ */
+export function controlsOf(
+  node: GameObjectNode,
+  topLevel: boolean,
+): NodeControls | null {
+  // A static body has no velocity at all, so there is nothing for a key to
+  // change — the same reason the inspector hides a static body's own velocity
+  // rows rather than disabling them.
+  const body = physicsOf(node, topLevel);
+  if (body === null || body.kind !== 'dynamic') return null;
+
+  const raw = node.controls;
+  if (typeof raw !== 'object' || raw === null) return null;
+
+  const numberOr = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+  return {
+    mode: raw.mode === 'topDown' ? 'topDown' : 'platformer',
+    scheme: raw.scheme === 'wasd' ? 'wasd' : 'arrows',
+    // Repaired rather than dropped, which is `soundsOf`'s split: a negative
+    // speed is a character that walks backwards from every key, and there is a
+    // sensible number to fall back to.
+    speed: Math.max(0, numberOr(raw.speed, DEFAULT_SPEED)),
+    jump: Math.max(0, numberOr(raw.jump, DEFAULT_JUMP)),
+  };
+}
+
+/** The controls a node gets the moment one is switched on. */
+export function defaultControls(): NodeControls {
+  return { mode: 'platformer', scheme: 'arrows', speed: DEFAULT_SPEED, jump: DEFAULT_JUMP };
+}
+
+/**
  * A line the user placed for things to line up on.
  *
  * Every other line an object can agree with is incidental — it is wherever some
@@ -845,6 +963,36 @@ export function canHavePhysics(type: NodeType): boolean {
  * on the measured-bounds cache. The two unions are identical, so they
  * interoperate with no cast.
  */
+/**
+ * Two objects in a scene that Arcade should keep apart, or watch for a touch.
+ *
+ * The one line iteration 16 told the user to write by hand, and the reason
+ * `PhysicsBody` carries a `mass` and an `immovable` that nothing it emitted
+ * ever read. It is here now because it is a standing fact about the world —
+ * *which* pairs interact — where what should *happen* when they touch is a
+ * sequence of events and is still the user's to write, on the handle
+ * `add.overlap` returns.
+ *
+ * Two node ids rather than a nesting or a group: an Arcade collider takes two
+ * things, and a group is a second way of naming a set of objects that the
+ * scene tree already names one at a time.
+ */
+export interface SceneCollider {
+  /**
+   * Its own identity, for a `SceneGuide`'s reason: a row is edited and removed
+   * individually, and an index does not survive undo rebuilding the array.
+   */
+  id: string;
+  aId: string;
+  bId: string;
+  /**
+   * `collide` separates them, `overlap` only reports the touch — Phaser's
+   * `add.collider` and `add.overlap`. The stored word is "collide" rather than
+   * "collider" because it is the one a person reads off a row that says two
+   * things collide; the exporter maps it to the method name.
+   */
+  kind: 'collide' | 'overlap';
+}
 export interface SceneGuide {
   /** 'x' for a vertical line at a constant x, 'y' for a horizontal one. */
   axis: 'x' | 'y';
@@ -916,6 +1064,11 @@ export interface SceneDoc {
    * `guides` is, and read through `cameraOf`, never directly.
    */
   camera?: SceneCamera;
+  /**
+   * The pairs Arcade keeps apart, or watches. Optional for the reason `guides`
+   * is, and read through `collidersOf`, never directly.
+   */
+  colliders?: SceneCollider[];
 }
 
 /**
@@ -1017,6 +1170,89 @@ export function soundsOf(project: Project, scene: SceneDoc): SceneSound[] {
     });
   }
   return sounds;
+}
+
+/**
+ * Whether a node is something a collider may name.
+ *
+ * A body is the obvious half; a tilemap is the other, because a layer collides
+ * through the tiles marked solid on it rather than through a `PhysicsBody` it
+ * has not got. Everything else — a container, an instance, a bare rectangle
+ * nobody gave a body — has nothing for Arcade to test against.
+ */
+function canCollide(node: GameObjectNode): boolean {
+  return node.type === 'tilemap' || physicsOf(node, true) !== null;
+}
+
+/**
+ * The scene's collider table, validated against the scene it belongs to.
+ *
+ * The `guidesOf` / `physicsOf` / `soundsOf` / `cameraOf` / `tileMapOf` family,
+ * and it takes `soundsOf`'s split rather than `cameraOf`'s: there is nothing
+ * here to repair. A row is two references and a word, and a reference that
+ * names nothing usable has no sensible value to fall back to —
+ * `physics.add.collider(undefined, x)` is not something Phaser can be asked
+ * for, and unlike a sprite with a missing image there is no placeholder state a
+ * collider could be in. So the row goes, and *that* is what means nothing
+ * downstream needs a guard of its own.
+ *
+ * Four things cost a row, and each is a thing only a hand-edited file or a
+ * since-deleted node can produce:
+ *
+ * - a side that is not a direct child of the scene, which is the top-level rule
+ *   `physicsOf` and `cameraOf` already state, arriving here for free because a
+ *   nested node has no body to find;
+ * - a side that is neither a body nor a tilemap;
+ * - the same node on both sides, which Arcade would test against itself;
+ * - two tilemaps, since a layer only ever collides with something that moves.
+ *   That last one is also what keeps `physicsUsedIn` in the exporter correct
+ *   with no edit: a surviving row implies a body, so the world it needs is
+ *   already switched on.
+ *
+ * Nothing prunes a dangling row anywhere else — not `deleteNode`, not `undo`,
+ * not the scene switcher — exactly as nothing prunes a dangling `followId` or
+ * `audioId`. `duplicateScene` is the one place that has to think, because a
+ * copied row would otherwise point into the scene it was copied from.
+ *
+ * A fresh array every call, exactly as `soundsOf` builds one — so
+ * `useEditorStore((s) => collidersOf(...))` compares unequal on every store
+ * change and loops forever (React error #185). Select the scene and derive
+ * outside the selector.
+ */
+export function collidersOf(scene: SceneDoc): SceneCollider[] {
+  if (!Array.isArray(scene.colliders)) return [];
+
+  const byId = new Map<string, GameObjectNode>();
+  for (const child of scene.children) {
+    if (canCollide(child)) byId.set(child.id, child);
+  }
+
+  const colliders: SceneCollider[] = [];
+  for (const candidate of scene.colliders) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const row = candidate as Partial<SceneCollider>;
+    if (typeof row.id !== 'string' || !row.id) continue;
+    if (typeof row.aId !== 'string' || typeof row.bId !== 'string') continue;
+    if (row.aId === row.bId) continue;
+
+    const a = byId.get(row.aId);
+    const b = byId.get(row.bId);
+    if (a === undefined || b === undefined) continue;
+    if (a.type === 'tilemap' && b.type === 'tilemap') continue;
+
+    colliders.push({
+      id: row.id,
+      aId: row.aId,
+      bId: row.bId,
+      kind: row.kind === 'overlap' ? 'overlap' : 'collide',
+    });
+  }
+  return colliders;
+}
+
+/** The nodes a collider row may name, which is what the inspector offers. */
+export function collidableNodes(scene: SceneDoc): GameObjectNode[] {
+  return scene.children.filter(canCollide);
 }
 
 /**
@@ -1362,6 +1598,11 @@ export interface TileMap {
   data: number[];
   /** How many distinct tiles the tileset offers; never zero. */
   tileCount: number;
+  /**
+   * The solid frame indices, ascending and deduplicated, every one of them a
+   * frame the tileset actually has.
+   */
+  collides: number[];
 }
 
 /**
@@ -1369,11 +1610,12 @@ export interface TileMap {
  *
  * The only reader of `TilemapProps`, in the family `frameGridOf`, `guidesOf` and
  * `prefabChildrenOf` belong to, and for the sharpest version of their reason:
- * every consumer here would otherwise have to ask four separate questions — is
- * there a tileset, how big is a tile, is `data` the length the grid says, and is
- * every entry a frame that exists — and any one of them forgotten is a Phaser
- * warning and a missing-texture cell. Answering all four in one call means the
- * renderer, the exporter, the palette and the paint gesture cannot disagree.
+ * every consumer here would otherwise have to ask five separate questions — is
+ * there a tileset, how big is a tile, is `data` the length the grid says, is
+ * every entry a frame that exists, and is every solid index one too — and any
+ * one of them forgotten is a Phaser warning and a missing-texture cell.
+ * Answering all five in one call means the renderer, the exporter, the palette
+ * and the paint gesture cannot disagree.
  *
  * The padding and truncation are the hand-edited-file backstop, not the resize
  * path: `resizeTilemap` re-shapes the array row by row, because reinterpreting a
@@ -1388,8 +1630,10 @@ export interface TileMap {
  * back whole the moment the numbers are right again, where rewriting the stored
  * indices would have thrown the level away over a mistyped margin.
  *
- * `data` keeps its identity when the document's array is already well formed, so
- * a sync that changes nothing allocates nothing.
+ * `data` and `collides` both keep their identity when the document's arrays are
+ * already well formed, so a sync that changes nothing allocates nothing — which
+ * is what `editProject` reads as "nothing happened" and therefore as "no undo
+ * step".
  */
 export function tileMapOf(project: Project, props: TilemapProps): TileMap {
   const asset = findAsset(project, props.assetId);
@@ -1413,6 +1657,23 @@ export function tileMapOf(project: Project, props: TilemapProps): TileMap {
     data = Array.from({ length: size }, (_, index) => clamp(source[index]));
   }
 
+  // A solid index the tileset does not have is dropped rather than clamped, for
+  // the reason an out-of-range tile reads as empty: a re-cut must be able to
+  // blank the answer and give it back whole, not rewrite what the user marked
+  // over a mistyped margin. Sorted and deduplicated here so that `setCollision`
+  // is emitted the same way whatever order the file listed them in.
+  const rawSolid = Array.isArray(props.collides) ? props.collides : [];
+  const solid = new Set<number>();
+  for (const value of rawSolid) {
+    const tile = Math.floor(value);
+    if (Number.isFinite(tile) && tile >= 0 && tile < tileCount) solid.add(tile);
+  }
+  const sorted = [...solid].sort((a, b) => a - b);
+  const collides =
+    rawSolid.length === sorted.length && sorted.every((tile, index) => rawSolid[index] === tile)
+      ? rawSolid
+      : sorted;
+
   return {
     asset,
     tileWidth: grid ? grid.frameWidth : FALLBACK_TILE,
@@ -1421,6 +1682,7 @@ export function tileMapOf(project: Project, props: TilemapProps): TileMap {
     rows,
     data,
     tileCount,
+    collides,
   };
 }
 

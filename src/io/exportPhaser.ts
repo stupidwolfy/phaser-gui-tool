@@ -3,6 +3,8 @@ import {
   TARGET_PHASER_VERSION,
   cameraOf,
   clampFrame,
+  collidersOf,
+  controlsOf,
   findAnimation,
   findAsset,
   findAudio,
@@ -18,6 +20,7 @@ import {
   type AudioAsset,
   type GameObjectNode,
   type ImageAsset,
+  type NodeControls,
   type PhysicsBody,
   type Prefab,
   type Project,
@@ -734,8 +737,9 @@ function buildTilemapHelper(fn: string, language: SceneLanguage, indent: string)
         'tileHeight: number',
         'margin: number',
         'spacing: number',
+        'solid: number[]',
       ].join(',\n  ')
-    : 'scene, x, y, tilesetKey, data, tileWidth, tileHeight, margin, spacing';
+    : 'scene, x, y, tilesetKey, data, tileWidth, tileHeight, margin, spacing, solid';
   const signature = typed
     ? `function ${fn}(\n  ${params},\n): Phaser.Tilemaps.TilemapLayer {`
     : `function ${fn}(${params}) {`;
@@ -752,6 +756,9 @@ function buildTilemapHelper(fn: string, language: SceneLanguage, indent: string)
     "  if (!tileset) throw new Error('Tileset texture not loaded: ' + tilesetKey);",
     '  const layer = map.createLayer(0, tileset, x, y);',
     "  if (!layer) throw new Error('Could not create a tilemap layer for: ' + tilesetKey);",
+    // Guarded rather than called unconditionally, because `setCollision([])` is
+    // a call that says nothing — and a map with no solid tiles is most maps.
+    '  if (solid.length) layer.setCollision(solid);',
     typed ? '  return layer as Phaser.Tilemaps.TilemapLayer;' : '  return layer;',
     '}',
   ];
@@ -954,10 +961,18 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
       // A call rather than an `add.*`, exactly as an instance is: the helper
       // does the adding, and because it returns the layer every modifier below
       // — and the `setName` after them — chains onto it unchanged.
+      //
+      // The solid list is inline where the tile data is tabled, and the split
+      // is the one `TILEMAPS` was created by: the data is thousands of numbers
+      // and the thing a reader moves out to a JSON file, while which frames are
+      // walls is a handful of them and a fact about the tileset rather than
+      // about this level. Putting it in the table would turn every row from an
+      // array into an object for the sake of one short line.
       return (
         `${ctx.tilemapFn}(${receiver}, ${num(x)}, ${num(y)}, ${str(entry.assetKey)}, ` +
         `TILEMAPS[${str(entry.key)}], ${num(entry.map.tileWidth)}, ${num(entry.map.tileHeight)}, ` +
-        `${num(grid ? grid.margin : 0)}, ${num(grid ? grid.spacing : 0)})`
+        `${num(grid ? grid.margin : 0)}, ${num(grid ? grid.spacing : 0)}, ` +
+        `[${entry.map.collides.join(', ')}])`
       );
     }
     case 'particles': {
@@ -1302,13 +1317,205 @@ function buildSoundLines(
   return lines;
 }
 
+/**
+ * The names a `Phaser.Scene` already answers to.
+ *
+ * A driven object has to outlive `create()`'s `const`, so it is parked on the
+ * scene — and `this.player` lands in the same namespace as `this.physics` and
+ * `this.input`. Seeding the field set with these is the prefab factories' rule
+ * one level over: an object a user called "input" must not take a property the
+ * line beside it is reaching through.
+ *
+ * The list is Phaser's `Scene` instance properties plus the lifecycle methods
+ * this file emits. It does not have to be exhaustive to be safe, and it is not
+ * a list that goes stale in a way that breaks anything: a name it misses is one
+ * the user chose that Phaser also uses, which is a collision `toIdentifier`
+ * would have resolved had it known, and a name it holds that Phaser dropped
+ * costs one object a suffix it did not need.
+ */
+const SCENE_MEMBERS: readonly string[] = [
+  'add',
+  'anims',
+  'cache',
+  'cameras',
+  'children',
+  'create',
+  'data',
+  'events',
+  'game',
+  'input',
+  'lights',
+  'load',
+  'make',
+  'matter',
+  'physics',
+  'plugins',
+  'preload',
+  'registry',
+  'renderer',
+  'scale',
+  'scene',
+  'sound',
+  'sys',
+  'textures',
+  'time',
+  'tweens',
+  'update',
+];
+
+/** One object the player drives, resolved down to what the emitters need. */
+interface DrivenObject {
+  /** The `this.<field>` the object is parked on so `update()` can reach it. */
+  field: string;
+  /** The `const` `create()` bound it to. */
+  binding: string;
+  controls: NodeControls;
+}
+
+/**
+ * The keys `create()` opens, as a `this.<field>` per scheme.
+ *
+ * A WASD set is emitted as a whole `CursorKeys` — six keys, `space` and `shift`
+ * included — rather than the four it reads, and that is a type decision as much
+ * as a convenience one: `Phaser.Types.Input.Keyboard.CursorKeys` names all six
+ * and none of them is optional, so a four-key literal could not be given that
+ * type, and the exported `.ts` would need a shape of its own for a difference
+ * `update()` cannot see. `addKeys('W,A,S,D')` was the other route and is worse:
+ * its declared return is a bare `object`, so every property access below it
+ * fails under `--strict`.
+ */
+function buildKeyboardLines(
+  schemes: ReadonlySet<NodeControls['scheme']>,
+  local: string,
+  fields: { arrows: string; wasd: string },
+): string[] {
+  // Narrowed with a plain `if` rather than a `!`, and this is the constraint
+  // that shapes the whole emitted block: `this.input.keyboard` is
+  // `KeyboardPlugin | null` under `--strict`, and the `create()` body is the
+  // *same plain JavaScript* in the `.ts`, the `.js` and the runnable page — so
+  // it cannot carry an assertion, a cast or an annotation. A `const` and an
+  // `if` narrow it in a way all three accept.
+  const lines = [`const ${local} = this.input.keyboard;`, `if (${local}) {`];
+  if (schemes.has('arrows')) {
+    lines.push(`  this.${fields.arrows} = ${local}.createCursorKeys();`);
+  }
+  if (schemes.has('wasd')) {
+    lines.push(`  this.${fields.wasd} = {`);
+    for (const [name, key] of [
+      ['up', 'W'],
+      ['down', 'S'],
+      ['left', 'A'],
+      ['right', 'D'],
+      ['space', 'SPACE'],
+      ['shift', 'SHIFT'],
+    ]) {
+      lines.push(`    ${name}: ${local}.addKey(${str(key)}),`);
+    }
+    lines.push('  };');
+  }
+  lines.push('}');
+  return lines;
+}
+
+/**
+ * The body of `update()` — the first thing this exporter has ever emitted that
+ * runs on every frame.
+ *
+ * It does not make the editor simulate anything: the canvas still draws a body
+ * and never runs one, and this is only what the *exported* game is handed. What
+ * it does is state a standing fact about the world — which object the player
+ * drives, and how it answers the keys — where what should *happen* when that
+ * object reaches something is a sequence of events and stays the user's line to
+ * write, exactly as the collider used to be.
+ *
+ * Velocity rather than acceleration, because a velocity is what "how fast does
+ * this walk" means and it is the one that reads the same with and without drag.
+ * The horizontal velocity is zeroed first so that letting go stops the object,
+ * which is what a player expects and what an accelerating body would not do.
+ *
+ * A platformer's jump is gated on `blocked.down` — Arcade's own flag for
+ * "there is something under me this step", which is exactly the tilemap the
+ * solid tiles just built or the platform the collider just added. Without it a
+ * held key flies.
+ */
+function buildUpdateBody(
+  driven: DrivenObject[],
+  fields: { arrows: string; wasd: string },
+  ctx: EmitContext,
+): string {
+  if (driven.length === 0) return '';
+
+  // `update()` is its own scope, so its own identifier set — seeded like
+  // `create()`'s, since the module-level helpers are as reachable from here as
+  // from there and an object named "arcade body" must not shadow one.
+  const used = new Set<string>([
+    'this',
+    ctx.tilemapFn,
+    ctx.bodyFn,
+    ...[...ctx.prefabs.values()].map((entry) => entry.fn),
+  ]);
+
+  const keyLocal = new Map<NodeControls['scheme'], string>();
+  const lines: string[] = [];
+  for (const scheme of ['arrows', 'wasd'] as const) {
+    if (!driven.some((entry) => entry.controls.scheme === scheme)) continue;
+    const field = scheme === 'arrows' ? fields.arrows : fields.wasd;
+    const local = toIdentifier(field, used);
+    keyLocal.set(scheme, local);
+    lines.push(`const ${local} = this.${field};`);
+  }
+
+  for (const { field, controls } of driven) {
+    const keys = keyLocal.get(controls.scheme) as string;
+    const object = toIdentifier(field, used);
+    const body = toIdentifier(`${field} body`, used);
+    const speed = num(controls.speed);
+
+    lines.push('');
+    lines.push(`const ${object} = this.${field};`);
+    // Both guarded together, and with an `if` rather than an early `return`:
+    // a second driven object below must still be updated when the first one is
+    // somehow missing.
+    lines.push(`if (${keys} && ${object}) {`);
+    lines.push(`  const ${body} = ${ctx.bodyFn}(${object});`);
+    lines.push(`  ${body}.setVelocityX(0);`);
+    lines.push(`  if (${keys}.left.isDown) ${body}.setVelocityX(-${speed});`);
+    lines.push(`  else if (${keys}.right.isDown) ${body}.setVelocityX(${speed});`);
+    if (controls.mode === 'topDown') {
+      lines.push(`  ${body}.setVelocityY(0);`);
+      lines.push(`  if (${keys}.up.isDown) ${body}.setVelocityY(-${speed});`);
+      lines.push(`  else if (${keys}.down.isDown) ${body}.setVelocityY(${speed});`);
+    } else {
+      lines.push(
+        `  if (${keys}.up.isDown && ${body}.blocked.down) ` +
+          `${body}.setVelocityY(-${num(controls.jump)});`,
+      );
+    }
+    lines.push('}');
+  }
+
+  return lines.map((line) => (line ? `    ${line}` : '')).join('\n');
+}
+
+/** What `create()` built, and what `update()` needs to know about it. */
+interface CreateBody {
+  body: string;
+  /** Already indented and ready to drop into the method, or '' for no method. */
+  update: string;
+  /**
+   * The `this.<field>` declarations the `.ts` output needs, in order. Empty for
+   * the `.js` and the page, which declare nothing.
+   */
+  fields: { name: string; type: string }[];
+}
+
 /** The body of `create()`, shared verbatim by both outputs. */
 function buildCreateBody(
   project: Project,
   scene: SceneDoc,
   ctx: EmitContext,
   plays: ReadonlySet<string>,
-): string {
+): CreateBody {
   const { animations } = ctx;
   // Seeded with the factory names as well as `this`: the instance calls are in
   // this scope, so an object named "create coin" bound here would shadow the
@@ -1392,6 +1599,26 @@ function buildCreateBody(
     lines.push(...sounds);
   }
 
+  // The keys, last in the prologue and for the sound handles' reason: the
+  // `this.<field>` names are allocated here, before any object binding is, so
+  // an object a user called "cursors" cannot take the name the `update()` below
+  // is reaching for. The local `const` comes out of `create()`'s own set at the
+  // same moment and for the same reason.
+  const drivenNodes = scene.children.filter((node) => controlsOf(node, true) !== null);
+  const schemes = new Set<NodeControls['scheme']>();
+  for (const node of drivenNodes) {
+    schemes.add((controlsOf(node, true) as NodeControls).scheme);
+  }
+  const fieldNames = new Set<string>(SCENE_MEMBERS);
+  const fields = {
+    arrows: schemes.has('arrows') ? toIdentifier('cursors', fieldNames) : '',
+    wasd: schemes.has('wasd') ? toIdentifier('wasd keys', fieldNames) : '',
+  };
+  if (schemes.size > 0) {
+    if (lines.at(-1) !== '') lines.push('');
+    lines.push(...buildKeyboardLines(schemes, toIdentifier('keyboard', used), fields));
+  }
+
   // The two blocks above each end on a blank, so this is the separator only
   // when there was neither to separate from.
   if (scene.children.length > 0 && lines.at(-1) !== '') lines.push('');
@@ -1401,10 +1628,11 @@ function buildCreateBody(
     if (id !== null) bindings.set(node.id, id);
   }
 
-  // The one thing this exporter emits *after* the object list, and the reason
-  // is the whole of it: `startFollow` names a binding, and the line that makes
-  // that binding is above. Everything else about the camera is in the prologue
-  // with the background, where a reader looks for how the shot is set up.
+  // The first of three things this exporter emits *after* the object list, and
+  // the reason is the whole of it: `startFollow` names a binding, and the line
+  // that makes that binding is above. Everything else about the camera is in
+  // the prologue with the background, where a reader looks for how the shot is
+  // set up.
   if (camera.followId !== null) {
     const target = bindings.get(camera.followId);
     if (lines.at(-1) !== '') lines.push('');
@@ -1421,8 +1649,68 @@ function buildCreateBody(
     }
   }
 
+  // The second thing emitted after the objects, and for the first one's reason:
+  // a collider names two bindings the object list has just made. This is the
+  // line iteration 16 told the user to write by hand — `mass` and `immovable`
+  // were emitted *for* it — and it is here now because which pairs interact is
+  // a standing fact about the world. What should happen when they touch is
+  // still the user's, on the handle `add.overlap` returns.
+  const colliders = collidersOf(scene);
+  if (colliders.length > 0) {
+    if (lines.at(-1) !== '') lines.push('');
+    for (const collider of colliders) {
+      const a = bindings.get(collider.aId);
+      const b = bindings.get(collider.bId);
+      if (a === undefined || b === undefined) {
+        // The camera follow's treatment, and `missingReason`'s: the row is in
+        // the document, it just names something that did not reach the output.
+        lines.push('// A collider names an object that could not be added.');
+        continue;
+      }
+      // `collider`, not `collide`: the document says "collide" because that is
+      // what the row means to a person reading it, and `ArcadeFactory` calls
+      // the method `collider`. One is the word and one is the API.
+      const fn = collider.kind === 'overlap' ? 'overlap' : 'collider';
+      lines.push(`this.physics.add.${fn}(${a}, ${b});`);
+    }
+  }
+
+  // And the third, which is the one with no alternative at all: `update()` runs
+  // outside this scope, so a driven object is the one object here that has to
+  // outlive its `const`.
+  const driven: DrivenObject[] = [];
+  for (const node of drivenNodes) {
+    const binding = bindings.get(node.id);
+    if (binding === undefined) continue;
+    driven.push({
+      field: toIdentifier(node.name, fieldNames),
+      binding,
+      controls: controlsOf(node, true) as NodeControls,
+    });
+  }
+  if (driven.length > 0) {
+    if (lines.at(-1) !== '') lines.push('');
+    for (const { field, binding } of driven) lines.push(`this.${field} = ${binding};`);
+  }
+
   while (lines.at(-1) === '') lines.pop();
-  return lines.map((line) => (line ? `    ${line}` : '')).join('\n');
+
+  const declared: { name: string; type: string }[] = [];
+  if (fields.arrows) {
+    declared.push({ name: fields.arrows, type: 'Phaser.Types.Input.Keyboard.CursorKeys' });
+  }
+  if (fields.wasd) {
+    declared.push({ name: fields.wasd, type: 'Phaser.Types.Input.Keyboard.CursorKeys' });
+  }
+  for (const { field } of driven) {
+    declared.push({ name: field, type: 'Phaser.GameObjects.GameObject' });
+  }
+
+  return {
+    body: lines.map((line) => (line ? `    ${line}` : '')).join('\n'),
+    update: buildUpdateBody(driven, fields, ctx),
+    fields: declared,
+  };
 }
 
 /**
@@ -1466,6 +1754,14 @@ function buildCreateBody(
  * game canvas. So a scene that scrolls, zooms or follows needs no config key
  * and no note — and the viewport it works against is the game's own size, which
  * is why the camera's rectangle is never stored beside the scene's.
+ *
+ * And the same again for the keyboard the emitted `update()` reads.
+ * `this.input.keyboard` is built by the Input Plugin for every game with a
+ * keyboard to read, so a driven object needs no config key either. It is
+ * nullable rather than absent — a game can be configured without keyboard
+ * input, and a browser can be one that has none — which is why the emitted
+ * block narrows it with an `if` instead of assuming it, and that guard is the
+ * whole of what a module dropped into a keyboard-less game needs.
  */
 const arcadeConfig = (needed: boolean) =>
   needed ? "        physics: { default: 'arcade' },\n" : '';
@@ -1567,14 +1863,35 @@ function buildSceneClass(
     ? `  preload()${returnType} {\n${preloadBody}\n  }\n\n`
     : '';
 
+  const created = buildCreateBody(project, entry.scene, ctx, usage.animations);
+  // Gated on the emitted body, exactly as `preload()` is above and for its
+  // reason: a project with nothing the player drives gets no `update()` at all,
+  // which is the rule the asset table, the tilemap helper and the prefab
+  // factories all follow — and it is what keeps every project that predates
+  // this feature exporting byte for byte what it exported before.
+  const update = created.update
+    ? `\n\n  update()${returnType} {\n${created.update}\n  }`
+    : '';
+  // Only the `.ts` declares them, which is the existing `.ts`/`.js` difference
+  // — the `: void`s and the factory parameter types — rather than a new kind of
+  // one. Typed `| undefined` rather than with a `!`, because that is what
+  // satisfies `strictPropertyInitialization` without any syntax the shared
+  // plain-JavaScript body could not also carry.
+  const declarations =
+    language === 'ts' && created.fields.length > 0
+      ? `${created.fields
+          .map((field) => `  private ${field.name}: ${field.type} | undefined;`)
+          .join('\n')}\n\n`
+      : '';
+
   return `${exported ? 'export ' : ''}class ${entry.className} extends Phaser.Scene {
-  constructor() {
+${declarations}  constructor() {
     super(${str(entry.key)});
   }
 
 ${preload}  create()${returnType} {
-${buildCreateBody(project, entry.scene, ctx, usage.animations)}
-  }
+${created.body}
+  }${update}
 }`;
 }
 

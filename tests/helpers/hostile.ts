@@ -126,6 +126,15 @@ export function hostileProject(): Project {
             // so a definition's children are container children by exactly the
             // same mechanism, and the emit has to leave this one out too.
             physics: { kind: 'dynamic' as const, ...NO_MOTION },
+            // And controls, for that same reason: a definition's children are
+            // container children, so this is the second illegal place and the
+            // emit has to leave it out too.
+            controls: {
+              mode: 'platformer' as const,
+              scheme: 'arrows' as const,
+              speed: 10,
+              jump: 10,
+            },
             name: breakout,
             type: 'rectangle',
             visible: true,
@@ -213,6 +222,33 @@ export function hostileProject(): Project {
           // it, so the export must show no trace of it at all.
           { id: 'snd-4', audioId: 'gone', loop: false, volume: 1, autoplay: false },
         ],
+        // Three rows the export must emit and four it must not, and each of the
+        // four is a thing only a hand-edited file or a since-deleted node can
+        // hold. `collidersOf` drops them all on read, which is what means
+        // nothing downstream needs a guard.
+        colliders: [
+          // A body against a tilemap layer, which is the pair the whole feature
+          // exists for — and the only place `add.collider` meets
+          // `Phaser.Tilemaps.TilemapLayer` under `tsc --strict`.
+          { id: 'col-1', aId: 'a', bId: 'l', kind: 'collide' as const },
+          // And the other function, against a static body.
+          { id: 'col-2', aId: 'a', bId: 'g', kind: 'overlap' as const },
+          // Kept by the reader and *not* emitted: `m` is a tilemap with no
+          // tileset, so it reaches `create()` as a comment rather than a
+          // binding. This is the only test of the missing-binding branch, which
+          // is `missingReason`'s treatment and the camera follow's.
+          { id: 'col-3', aId: 'a', bId: 'm', kind: 'collide' as const },
+          // Dangling.
+          { id: 'col-4', aId: 'a', bId: 'gone', kind: 'collide' as const },
+          // The same node on both sides.
+          { id: 'col-5', aId: 'a', bId: 'a', kind: 'collide' as const },
+          // A node inside a group, which has no body to find and so is not a
+          // direct child the reader will accept — the top-level rule arriving
+          // through the collider table.
+          { id: 'col-6', aId: 'a', bId: 'e1', kind: 'collide' as const },
+          // Two layers, which cannot collide with each other: neither moves.
+          { id: 'col-7', aId: 'l', bId: 'm', kind: 'collide' as const },
+        ],
         children: [
           {
             id: 'a',
@@ -242,6 +278,18 @@ export function hostileProject(): Project {
               immovable: false,
               allowGravity: false,
               collideWorldBounds: true,
+            },
+            // Driven, with a non-default value in every field, for the body's
+            // reason: the emitted `update()` is the only place `CursorKeys`,
+            // `blocked.down` and `setVelocityX` ever meet the real Phaser types
+            // under `tsc --strict`. Its name is the hostile one, so the
+            // `this.<field>` it is parked on has been through `toIdentifier`
+            // as well.
+            controls: {
+              mode: 'platformer' as const,
+              scheme: 'arrows' as const,
+              speed: 260,
+              jump: 520,
             },
             children: [],
           },
@@ -303,6 +351,16 @@ export function hostileProject(): Project {
                 // rather than emitting one positioned in the group's
                 // coordinates.
                 physics: { kind: 'dynamic' as const, ...NO_MOTION },
+                // And controls on that same nested node, which the store
+                // likewise cannot reach to write. `controlsOf` strips them, so
+                // the emitted `update()` must show no trace — the body's
+                // argument one field over.
+                controls: {
+                  mode: 'topDown' as const,
+                  scheme: 'wasd' as const,
+                  speed: 90,
+                  jump: 0,
+                },
                 children: [],
               },
             ],
@@ -399,6 +457,11 @@ export function hostileProject(): Project {
               columns: 3,
               rows: 2,
               data: [0, -1, 2, 3, 0, -1],
+              // Solid tiles, which reach the emitted `setCollision`. One index
+              // repeated and one the tileset does not have, both of which only
+              // a hand-edited file can hold: `tileMapOf` normalises them away,
+              // so the export must show `[0, 2]` and nothing else.
+              collides: [2, 0, 2, 99],
               alpha: 0.9,
             },
             children: [],

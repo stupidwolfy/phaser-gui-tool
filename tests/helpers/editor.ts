@@ -485,6 +485,62 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * Switches the selected object's player controls on or off. Only ever
+   * offered for a top-level node with a *dynamic* body, so the field is absent
+   * rather than disabled everywhere else — which is what `controlsOffered`
+   * below is for.
+   */
+  async setControls(on: boolean): Promise<void> {
+    await this.openPanel('inspect');
+    const box = this.checkbox('Player controls');
+    if (on) await box.check();
+    else await box.uncheck();
+    await this.settle();
+  }
+
+  /** Whether the selected object is offered controls at all. */
+  async controlsOffered(): Promise<boolean> {
+    await this.openPanel('inspect');
+    return (await this.checkbox('Player controls').count()) > 0;
+  }
+
+  /**
+   * Marks one of the tileset's frames solid, or lets it go back to scenery.
+   *
+   * The Collision grid, never the Brush one: both are in the tilemap's own
+   * inspector section and both draw the same tileset, which is why the solid
+   * cells are named "Solid tile N" and the brush cells "Tile N".
+   */
+  async setTileSolid(index: number, solid: boolean): Promise<void> {
+    await this.openPanel('inspect');
+    const cell = this.panel('inspect').getByRole('button', { name: `Solid tile ${index}` });
+    if ((await cell.getAttribute('aria-pressed')) !== String(solid)) await cell.click();
+    await this.settle();
+  }
+
+  /**
+   * Adds a collision row and points it at two objects by name.
+   *
+   * In `SceneInspector` beside the gravity, so this deselects first — exactly
+   * as `setGravity` and `setCamera` do, and for their reason: that panel only
+   * renders with an empty selection.
+   */
+  async addCollider(
+    a: string,
+    b: string,
+    kind: 'Solid' | 'Overlap' = 'Solid',
+    row = 1,
+  ): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByRole('button', { name: '+ Collision' }).click();
+    await this.settle();
+    await this.setChoice(`Collides ${row}`, a);
+    await this.setChoice(`With ${row}`, b);
+    await this.setChoice(`How ${row}`, kind);
+  }
+
   /** A physics checkbox other than the on/off one, by its label. */
   async setPhysicsFlag(label: string, on: boolean): Promise<void> {
     await this.openPanel('inspect');

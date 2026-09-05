@@ -686,6 +686,13 @@ select {
   min-width: 0;
 }
 
+/* A row holding a field *and* a button: a field is a label stacked over an
+   input, so stretching both to the row's height leaves the button standing a
+   label taller than the control beside it. Used by the collision rows. */
+.field-row--foot {
+  align-items: flex-end;
+}
+
 .field__color {
   display: flex;
   gap: 8px;
@@ -978,6 +985,13 @@ select {
 
 .tiles__cell.is-selected {
   border-color: var(--accent);
+}
+
+/* The body outline's own green, so "this stops things" is one colour across the
+   editor — the canvas shades a solid cell in it, and so does the palette. Not
+   the accent, which already means "this is what the brush lays" two rows up. */
+.tiles__cell.is-solid {
+  border-color: #00ff00;
 }
 
 /* The inspector's Edit tiles button, on while the mode is. */

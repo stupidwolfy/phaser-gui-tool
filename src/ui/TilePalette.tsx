@@ -42,25 +42,34 @@ function TileButton({
   index,
   selected,
   onPick,
+  // Two marks rather than one, because the two grids below say different things
+  // about the same cell: which tile the next press lays, and which tiles stop
+  // something. A cell can be both at once, and one highlight for both would
+  // have the brush look like an answer to the collision question.
+  mark = 'brush',
+  label = `Tile ${index}`,
 }: {
   asset: ImageAsset;
   index: number;
   selected: boolean;
   onPick: () => void;
+  mark?: 'brush' | 'solid';
+  label?: string;
 }) {
   const sheet = frameGridOf(asset);
   if (!sheet) return null;
 
   const scale = PREVIEW / Math.max(sheet.frameWidth, sheet.frameHeight);
   const offset = frameOffset(asset, index);
+  const marked = selected ? (mark === 'solid' ? 'is-solid' : 'is-selected') : '';
 
   return (
     <button
-      className={`tiles__cell ${selected ? 'is-selected' : ''}`}
+      className={`tiles__cell ${marked}`}
       onClick={onPick}
       aria-pressed={selected}
-      aria-label={`Tile ${index}`}
-      title={`Tile ${index}`}
+      aria-label={label}
+      title={label}
       style={{
         width: `${sheet.frameWidth * scale}px`,
         height: `${sheet.frameHeight * scale}px`,
@@ -125,6 +134,57 @@ export function TilePalette({ assetId }: { assetId: string | null }) {
             setBrushTile(index);
             setErasing(false);
           }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The same tileset again, answering which frames are walls.
+ *
+ * A second grid rather than a mode on the first, because the two questions are
+ * asked at different moments and both answers have to be visible at once: the
+ * brush changes every few strokes, and solidity is set once per level and then
+ * read. Folding them into one grid would mean a modifier press on a phone,
+ * which there is no gesture for.
+ *
+ * It is in the inspector and not in the paint bar for that same split — the bar
+ * is what has to work mid-gesture, and this is not reached mid-gesture. What
+ * paint mode does show is the *result*: every solid cell on the map shaded
+ * green, which is the thing you actually want while you are laying walls.
+ */
+export function SolidPalette({
+  nodeId,
+  assetId,
+  collides,
+}: {
+  nodeId: string;
+  assetId: string | null;
+  collides: number[];
+}) {
+  const asset = useEditorStore((s) => findAsset(s.project, assetId));
+  const setTileSolid = useEditorStore((s) => s.setTileSolid);
+
+  // Silent rather than hinted: the Brush palette directly above has already
+  // said "choose an image" or "slice it into tiles", and saying it twice in one
+  // panel is a panel that reads as broken.
+  if (!asset || !frameGridOf(asset)) return null;
+
+  const solid = new Set(collides);
+  return (
+    <div className="tiles" role="group" aria-label="Solid tiles">
+      {Array.from({ length: frameCountOf(asset) }, (_, index) => (
+        <TileButton
+          key={index}
+          asset={asset}
+          index={index}
+          mark="solid"
+          selected={solid.has(index)}
+          // Never the bare "Tile 0" the brush grid uses: the two grids are in
+          // one panel, and the suite locates a control by its exact name.
+          label={`Solid tile ${index}`}
+          onPick={() => setTileSolid(nodeId, index, !solid.has(index))}
         />
       ))}
     </div>

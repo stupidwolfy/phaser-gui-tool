@@ -11,6 +11,7 @@ import {
   cameraViewOf,
   clampFrame,
   containsNode,
+  controlsOf,
   findAnimation,
   findAsset,
   findNode,
@@ -514,6 +515,13 @@ export class EditorScene extends Phaser.Scene {
   /** The cell grid drawn over the map being painted, and what it last drew. */
   private paintGraphics!: Phaser.GameObjects.Graphics;
   private paintSignature = '';
+  /**
+   * The tile data and solid list the paint overlay was last drawn from, held by
+   * reference so the signature above can stay a short string. See
+   * `drawPaintGrid`.
+   */
+  private paintData: number[] | null = null;
+  private paintCollides: number[] | null = null;
 
   private tilemaps = new Map<string, Phaser.Tilemaps.Tilemap>();
   /**
@@ -2487,6 +2495,25 @@ export class EditorScene extends Phaser.Scene {
         this.bodyGraphics.lineBetween(x, y, x + w, y + h);
         this.bodyGraphics.lineBetween(x + w, y, x, y + h);
       }
+      // A driven object gets a pair of arrows pointing the way its keys push
+      // it: one colour and more marks, exactly as a static body is told apart
+      // by a cross rather than by a second palette entry. It says the one
+      // thing about controls that is visible on a canvas nobody is simulating
+      // — which of these the player is holding.
+      //
+      // Filled, not stroked, which is the emitter marker's rule arriving a
+      // second time: a thin line never reaches full strength on screen, so an
+      // outlined arrow is both hard to see under a thumb and — because a
+      // diagonal is antialiased along its whole length — nearly invisible to a
+      // colour assertion. A filled triangle is solid in its middle.
+      if (controlsOf(node, true)) {
+        const arm = Math.min(w, h) / 5;
+        const cx = node.transform.x;
+        const cy = node.transform.y;
+        this.bodyGraphics.fillStyle(BODY_COLOR, 1);
+        this.bodyGraphics.fillTriangle(cx - arm * 2, cy, cx - arm, cy - arm, cx - arm, cy + arm);
+        this.bodyGraphics.fillTriangle(cx + arm * 2, cy, cx + arm, cy - arm, cx + arm, cy + arm);
+      }
     }
   }
 
@@ -2728,6 +2755,27 @@ export class EditorScene extends Phaser.Scene {
    * the frame budget the gesture needs. Depth 998 puts it above the objects, so
    * the cells are visible over what is painted, and below the snap overlays and
    * the handles at 999 and up.
+   *
+   * The solid cells are marked here rather than in `drawBodies`, and that is
+   * the load-bearing half of the choice. `drawBodies` runs every frame and
+   * walks the scene's children; a map is up to `MAX_TILEMAP_SIDE` squared
+   * cells, so a per-cell pass there is sixty-five thousand fills a frame for a
+   * mark nobody is looking at while they place a sprite. Here the whole draw is
+   * behind a signature, so it costs that once per change — and paint mode is
+   * where a person is deciding which tiles are walls. Outside it, the palette's
+   * own green-bordered cells are what say which frames are solid.
+   *
+   * The mark is an outline in `BODY_COLOR` over a wash of it, not the wash
+   * alone: a translucent fill is a blend of the tile's colour and this one and
+   * lands on neither, so a solid tile would be visible to a person and
+   * invisible to the colour assertion that proves it is drawn. The outline is
+   * `BODY_WIDTH` for the reason it is that colour — a solid tile is the map's
+   * body, and the two say so the same way.
+   *
+   * `data` and `collides` join the signature by *identity* rather than by
+   * value: `tileMapOf` hands back the document's own arrays when they are well
+   * formed, so a reference comparison is exact, and joining sixty-five thousand
+   * numbers into a string every frame is the cost this gating exists to avoid.
    */
   private drawPaintGrid(): void {
     const target = this.paintTarget();
@@ -2760,8 +2808,16 @@ export class EditorScene extends Phaser.Scene {
       world.scaleY,
       hover ? `${hover.column},${hover.row}` : '',
     ].join(':');
-    if (signature === this.paintSignature) return;
+    if (
+      signature === this.paintSignature &&
+      map.data === this.paintData &&
+      map.collides === this.paintCollides
+    ) {
+      return;
+    }
     this.paintSignature = signature;
+    this.paintData = map.data;
+    this.paintCollides = map.collides;
 
     const width = map.columns * map.tileWidth;
     const height = map.rows * map.tileHeight;
@@ -2769,6 +2825,25 @@ export class EditorScene extends Phaser.Scene {
     this.paintGraphics.setPosition(world.translateX, world.translateY);
     this.paintGraphics.setRotation(world.rotation);
     this.paintGraphics.setScale(world.scaleX, world.scaleY);
+
+    // Which cells will stop something. Under the grid lines rather than over
+    // them, so the map still reads as a grid while the walls are being laid.
+    const solidCells: number[] = [];
+    if (map.collides.length > 0) {
+      const solid = new Set(map.collides);
+      for (let index = 0; index < map.data.length; index += 1) {
+        if (solid.has(map.data[index])) solidCells.push(index);
+      }
+      this.paintGraphics.fillStyle(BODY_COLOR, 0.18);
+      for (const index of solidCells) {
+        this.paintGraphics.fillRect(
+          (index % map.columns) * map.tileWidth,
+          Math.floor(index / map.columns) * map.tileHeight,
+          map.tileWidth,
+          map.tileHeight,
+        );
+      }
+    }
 
     // Divided by the scale it is about to be drawn through as well as by the
     // zoom, so the cell lines stay one screen pixel whatever the map is doing.
@@ -2784,6 +2859,28 @@ export class EditorScene extends Phaser.Scene {
     for (let row = 0; row <= map.rows; row += 1) {
       const y = row * map.tileHeight;
       this.paintGraphics.lineBetween(0, y, width, y);
+    }
+
+    // And their outlines over the grid, in the body outline's own colour and at
+    // its own width: a solid tile is the map's body, so saying it in a second
+    // colour would be a second thing for a reader to learn about one idea. The
+    // wash alone would not do — a translucent fill is a blend of two colours
+    // and never lands on this one, which is the difference between a mark a
+    // person can see and one a colour assertion can measure.
+    if (solidCells.length > 0) {
+      this.paintGraphics.lineStyle(
+        BODY_WIDTH / (zoom * Math.abs(world.scaleX || 1)),
+        BODY_COLOR,
+        1,
+      );
+      for (const index of solidCells) {
+        this.paintGraphics.strokeRect(
+          (index % map.columns) * map.tileWidth,
+          Math.floor(index / map.columns) * map.tileHeight,
+          map.tileWidth,
+          map.tileHeight,
+        );
+      }
     }
 
     if (hover && hover.column >= 0 && hover.row >= 0 && hover.column < map.columns && hover.row < map.rows) {
