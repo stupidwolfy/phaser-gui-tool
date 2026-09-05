@@ -12,6 +12,9 @@ on a desktop.
 
 - Place rectangles, ellipses, text, images, stretchable panels and tiled backgrounds in a
   scene
+- Style that text properly: bold and italic, a wrap width and an alignment, line and
+  letter spacing, a stroke and a drop shadow — with room for the last two worked out for
+  you so neither is clipped
 - Select and drag objects on the canvas; pan and pinch-zoom the camera
 - Select several objects at once — turn on **Multi** in the scene tree and tap them, or
   Shift/Ctrl-click on a desktop — then move, group, duplicate, hide or delete all of them
@@ -215,10 +218,12 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; twenty-one iterations in, it is a
+The goal is to eventually cover the whole Phaser surface; twenty-two iterations in, it is a
 working editor but a small one.
 
-**Not built yet** — texture atlases. Panels and tiled images are in, with three limits: a
+**Not built yet** — text has typography but not fonts: `Font family` names a font the page
+already has, so there is no web-font loading, no bitmap fonts, no gradient fill, no
+background colour behind the text and no per-word styling. Texture atlases. Panels and tiled images are in, with three limits: a
 panel's scalable regions stretch rather than repeating, a tiled image has an offset but no
 scroll speed (a background that drifts is one line in your own `update()`), and neither can
 play an animation, which is Phaser's limit rather than this editor's. Cameras are in, with
@@ -284,6 +289,7 @@ tests/
   guides.spec.ts      placing a guide, dragging it, and a drag agreeing with it
   animation.spec.ts   slicing a sheet, drawing one frame of it, and playing a clip
   nineslice.spec.ts   a panel whose corners hold, and a texture that repeats
+  typography.spec.ts  a stroke, a wrap, an alignment, and a style that round-trips
   assets.spec.ts      image import, drawing, save/reopen, removal
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite

@@ -207,6 +207,23 @@ export function createNode(
           color: '#ffffff',
           fontFamily: 'system-ui, sans-serif',
           alpha: 1,
+          // Every typography field at Phaser's own default, so a text object
+          // added today draws and exports exactly what one added before
+          // iteration 22 did — the rule the asset table, the tilemap helper,
+          // the prefab factories, the emitted `update()` and the touch buttons
+          // all follow.
+          bold: false,
+          italic: false,
+          align: 'left',
+          wordWrapWidth: 0,
+          lineSpacing: 0,
+          letterSpacing: 0,
+          strokeColor: '#000000',
+          strokeThickness: 0,
+          shadowColor: '#000000',
+          shadowOffsetX: 0,
+          shadowOffsetY: 0,
+          shadowBlur: 0,
         },
       };
   }

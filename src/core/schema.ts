@@ -519,12 +519,185 @@ export interface ContainerProps {
   alpha: number;
 }
 
+/** The alignments Phaser's `align` takes that mean something for a paragraph. */
+export type TextAlign = 'left' | 'center' | 'right';
+
+/**
+ * A text object's content and its typography.
+ *
+ * The five fields above `bold` are the ones this type shipped with in iteration
+ * 1; everything below is iteration 22. Three shape decisions are worth stating,
+ * because each looks arbitrary and none is.
+ *
+ * - **`bold` and `italic` are two booleans, not one `fontStyle` string.**
+ *   Phaser's key is a string, but its value is nothing more than those two
+ *   independent facts joined by a space. A free string field would accept
+ *   `oblique 350`, `x-small` and every other CSS token, which the editor cannot
+ *   draw predictably and the exporter would pass straight through into a game.
+ *   Two questions get two answers — `NodeControls.touch`'s argument, which was
+ *   the same refusal of a third `scheme` value.
+ * - **`wordWrapWidth: 0` means "do not wrap"**, a first-class sentinel rather
+ *   than `number | null`, because a wrap width of zero has no other meaning —
+ *   `EMPTY_TILE`'s call. It also keeps the control a single `NumberField`.
+ * - **There is no `padding` field, and that is not an omission.** The padding a
+ *   stroke and a shadow need in order not to be clipped by Phaser's text canvas
+ *   is a *function* of the stroke and the shadow, not a decision anyone makes,
+ *   so `textStyleOf` derives it. A stored one would be two fields free to
+ *   disagree about one number: the argument that gives a sprite no width of its
+ *   own and a tilemap no tile size of its own.
+ */
 export interface TextProps {
   text: string;
   fontSize: number;
   color: string;
   fontFamily: string;
   alpha: number;
+  bold: boolean;
+  italic: boolean;
+  /** Only bites on text with more than one line — a wrap, or a newline in the content. */
+  align: TextAlign;
+  /** The width to wrap at, in the object's own unscaled pixels. 0 is off. */
+  wordWrapWidth: number;
+  /** Added to the font's own line height, so 0 is single-spaced rather than none. */
+  lineSpacing: number;
+  /** Added between characters. Phaser 4's own field; negative tightens. */
+  letterSpacing: number;
+  /** Drawn only while `strokeThickness` is above zero, which is Phaser's rule too. */
+  strokeColor: string;
+  strokeThickness: number;
+  shadowColor: string;
+  shadowOffsetX: number;
+  shadowOffsetY: number;
+  shadowBlur: number;
+}
+
+/**
+ * The subset of `Phaser.Types.GameObjects.Text.TextStyle` this editor writes.
+ *
+ * Structural rather than an import of Phaser's own type, because
+ * `src/core` is the document layer and knows nothing about the renderer — the
+ * exporter prints this and the scene hands it to a real `Text`, and
+ * `export-toolchain.spec.ts` compiling the emitted `.ts` under `tsc --strict`
+ * is what proves the two still line up.
+ */
+export interface TextStyle {
+  fontFamily: string;
+  fontSize: string;
+  color: string;
+  fontStyle: string;
+  align: TextAlign;
+  wordWrap: { width: number | null };
+  lineSpacing: number;
+  letterSpacing: number;
+  stroke: string;
+  strokeThickness: number;
+  shadow: {
+    offsetX: number;
+    offsetY: number;
+    color: string;
+    blur: number;
+    stroke: boolean;
+    fill: boolean;
+  };
+  padding: { x: number; y: number };
+}
+
+/** '#rrggbb', or the fallback when a hand-edited file holds something else. */
+function textColor(value: unknown, fallback: string): string {
+  const clean = String(value ?? '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(clean) ? clean.toLowerCase() : fallback;
+}
+
+/**
+ * A finite number at or above `min`, for a field a hand-edited file can hold
+ * anything in.
+ *
+ * `typeof` rather than `Number(value)`, which answers 0 for null, for `''` and
+ * for an empty array — so a missing font size would coerce to 0, clamp to the
+ * minimum and draw a 1px paragraph rather than falling back to a readable one.
+ */
+function textNumber(value: unknown, fallback: number, min = -Infinity): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(min, value)
+    : fallback;
+}
+
+/**
+ * Everything one text node draws with, in the form Phaser takes it.
+ *
+ * The only reader of `TextProps`' typography fields, in the `frameGridOf` /
+ * `sliceInsetsOf` / `tileMapOf` / `guidesOf` / `physicsOf` / `soundsOf` /
+ * `cameraOf` family, and here for the sharpest version of their reason: the
+ * renderer and the exporter *both* read it. Before this existed each built its
+ * own style object out of the same three keys, written twice, which is how the
+ * canvas and the generated game come to disagree about how the text looks —
+ * the one kind of failure a user cannot see until the game is in their hand.
+ *
+ * It answers three questions at once:
+ *
+ * - *What does Phaser take?* `fontSize` is a CSS string, `fontStyle` is the two
+ *   booleans joined, `wordWrap.width` is null rather than 0 when off.
+ * - *Are these numbers ones Phaser can be handed?* A hand-edited file can hold
+ *   a negative stroke, a NaN blur or an `align` of `"justify "`. Repaired here,
+ *   never at a call site.
+ * - *How much padding do the stroke and the shadow need?* Phaser sizes a text
+ *   object's canvas from the glyphs alone, so a stroke and a shadow are drawn
+ *   outside it and clipped. Derived rather than stored — see `TextProps`.
+ *
+ * **The whole object, every key, defaults included**, and that is load-bearing
+ * rather than tidiness: `TextStyle.setStyle` reads each key with
+ * `GetValue(style, key, this[key])` and its `setDefaults` argument is false, so
+ * an *omitted* key keeps whatever it already had. A style built from only the
+ * non-default keys could switch a stroke on and never switch one off. Deciding
+ * what to *print* is a separate question, and it is the exporter's.
+ *
+ * A fresh object per call, so `useEditorStore((s) => textStyleOf(...))` is an
+ * infinite render loop — React error #185, the `tileMapOf` trap for the sixth
+ * time. Select the node and derive outside the selector.
+ */
+export function textStyleOf(props: TextProps): TextStyle {
+  const strokeThickness = textNumber(props.strokeThickness, 0, 0);
+  const shadowOffsetX = textNumber(props.shadowOffsetX, 0);
+  const shadowOffsetY = textNumber(props.shadowOffsetY, 0);
+  const shadowBlur = textNumber(props.shadowBlur, 0, 0);
+  const wrap = textNumber(props.wordWrapWidth, 0, 0);
+
+  // Phaser draws the stroke centred on the glyph edge, so half of it falls
+  // outside; the shadow falls outside by its offset and spreads by its blur.
+  // Whichever reaches further is what the canvas has to grow by.
+  const pad = (offset: number) =>
+    Math.ceil(Math.max(strokeThickness / 2, Math.abs(offset) + shadowBlur));
+
+  return {
+    // A blank family joins into a font string of ` 32px `, which Canvas cannot
+    // parse and which leaves the text drawn in whatever the last object set.
+    fontFamily: String(props.fontFamily ?? '').trim() || 'sans-serif',
+    fontSize: `${textNumber(props.fontSize, 32, 1)}px`,
+    color: textColor(props.color, '#ffffff'),
+    fontStyle: [props.bold ? 'bold' : '', props.italic ? 'italic' : ''].filter(Boolean).join(' '),
+    align: props.align === 'center' || props.align === 'right' ? props.align : 'left',
+    // Null rather than 0: Phaser's own "not wrapping" value, and `0` would be a
+    // wrap width every word is wider than.
+    wordWrap: { width: wrap > 0 ? wrap : null },
+    lineSpacing: textNumber(props.lineSpacing, 0),
+    letterSpacing: textNumber(props.letterSpacing, 0),
+    stroke: textColor(props.strokeColor, '#000000'),
+    strokeThickness,
+    shadow: {
+      offsetX: shadowOffsetX,
+      offsetY: shadowOffsetY,
+      color: textColor(props.shadowColor, '#000000'),
+      blur: shadowBlur,
+      // Both explicitly true, and this is the trap that makes a shadow set
+      // through a style object invisible. `Text.setShadow()` defaults `fill` to
+      // true, but `TextStyle`'s property map defaults *both* `shadow.fill` and
+      // `shadow.stroke` to false — so a shadow given an offset, a colour and a
+      // blur and nothing else is computed, is stored, and is never painted.
+      stroke: true,
+      fill: true,
+    },
+    padding: { x: pad(shadowOffsetX), y: pad(shadowOffsetY) },
+  };
 }
 
 /**

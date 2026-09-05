@@ -15,6 +15,7 @@ import {
   scenePhysicsOf,
   sliceInsetsOf,
   soundsOf,
+  textStyleOf,
   tileMapOf,
   touchZonesOf,
   type AnimationClip,
@@ -26,6 +27,7 @@ import {
   type Prefab,
   type Project,
   type SceneDoc,
+  type TextStyle,
   type TileMap,
   type TouchButton,
 } from '../core/schema';
@@ -1112,12 +1114,76 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
     case 'text':
       return (
         `${receiver}.add.text(${num(x)}, ${num(y)}, ${str(node.props.text)}, {\n` +
-        `      fontFamily: ${str(node.props.fontFamily)},\n` +
-        `      fontSize: ${str(`${node.props.fontSize}px`)},\n` +
-        `      color: ${str(node.props.color)},\n` +
+        textStyleLines(textStyleOf(node.props))
+          .map((line) => `      ${line}\n`)
+          .join('') +
         `    })`
       );
   }
+}
+
+/**
+ * The style object's entries, one per line, without the braces.
+ *
+ * The three keys a text object has always had are emitted unconditionally; each
+ * typography key is emitted only where it differs from Phaser's own default.
+ * That is `modifiersFor`'s rule expressed inside a config literal rather than
+ * along a chain, and it is the opposite call from the emitter config and the
+ * physics body, which are emitted whole. The reason is that those two are
+ * dials that interact — drag only bites while acceleration is zero, a lifespan
+ * only means anything beside a frequency — whereas a stroke tells a reader
+ * nothing about an alignment. A line restating a default is a line to check.
+ *
+ * It also buys the property every feature here has had to keep: a text node
+ * made before iteration 22 derives a style whose every new key is at its
+ * default, so it prints the same three keys it has always printed, in the same
+ * order, and its export does not move by a byte.
+ *
+ * `textStyleOf` has already repaired the values, so nothing here validates.
+ */
+function textStyleLines(style: TextStyle): string[] {
+  const lines = [
+    `fontFamily: ${str(style.fontFamily)},`,
+    `fontSize: ${str(style.fontSize)},`,
+    `color: ${str(style.color)},`,
+  ];
+
+  if (style.fontStyle !== '') lines.push(`fontStyle: ${str(style.fontStyle)},`);
+  if (style.align !== 'left') lines.push(`align: ${str(style.align)},`);
+  if (style.wordWrap.width !== null) {
+    lines.push(`wordWrap: { width: ${num(style.wordWrap.width)} },`);
+  }
+  if (style.lineSpacing !== 0) lines.push(`lineSpacing: ${num(style.lineSpacing)},`);
+  if (style.letterSpacing !== 0) lines.push(`letterSpacing: ${num(style.letterSpacing)},`);
+
+  // The pair or neither: a stroke colour with no thickness draws nothing, and a
+  // thickness with no colour is black by accident rather than by choice.
+  if (style.strokeThickness > 0) {
+    lines.push(`stroke: ${str(style.stroke)},`);
+    lines.push(`strokeThickness: ${num(style.strokeThickness)},`);
+  }
+
+  const { shadow } = style;
+  if (shadow.offsetX !== 0 || shadow.offsetY !== 0 || shadow.blur !== 0) {
+    // Whole, unlike everything above it, because these six only mean anything
+    // beside each other — an offset with no colour is invisible, a blur with no
+    // offset is a halo — and because `stroke` and `fill` are not decoration:
+    // `TextStyle`'s property map defaults both to false, so a shadow emitted
+    // without them is computed by Phaser and never painted.
+    lines.push(
+      `shadow: { offsetX: ${num(shadow.offsetX)}, offsetY: ${num(shadow.offsetY)}, ` +
+        `color: ${str(shadow.color)}, blur: ${num(shadow.blur)}, ` +
+        `stroke: ${shadow.stroke}, fill: ${shadow.fill} },`,
+    );
+  }
+
+  // Derived from the stroke and the shadow, so it is non-zero exactly when
+  // there is something drawn outside the glyphs for Phaser's canvas to clip.
+  if (style.padding.x !== 0 || style.padding.y !== 0) {
+    lines.push(`padding: { x: ${num(style.padding.x)}, y: ${num(style.padding.y)} },`);
+  }
+
+  return lines;
 }
 
 /**
@@ -1144,6 +1210,12 @@ function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimatio
   const { rotation, scaleX, scaleY } = node.transform;
 
   // Text is created with a top-left origin; the editor centres every object.
+  // And this stays the *only* text branch here, typography included: every
+  // typography field is a key of the style object `constructorFor` already
+  // passes, so the whole of iteration 22 lands in that literal and nothing
+  // chains. Said out loud because on this function's checklist "no branch
+  // needed" and "forgot a branch" read exactly the same, as they do for the
+  // particles and physics notes below.
   if (node.type === 'text') out.push('.setOrigin(0.5)');
   if (rotation !== 0) out.push(`.setAngle(${num(rotation)})`);
   if (scaleX !== 1 || scaleY !== 1) out.push(`.setScale(${num(scaleX)}, ${num(scaleY)})`);
