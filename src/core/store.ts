@@ -6,6 +6,7 @@ import {
   createInstanceNode,
   createNode,
   createScene,
+  createTilemapLayer,
   defaultPhysicsBody,
   defaultSceneSound,
   newProject,
@@ -54,7 +55,10 @@ import {
   type ImageAsset,
   EMPTY_TILE,
   MAX_TILEMAP_SIDE,
+  tileLayerOf,
   tileMapOf,
+  type TileLayer,
+  type TilemapLayerDoc,
   type NodeControls,
   type NodeType,
   type PhysicsBody,
@@ -248,11 +252,22 @@ export interface EditorState {
    * undo and the scene switcher each have to remember.
    */
   paintingId: string | null;
+  /**
+   * The layer the brush lays on, the palettes read and the paint grid marks.
+   *
+   * Editor state beside `paintingId` and pruned with it, so "you can only paint
+   * a layer that exists on the map in hand" is an invariant rather than
+   * something delete, undo, the scene switcher and `removeTilemapLayer` each
+   * have to remember. Null resolves to the frontmost layer through
+   * `tileLayerOf`, which is the one a user has just added.
+   */
+  activeLayerId: string | null;
   /** The tile the brush lays. An index into the tileset, like a sprite frame. */
   brushTile: number;
   /** Whether the brush clears instead, which is laying `EMPTY_TILE`. */
   erasing: boolean;
   setPainting: (nodeId: string | null) => void;
+  setActiveLayer: (layerId: string | null) => void;
   setBrushTile: (brushTile: number) => void;
   setErasing: (erasing: boolean) => void;
   /**
@@ -581,9 +596,9 @@ export interface EditorState {
    * is written at all when every cell already holds that tile, so the identity
    * `editProject` reads for "no undo step" survives a finger held still.
    */
-  paintTiles: (nodeId: string, cells: TileCell[], tile: number) => void;
-  /** Every cell at once, in one step. */
-  fillTiles: (nodeId: string, tile: number) => void;
+  paintTiles: (nodeId: string, layerId: string | null, cells: TileCell[], tile: number) => void;
+  /** Every cell of one layer at once, in one step. */
+  fillTiles: (nodeId: string, layerId: string | null, tile: number) => void;
   /**
    * Re-shapes the grid, keeping the top-left anchored — a column added is a
    * column of empties on the right.
@@ -600,7 +615,26 @@ export interface EditorState {
    * wherever it was painted, and a per-cell flag would be a second array the
    * length of `data` for a distinction nobody draws.
    */
-  setTileSolid: (nodeId: string, tile: number, solid: boolean) => void;
+  setTileSolid: (nodeId: string, layerId: string | null, tile: number, solid: boolean) => void;
+
+  /**
+   * Adds a layer to a map, removes one, renames it, hides it or moves it in the
+   * draw order.
+   *
+   * Layers are the map's own array order, back to front, exactly as
+   * `scene.children` is — there is no depth field here either, so `moveTilemapLayer`
+   * splicing the array is the whole of forward and back.
+   *
+   * `removeTilemapLayer` refuses the last one, which is `removeScene`'s rule for
+   * `removeScene`'s reason: a map with no layers has nothing to paint on, nothing
+   * to draw and no layer for `tileLayerOf` to answer with. "Delete the only
+   * layer" means "empty it", which the Clear button already does.
+   */
+  addTilemapLayer: (nodeId: string) => void;
+  removeTilemapLayer: (nodeId: string, layerId: string) => void;
+  renameTilemapLayer: (nodeId: string, layerId: string, name: string) => void;
+  setTilemapLayerVisible: (nodeId: string, layerId: string, visible: boolean) => void;
+  moveTilemapLayer: (nodeId: string, layerId: string, delta: number) => void;
 
   // -- guides ----------------------------------------------------------------
   /**
@@ -956,14 +990,61 @@ function editTilemapProps(
   return withActiveScene(project, (scene) => {
     const node = findNode(scene.children, nodeId);
     if (!node || node.type !== 'tilemap') return scene;
-    const props = patch(tileMapOf(project, node.props));
+    const map = tileMapOf(project, node.props);
+    const props = patch(map);
     if (!props) return scene;
     return {
       ...scene,
-      children: mapNode(
-        scene.children,
-        nodeId,
-        (current) => ({ ...current, props: { ...current.props, ...props } }) as GameObjectNode,
+      children: mapNode(scene.children, nodeId, (current) => {
+        const next = { ...current.props, ...props } as TilemapProps;
+        // The pre-v12 pair goes the moment anything is written, so the document
+        // holds one shape and only one — `setAssetSheet` and `setAssetAtlas`
+        // deleting each other's field, one type over. A patch that did not name
+        // `layers` still normalises, because `tileMapOf` has already migrated
+        // the old grid into `map.layers` and this is where that becomes the
+        // document's own answer rather than a reading of it.
+        if (!props.layers) next.layers = map.layers.map(toLayerDoc);
+        delete next.data;
+        delete next.collides;
+        return { ...current, props: next } as GameObjectNode;
+      }),
+    };
+  });
+}
+
+/** A resolved layer back in the shape the document stores. */
+function toLayerDoc(layer: TileLayer): TilemapLayerDoc {
+  return {
+    id: layer.id,
+    name: layer.name,
+    visible: layer.visible,
+    data: layer.data,
+    ...(layer.collides.length > 0 ? { collides: layer.collides } : {}),
+  };
+}
+
+/**
+ * Rewrites one layer of one tilemap.
+ *
+ * `editTilemapProps` merges a `Partial<TilemapProps>` at the top level, which
+ * cannot say "patch layer N" — so this is its sibling rather than a fifth
+ * argument to it, and it is what every per-layer action goes through. The patch
+ * sees the layer already resolved, so it never has to ask whether `data` is the
+ * length the grid claims.
+ */
+function editTilemapLayer(
+  project: Project,
+  nodeId: string,
+  layerId: string | null,
+  patch: (layer: TileLayer, map: TileMap) => Partial<TilemapLayerDoc> | null,
+): Project {
+  return editTilemapProps(project, nodeId, (map) => {
+    const target = tileLayerOf(map, layerId);
+    const changes = patch(target, map);
+    if (!changes) return null;
+    return {
+      layers: map.layers.map((layer) =>
+        layer.id === target.id ? { ...toLayerDoc(layer), ...changes } : toLayerDoc(layer),
       ),
     };
   });
@@ -981,6 +1062,29 @@ function prunePainting(children: GameObjectNode[], paintingId: string | null): s
   if (!paintingId) return null;
   const node = findNode(children, paintingId);
   return node && node.type === 'tilemap' ? paintingId : null;
+}
+
+/**
+ * The active layer, but only while it still names one of the selected map's.
+ *
+ * `prunePainting` one level down, and it has one more way to go stale than the
+ * mode does: `removeTilemapLayer` can take the layer out from under it without
+ * touching the node. Null is a legal answer — `tileLayerOf` reads it as the
+ * frontmost — so this never has to guess a replacement.
+ */
+function pruneActiveLayer(
+  children: GameObjectNode[],
+  nodeIds: readonly string[],
+  activeLayerId: string | null,
+): string | null {
+  if (!activeLayerId) return null;
+  for (const nodeId of nodeIds) {
+    const node = findNode(children, nodeId);
+    if (node?.type === 'tilemap' && node.props.layers?.some((l) => l.id === activeLayerId)) {
+      return activeLayerId;
+    }
+  }
+  return null;
 }
 
 /**
@@ -1258,12 +1362,19 @@ export const useEditorStore = create<EditorState>((set, get) => {
     const children = activeScene(project).children;
 
     const recordHistory = state.txDepth === 0;
+    const selectedIds = pruneIds(children, state.selectedIds, (id) => id);
+    const paintingId = prunePainting(children, state.paintingId);
     set({
       project,
       dirty: true,
-      selectedIds: pruneIds(children, state.selectedIds, (id) => id),
+      selectedIds,
       moveOrigins: pruneIds(children, state.moveOrigins, (origin) => origin.id),
-      paintingId: prunePainting(children, state.paintingId),
+      paintingId,
+      activeLayerId: pruneActiveLayer(
+        children,
+        paintingId ? [paintingId, ...selectedIds] : selectedIds,
+        state.activeLayerId,
+      ),
       past: recordHistory
         ? [...state.past, state.project].slice(-HISTORY_LIMIT)
         : state.past,
@@ -1332,6 +1443,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     guidesVisible: true,
     previewMotion: false,
     paintingId: null,
+    activeLayerId: null,
     brushTile: 0,
     erasing: false,
 
@@ -1356,6 +1468,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     setPreviewMotion: (previewMotion) => set({ previewMotion }),
 
     setPainting: (paintingId) => set({ paintingId }),
+    setActiveLayer: (activeLayerId) => set({ activeLayerId }),
     setBrushTile: (brushTile) => set({ brushTile: Math.max(0, Math.floor(brushTile)) }),
     setErasing: (erasing) => set({ erasing }),
 
@@ -1393,6 +1506,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         txDepth: 0,
         moveOrigins: [],
         paintingId: null,
+        activeLayerId: null,
       }),
 
     resetProject: () =>
@@ -1406,6 +1520,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         txDepth: 0,
         moveOrigins: [],
         paintingId: null,
+        activeLayerId: null,
       }),
 
     markSaved: (fileName) => set({ fileName, dirty: false }),
@@ -2339,9 +2454,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
         return { ...scene, colliders: next };
       }),
 
-    paintTiles: (nodeId, cells, tile) =>
+    paintTiles: (nodeId, layerId, cells, tile) =>
       editProject((project) =>
-        editTilemapProps(project, nodeId, (map) => {
+        editTilemapLayer(project, nodeId, layerId, (target, map) => {
           const value = tile < 0 || tile >= map.tileCount ? EMPTY_TILE : Math.floor(tile);
           // Copied on the first cell that actually changes and not before, so a
           // stroke that repaints what is already there allocates nothing and
@@ -2350,20 +2465,20 @@ export const useEditorStore = create<EditorState>((set, get) => {
           for (const { column, row } of cells) {
             if (column < 0 || row < 0 || column >= map.columns || row >= map.rows) continue;
             const index = row * map.columns + column;
-            if ((data ?? map.data)[index] === value) continue;
-            data ??= [...map.data];
+            if ((data ?? target.data)[index] === value) continue;
+            data ??= [...target.data];
             data[index] = value;
           }
           return data ? { data } : null;
         }),
       ),
 
-    fillTiles: (nodeId, tile) =>
+    fillTiles: (nodeId, layerId, tile) =>
       editProject((project) =>
-        editTilemapProps(project, nodeId, (map) => {
+        editTilemapLayer(project, nodeId, layerId, (target, map) => {
           const value = tile < 0 || tile >= map.tileCount ? EMPTY_TILE : Math.floor(tile);
-          if (map.data.every((current) => current === value)) return null;
-          return { data: map.data.map(() => value) };
+          if (target.data.every((current) => current === value)) return null;
+          return { data: target.data.map(() => value) };
         }),
       ),
 
@@ -2381,31 +2496,106 @@ export const useEditorStore = create<EditorState>((set, get) => {
           // Row by row, not index by index: the array is flat, so a new column
           // count re-reads every row after the first at the wrong offset. The
           // top-left stays put, which is where the map's own origin is.
-          const data = Array.from({ length: nextColumns * nextRows }, (_, index) => {
-            const column = index % nextColumns;
-            const row = Math.floor(index / nextColumns);
-            return column < map.columns && row < map.rows
-              ? map.data[row * map.columns + column]
-              : EMPTY_TILE;
-          });
-          return { columns: nextColumns, rows: nextRows, data };
+          //
+          // Every layer at once, and in the one step, because the grid is the
+          // map's and not a layer's — a resize that reached only the layer being
+          // painted would leave the others reinterpreted under a column count
+          // that is no longer theirs, which is the same shift this loop exists
+          // to prevent, one level up.
+          const reshape = (data: number[]) =>
+            Array.from({ length: nextColumns * nextRows }, (_, index) => {
+              const column = index % nextColumns;
+              const row = Math.floor(index / nextColumns);
+              return column < map.columns && row < map.rows
+                ? data[row * map.columns + column]
+                : EMPTY_TILE;
+            });
+          return {
+            columns: nextColumns,
+            rows: nextRows,
+            layers: map.layers.map((layer) => ({ ...toLayerDoc(layer), data: reshape(layer.data) })),
+          };
         }),
       ),
 
-    setTileSolid: (nodeId, tile, solid) =>
+    setTileSolid: (nodeId, layerId, tile, solid) =>
       editProject((project) =>
-        editTilemapProps(project, nodeId, (map) => {
+        editTilemapLayer(project, nodeId, layerId, (target, map) => {
           const index = Math.floor(tile);
           if (!Number.isFinite(index) || index < 0 || index >= map.tileCount) return null;
-          const has = map.collides.includes(index);
+          const has = target.collides.includes(index);
           if (has === solid) return null;
           // Ascending, which is the order `tileMapOf` normalises to — so a
           // round trip through the reader changes nothing and the emitted
           // `setCollision` reads the same whichever order they were marked in.
           const collides = solid
-            ? [...map.collides, index].sort((a, b) => a - b)
-            : map.collides.filter((current) => current !== index);
+            ? [...target.collides, index].sort((a, b) => a - b)
+            : target.collides.filter((current) => current !== index);
           return { collides };
+        }),
+      ),
+
+    addTilemapLayer: (nodeId) => {
+      let added: string | null = null;
+      editProject((project) =>
+        editTilemapProps(project, nodeId, (map) => {
+          const taken = new Set(map.layers.map((layer) => layer.name));
+          let index = map.layers.length + 1;
+          while (taken.has(`Layer ${index}`)) index += 1;
+          const layer = createTilemapLayer(`Layer ${index}`, map.columns * map.rows);
+          added = layer.id;
+          // Appended, so a new layer is in *front* — which is what a user adding
+          // one to paint over what is already there expects, and the same end of
+          // the array `addNode` puts a new object at.
+          return { layers: [...map.layers.map(toLayerDoc), layer] };
+        }),
+      );
+      // Selected after the edit, so adding a layer is also switching to it —
+      // the rule that already makes `addNode` select what it added.
+      if (added) set({ activeLayerId: added });
+    },
+
+    removeTilemapLayer: (nodeId, layerId) =>
+      editProject((project) =>
+        editTilemapProps(project, nodeId, (map) => {
+          // The last one is refused rather than allowed to empty the map, which
+          // is `removeScene`'s rule: there would be no layer for `tileLayerOf`
+          // to answer with and nothing to paint on.
+          if (map.layers.length < 2) return null;
+          const layers = map.layers.filter((layer) => layer.id !== layerId);
+          if (layers.length === map.layers.length) return null;
+          return { layers: layers.map(toLayerDoc) };
+        }),
+      ),
+
+    renameTilemapLayer: (nodeId, layerId, name) =>
+      editProject((project) =>
+        editTilemapLayer(project, nodeId, layerId, (target) =>
+          target.name === name ? null : { name },
+        ),
+      ),
+
+    setTilemapLayerVisible: (nodeId, layerId, visible) =>
+      editProject((project) =>
+        editTilemapLayer(project, nodeId, layerId, (target) =>
+          target.visible === visible ? null : { visible },
+        ),
+      ),
+
+    moveTilemapLayer: (nodeId, layerId, delta) =>
+      editProject((project) =>
+        editTilemapProps(project, nodeId, (map) => {
+          const from = map.layers.findIndex((layer) => layer.id === layerId);
+          if (from < 0) return null;
+          const to = Math.min(Math.max(0, from + delta), map.layers.length - 1);
+          if (to === from) return null;
+          // Splicing the array is the whole of forward and back, exactly as
+          // `reorderNode` is for objects: the array order *is* the draw order
+          // and there is no depth field here to disagree with it.
+          const layers = map.layers.map(toLayerDoc);
+          const [moved] = layers.splice(from, 1);
+          layers.splice(to, 0, moved);
+          return { layers };
         }),
       ),
 
@@ -2462,6 +2652,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
         dirty: true,
         selectedIds: pruneIds(activeScene(previous).children, state.selectedIds, (id) => id),
         paintingId: prunePainting(activeScene(previous).children, state.paintingId),
+        activeLayerId: pruneActiveLayer(
+          activeScene(previous).children,
+          [state.paintingId, ...state.selectedIds].filter((id): id is string => id !== null),
+          state.activeLayerId,
+        ),
       });
     },
 
@@ -2476,6 +2671,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
         dirty: true,
         selectedIds: pruneIds(activeScene(next).children, state.selectedIds, (id) => id),
         paintingId: prunePainting(activeScene(next).children, state.paintingId),
+        activeLayerId: pruneActiveLayer(
+          activeScene(next).children,
+          [state.paintingId, ...state.selectedIds].filter((id): id is string => id !== null),
+          state.activeLayerId,
+        ),
       });
     },
   };

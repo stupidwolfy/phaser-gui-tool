@@ -122,8 +122,21 @@
  * missing-texture square rather than a crash and rather than anything that says
  * what happened. The grid case at least degraded to "the sheet is drawn whole";
  * this one degrades to nothing being drawn at all.
+ *
+ * **v12 is tilemap layers, and it is the silent-data-loss half of the rule with
+ * no crash half at all — and the worst instance of it so far.** No new
+ * `NodeType`, so a v11 build has a `createDisplayObject` case for everything in
+ * the file. What it does instead is read `props.data` as `undefined`, have
+ * `tileMapOf` pad it out to a grid of `EMPTY_TILE`, and draw an empty map. Then
+ * it re-saves the file that way: `scenes` is passed through verbatim, so the
+ * node it writes back is the node it read, and every layer of every level in the
+ * project is gone with nothing having said so. The v10 font case and the v11
+ * atlas case both left something visibly wrong on screen; this one leaves a map
+ * that is merely empty, which is indistinguishable from one nobody has painted
+ * yet. `tilemap.spec.ts` asserts the 12 in the saved artefact, as ten other
+ * specs now do, which is what makes a bump loud on purpose.
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -1115,11 +1128,11 @@ export interface InstanceProps {
  * height of its own. A copy of it on the node would be a second field over one
  * number, which is how the two come to disagree.
  */
-export interface TilemapProps {
-  /** The sliced image the tiles come from. Null draws the placeholder grid. */
-  assetId: string | null;
-  columns: number;
-  rows: number;
+export interface TilemapLayerDoc {
+  id: string;
+  name: string;
+  /** Hidden layers draw nothing, here and in the export. */
+  visible: boolean;
   /**
    * The tiles, row-major, `columns * rows` of them. `-1` is an empty cell,
    * which is Phaser's own value for one rather than a convention of ours.
@@ -1130,21 +1143,49 @@ export interface TilemapProps {
    */
   data: number[];
   /**
-   * The frame indices that are solid, in ascending order and without repeats.
+   * The frame indices that are solid on *this* layer, ascending, no repeats.
    *
-   * On the node rather than on the asset, which is the call
-   * `NineSliceProps`' insets made and the opposite of `ImageAsset.sheet`'s. A
-   * frame grid is a property of the *bytes* — it decides how many frames the
-   * image has, which two maps drawing it must not disagree about. Solidity
-   * decides nothing about the image: one tileset is a wall in the level and
-   * scenery in the layer behind it, and nothing downstream indexes a solid
-   * flag the way a tile index indexes a frame. So it belongs to the use.
+   * On the layer rather than on the node, and the sentence that moved it here
+   * is the one iteration 20 wrote to explain why it was not on the asset: "one
+   * tileset is a wall in the level and scenery in the layer behind it". That
+   * described a feature that did not exist yet. It does now, and it is the
+   * whole of why this is per layer.
    *
-   * Optional for the reason `guides` is: every file written before this
-   * existed has no such field. Read it through `tileMapOf`, never directly.
+   * Optional for the reason `guides` is. Read it through `tileMapOf`, never
+   * directly.
    */
   collides?: number[];
+}
+
+export interface TilemapProps {
+  /** The sliced image the tiles come from. Null draws the placeholder grid. */
+  assetId: string | null;
+  columns: number;
+  rows: number;
+  /**
+   * The passes over the grid, back to front — the way `scene.children` is, and
+   * for its reason: the array order *is* the draw order and there is no depth
+   * field to disagree with it.
+   *
+   * The tileset and the grid stay up here, shared by every layer. The tile size
+   * is derived from the tileset, so a per-layer tileset would let two layers of
+   * one map disagree about how big a cell is — the second field over one number
+   * that `ImageAsset.sheet` and a sprite's missing width both exist to refuse.
+   */
+  layers: TilemapLayerDoc[];
   alpha: number;
+  /**
+   * The pre-v12 single layer. Written by no build from v12 on, and read only by
+   * `tileMapOf`'s migration, which turns it into `layers[0]`. Both funnels in
+   * the store delete the pair when they write, so the document holds one shape
+   * and only one — `setAssetSheet` and `setAssetAtlas` deleting each other's
+   * field, one type over.
+   *
+   * @deprecated
+   */
+  data?: number[];
+  /** @deprecated the pre-v12 single layer's solid list. */
+  collides?: number[];
 }
 
 /**
@@ -2292,6 +2333,15 @@ export const EMPTY_TILE = -1;
  */
 export const MAX_TILEMAP_SIDE = 256;
 
+/**
+ * The id the pre-v12 single grid migrates to.
+ *
+ * A constant rather than a fresh one per call: `tileMapOf` runs on every render
+ * and every sync, and React keys and the store's `activeLayerId` both hold this
+ * string — a new id each time would re-mount the row and lose the selection.
+ */
+export const LEGACY_LAYER_ID = 'base';
+
 /** The tile size a map is drawn at while it has no usable tileset. */
 export const FALLBACK_TILE = 32;
 
@@ -2302,17 +2352,13 @@ export interface TileCell {
 }
 
 /** A tilemap as it can actually be drawn, however the document says it. */
-export interface TileMap {
-  /** The tileset image, or undefined when there is none to draw. */
-  asset: ImageAsset | undefined;
-  tileWidth: number;
-  tileHeight: number;
-  columns: number;
-  rows: number;
+/** One layer of a `TileMap`, resolved and safe to hand to Phaser. */
+export interface TileLayer {
+  id: string;
+  name: string;
+  visible: boolean;
   /** Exactly `columns * rows` entries, each `-1` or a frame the tileset has. */
   data: number[];
-  /** How many distinct tiles the tileset offers; never zero. */
-  tileCount: number;
   /**
    * The solid frame indices, ascending and deduplicated, every one of them a
    * frame the tileset actually has.
@@ -2320,17 +2366,31 @@ export interface TileMap {
   collides: number[];
 }
 
+export interface TileMap {
+  /** The tileset image, or undefined when there is none to draw. */
+  asset: ImageAsset | undefined;
+  tileWidth: number;
+  tileHeight: number;
+  columns: number;
+  rows: number;
+  /** Back to front, and never empty: a map always has at least one layer. */
+  layers: TileLayer[];
+  /** How many distinct tiles the tileset offers; never zero. */
+  tileCount: number;
+}
+
 /**
  * A tilemap node's props, resolved against the project and made usable.
  *
  * The only reader of `TilemapProps`, in the family `frameGridOf`, `guidesOf` and
  * `prefabChildrenOf` belong to, and for the sharpest version of their reason:
- * every consumer here would otherwise have to ask five separate questions — is
- * there a tileset, how big is a tile, is `data` the length the grid says, is
- * every entry a frame that exists, and is every solid index one too — and any
- * one of them forgotten is a Phaser warning and a missing-texture cell.
- * Answering all five in one call means the renderer, the exporter, the palette
- * and the paint gesture cannot disagree.
+ * every consumer here would otherwise have to ask seven separate questions — is
+ * there a tileset, how big is a tile, does this map have layers at all or is it
+ * a file written before they existed, is each layer's `data` the length the grid
+ * says, is every entry a frame that exists, is every solid index one too, and is
+ * every layer id usable — and any one of them forgotten is a Phaser warning and
+ * a missing-texture cell. Answering all seven in one call means the renderer,
+ * the exporter, the palette and the paint gesture cannot disagree.
  *
  * The padding and truncation are the hand-edited-file backstop, not the resize
  * path: `resizeTilemap` re-shapes the array row by row, because reinterpreting a
@@ -2345,10 +2405,14 @@ export interface TileMap {
  * back whole the moment the numbers are right again, where rewriting the stored
  * indices would have thrown the level away over a mistyped margin.
  *
- * `data` and `collides` both keep their identity when the document's arrays are
- * already well formed, so a sync that changes nothing allocates nothing — which
- * is what `editProject` reads as "nothing happened" and therefore as "no undo
- * step".
+ * Each layer's `data` and `collides` keep their identity when the document's
+ * arrays are already well formed, so a sync that changes nothing allocates
+ * nothing. That is what `EditorScene.applyNode`'s per-layer tile diff and
+ * `drawPaintGrid`'s signature gate both read: a fresh array every call would
+ * re-put all 65,536 tiles on every store change. The layer objects and the
+ * layer array itself are fresh per call and nothing compares those — which is
+ * also why `useEditorStore((s) => tileMapOf(...))` is React error #185, the
+ * trap this function has carried since iteration 14.
  */
 export function tileMapOf(project: Project, props: TilemapProps): TileMap {
   const asset = findAsset(project, props.assetId);
@@ -2361,33 +2425,63 @@ export function tileMapOf(project: Project, props: TilemapProps): TileMap {
   const rows = side(props.rows);
 
   const size = columns * rows;
-  const source = Array.isArray(props.data) ? props.data : [];
   const clamp = (value: number) => {
     const tile = Math.floor(value);
     return Number.isFinite(tile) && tile >= 0 && tile < tileCount ? tile : EMPTY_TILE;
   };
 
-  let data = source;
-  if (source.length !== size || source.some((tile) => clamp(tile) !== tile)) {
-    data = Array.from({ length: size }, (_, index) => clamp(source[index]));
-  }
+  // The migration, and the only place the pre-v12 shape is read. A file written
+  // before layers existed has its one grid become `Layer 1` under a constant id,
+  // because a derived id has to be stable across calls: React keys and the
+  // store's `activeLayerId` both hold it.
+  const source: TilemapLayerDoc[] =
+    Array.isArray(props.layers) && props.layers.length > 0
+      ? props.layers
+      : [
+          {
+            id: LEGACY_LAYER_ID,
+            name: 'Layer 1',
+            visible: true,
+            data: Array.isArray(props.data) ? props.data : [],
+            ...(Array.isArray(props.collides) ? { collides: props.collides } : {}),
+          },
+        ];
 
-  // A solid index the tileset does not have is dropped rather than clamped, for
-  // the reason an out-of-range tile reads as empty: a re-cut must be able to
-  // blank the answer and give it back whole, not rewrite what the user marked
-  // over a mistyped margin. Sorted and deduplicated here so that `setCollision`
-  // is emitted the same way whatever order the file listed them in.
-  const rawSolid = Array.isArray(props.collides) ? props.collides : [];
-  const solid = new Set<number>();
-  for (const value of rawSolid) {
-    const tile = Math.floor(value);
-    if (Number.isFinite(tile) && tile >= 0 && tile < tileCount) solid.add(tile);
-  }
-  const sorted = [...solid].sort((a, b) => a - b);
-  const collides =
-    rawSolid.length === sorted.length && sorted.every((tile, index) => rawSolid[index] === tile)
-      ? rawSolid
-      : sorted;
+  // Ids are made unique here rather than trusted: they are React keys and the
+  // store's `activeLayerId`, so a hand-edited file repeating one would have a
+  // press on one row edit another. The editor cannot write a repeat.
+  const seen = new Set<string>();
+  const layers = source.map((layer, index) => {
+    const rawData = Array.isArray(layer.data) ? layer.data : [];
+    let data = rawData;
+    if (rawData.length !== size || rawData.some((tile) => clamp(tile) !== tile)) {
+      data = Array.from({ length: size }, (_, cell) => clamp(rawData[cell]));
+    }
+
+    // A solid index the tileset does not have is dropped rather than clamped, for
+    // the reason an out-of-range tile reads as empty: a re-cut must be able to
+    // blank the answer and give it back whole, not rewrite what the user marked
+    // over a mistyped margin. Sorted and deduplicated here so that `setCollision`
+    // is emitted the same way whatever order the file listed them in.
+    const rawSolid = Array.isArray(layer.collides) ? layer.collides : [];
+    const solid = new Set<number>();
+    for (const value of rawSolid) {
+      const tile = Math.floor(value);
+      if (Number.isFinite(tile) && tile >= 0 && tile < tileCount) solid.add(tile);
+    }
+    const sorted = [...solid].sort((a, b) => a - b);
+    const collides =
+      rawSolid.length === sorted.length && sorted.every((tile, cell) => rawSolid[cell] === tile)
+        ? rawSolid
+        : sorted;
+
+    let id = typeof layer.id === 'string' && layer.id ? layer.id : `${LEGACY_LAYER_ID}-${index}`;
+    while (seen.has(id)) id = `${id}-${index}`;
+    seen.add(id);
+    const name = typeof layer.name === 'string' && layer.name ? layer.name : `Layer ${index + 1}`;
+    const visible = layer.visible !== false;
+    return { id, name, visible, data, collides };
+  });
 
   return {
     asset,
@@ -2395,10 +2489,14 @@ export function tileMapOf(project: Project, props: TilemapProps): TileMap {
     tileHeight: grid ? grid.frameHeight : FALLBACK_TILE,
     columns,
     rows,
-    data,
+    layers,
     tileCount,
-    collides,
   };
+}
+
+/** A layer of a `TileMap` by id, or the frontmost when the id names nothing. */
+export function tileLayerOf(map: TileMap, layerId: string | null): TileLayer {
+  return map.layers.find((layer) => layer.id === layerId) ?? map.layers[map.layers.length - 1];
 }
 
 /** The clips that read a given sheet, which is what a sprite may choose from. */

@@ -71,7 +71,7 @@ test('both scenes are saved, and the file reopens on the one it was left on', as
   // prefabs one — a literal here so that a future bump is a deliberate act.
   // It reads 10 because tilemaps, particles, audio, the two stretchable types
   // and then fonts bumped it; scenes did not.
-  expect(parsed.schemaVersion).toBe(11);
+  expect(parsed.schemaVersion).toBe(12);
   expect(parsed.scenes).toHaveLength(2);
   expect(parsed.scenes[1].children.map((node: { name: string }) => node.name)).toEqual([
     'Second',

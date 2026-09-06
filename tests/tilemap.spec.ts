@@ -178,7 +178,7 @@ test('filling lays every cell, and the eraser takes one back', async ({ editor }
   expect(erased.count).toBeLessThan(filled.count);
 });
 
-test('the map survives a save and an open, at schema 10', async ({ editor, page }, testInfo) => {
+test('the map survives a save and an open, at schema 12', async ({ editor, page }, testInfo) => {
   await setup(editor);
   await editor.setField('Name', 'Ground');
   await editor.pickTile(0);
@@ -195,8 +195,9 @@ test('the map survives a save and an open, at schema 10', async ({ editor, page 
   // which is the other half of the rule: tilemaps took it to 6 because a build
   // with no `createDisplayObject` case leaves the object undefined and crashes,
   // where audio took it to 8 and fonts to 10 over a table an older build
-  // silently drops.
-  expect(parsed.schemaVersion).toBe(11);
+  // silently drops. Layers took it to 12 on that second half, and worse: an old
+  // build finds no `data`, draws an empty map and re-saves it that way.
+  expect(parsed.schemaVersion).toBe(12);
 
   const map = parsed.scenes[0].children.find(
     (node: { name: string }) => node.name === 'Ground',
@@ -204,9 +205,13 @@ test('the map survives a save and an open, at schema 10', async ({ editor, page 
   expect(map.type).toBe('tilemap');
   expect(map.props.columns).toBe(COLUMNS);
   expect(map.props.rows).toBe(ROWS);
+  // One layer, written in the v12 shape: the flat `data` the pre-v12 file held
+  // is gone, and the tiles are on the layer.
+  expect(map.props.data).toBeUndefined();
+  expect(map.props.layers).toHaveLength(1);
   // Row-major and exactly columns*rows long, all of it tile 0.
-  expect(map.props.data).toHaveLength(COLUMNS * ROWS);
-  expect(map.props.data.every((tile: number) => tile === 0)).toBe(true);
+  expect(map.props.layers[0].data).toHaveLength(COLUMNS * ROWS);
+  expect(map.props.layers[0].data.every((tile: number) => tile === 0)).toBe(true);
 
   const path = testInfo.outputPath('tilemap.phaser.json');
   await fs.writeFile(path, saved.contents, 'utf8');
@@ -254,4 +259,169 @@ test('un-cutting the tileset empties the map, and cutting it again brings it bac
     (await editor.findDrawn(TILES[3])).count,
     'the map should come back whole once the sheet is cut again',
   ).toBeGreaterThan(400);
+});
+
+/**
+ * Layers, from here down.
+ *
+ * Every claim is a colour on the canvas rather than a shape of the document,
+ * for the reason at the top of this file: a layer that reached `props.layers`
+ * and never reached Phaser's parser passes every store-level check and draws
+ * nothing. Colour is the instrument because the fixture's tiles are one solid
+ * colour each, so "which layer is on top" is a question a centroid can answer.
+ */
+
+/** A map with a second layer, each filled with a tile of its own. */
+async function twoLayers(editor: EditorPage): Promise<void> {
+  await setup(editor);
+  await editor.renameLayer('Floor');
+  await editor.pickTile(0);
+  await editor.fillTiles();
+
+  // Adding a layer selects it, exactly as adding an object does — so this fill
+  // lands on the new one with no second call to say so.
+  await editor.addLayer();
+  await editor.renameLayer('Walls');
+  await editor.pickTile(1);
+  await editor.fillTiles();
+}
+
+test('a second layer draws over the first', async ({ editor }) => {
+  await twoLayers(editor);
+  await editor.closePanels();
+
+  // The whole grid is tile 1, because the second layer covers the first — array
+  // order is draw order here as it is everywhere else in this editor.
+  expect((await editor.findDrawn(TILES[1])).count).toBeGreaterThan(400);
+  expect(
+    (await editor.findDrawn(TILES[0])).count,
+    'the floor should be completely covered',
+  ).toBe(0);
+});
+
+test('hiding a layer shows what is under it, and only that layer', async ({ editor }) => {
+  await twoLayers(editor);
+
+  await editor.setLayerVisible('Walls', false);
+  await editor.closePanels();
+  expect((await editor.findDrawn(TILES[0])).count).toBeGreaterThan(400);
+  expect((await editor.findDrawn(TILES[1])).count).toBe(0);
+
+  // Back again, which is what separates "hidden" from "emptied": the tiles were
+  // never touched.
+  await editor.setLayerVisible('Walls', true);
+  await editor.closePanels();
+  expect((await editor.findDrawn(TILES[1])).count).toBeGreaterThan(400);
+});
+
+test('moving a layer back swaps which one is seen', async ({ editor }) => {
+  await twoLayers(editor);
+
+  await editor.moveLayer('Walls', 'back');
+  await editor.closePanels();
+  expect(
+    (await editor.findDrawn(TILES[0])).count,
+    'the floor should now be in front',
+  ).toBeGreaterThan(400);
+  expect((await editor.findDrawn(TILES[1])).count).toBe(0);
+});
+
+test('a stroke lands on the layer the bar is set to', async ({ editor }) => {
+  await setup(editor);
+  await editor.renameLayer('Floor');
+  await editor.pickTile(0);
+  await editor.fillTiles();
+  await editor.addLayer();
+  await editor.renameLayer('Walls');
+
+  // Back to the floor from the *bar*, which is the control that has to work
+  // mid-gesture: on a phone the Properties sheet covers the canvas being
+  // painted, so this is the one a thumb can reach without hiding the map.
+  await editor.pickTile(2);
+  await editor.setPainting(true);
+  await editor.pickLayerInBar('Floor');
+
+  const target = cellCentre(1, 1);
+  await editor.paintCell(target);
+  await editor.setPainting(false);
+  await editor.closePanels();
+
+  // One cell of the floor changed, and the rest of it is still tile 0. If the
+  // stroke had gone to the front layer the picture would be identical — which
+  // is why the *document* is not what this asserts, and why the count matters:
+  // tile 2 covers exactly one cell of twelve.
+  const painted = await editor.findDrawn(TILES[2]);
+  expect(painted.count).toBeGreaterThan(100);
+  const expected = await editor.sceneToScreen(target);
+  expect(Math.abs(painted.x - expected.x)).toBeLessThan(NEAR);
+  expect(Math.abs(painted.y - expected.y)).toBeLessThan(NEAR);
+  expect((await editor.findDrawn(TILES[0])).count).toBeGreaterThan(400);
+});
+
+test('a resize re-shapes every layer, not just the one being painted', async ({
+  editor,
+}) => {
+  await twoLayers(editor);
+  await editor.setLayerVisible('Walls', false);
+
+  // A narrower grid, which re-reads a flat array at the wrong offset unless the
+  // re-shape happens in the same step — and has to do that for every layer, not
+  // only the active one.
+  await editor.setField('Columns', COLUMNS - 1);
+  await editor.closePanels();
+  expect((await editor.findDrawn(TILES[0])).count).toBeGreaterThan(300);
+
+  await editor.setLayerVisible('Walls', true);
+  await editor.closePanels();
+  expect(
+    (await editor.findDrawn(TILES[1])).count,
+    'the hidden layer should have been re-shaped too',
+  ).toBeGreaterThan(300);
+  expect((await editor.findDrawn(TILES[0])).count).toBe(0);
+});
+
+test('the last layer cannot be deleted, and a second one can', async ({ editor }) => {
+  await twoLayers(editor);
+
+  expect(await editor.removeLayer('Walls')).toBe(true);
+  await editor.closePanels();
+  expect((await editor.findDrawn(TILES[0])).count).toBeGreaterThan(400);
+
+  // A map with no layers has nothing to paint on and nothing for `tileLayerOf`
+  // to answer with, so the button says it cannot rather than quietly doing
+  // nothing — `removeScene`'s rule one level down.
+  expect(
+    await editor.removeLayer('Floor'),
+    'the only layer should not be deletable',
+  ).toBe(false);
+});
+
+test('layers survive a save and an open, in order', async ({ editor, page }, testInfo) => {
+  await twoLayers(editor);
+  await editor.setLayerVisible('Walls', false);
+
+  const saved = await editor.saveToFile();
+  const parsed = JSON.parse(saved.contents);
+  const map = parsed.scenes[0].children.find(
+    (node: { type: string }) => node.type === 'tilemap',
+  );
+  expect(map.props.layers).toHaveLength(2);
+  expect(map.props.layers.map((layer: { name: string }) => layer.name)).toEqual([
+    'Floor',
+    'Walls',
+  ]);
+  expect(map.props.layers[1].visible).toBe(false);
+
+  const path = testInfo.outputPath('tilemap-layers.phaser.json');
+  await fs.writeFile(path, saved.contents, 'utf8');
+
+  page.on('dialog', (dialog) => void dialog.accept());
+  await editor.newProject();
+  await editor.openFile(path);
+  await editor.closePanels();
+
+  // The floor is what is seen, because the layer over it came back hidden — the
+  // claim being that the *whole* list round-tripped and not only its tiles.
+  expect((await editor.findDrawn(TILES[0])).count).toBeGreaterThan(400);
+  expect((await editor.findDrawn(TILES[1])).count).toBe(0);
 });

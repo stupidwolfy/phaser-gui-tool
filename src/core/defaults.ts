@@ -10,6 +10,7 @@ import {
   type Project,
   type SceneDoc,
   type SceneSound,
+  type TilemapLayerDoc,
   type Transform,
 } from './schema';
 
@@ -161,7 +162,10 @@ export function createNode(
           assetId: null,
           columns: 20,
           rows: 12,
-          data: Array.from({ length: 20 * 12 }, () => EMPTY_TILE),
+          // One layer, because a map with none has nothing to paint on and
+          // nothing to draw — the same reason `removeTilemapLayer` refuses the
+          // last one, and `createScene`'s reason for a scene existing at all.
+          layers: [createTilemapLayer('Layer 1', 20 * 12)],
           alpha: 1,
         },
       };
@@ -294,21 +298,43 @@ export function createInstanceNode(
  * The cast is the same one the store needs: spreading a value of a
  * discriminated union widens `props` past the branch `type` picked.
  */
+/**
+ * A blank tilemap layer, named and sized.
+ *
+ * One builder, so `createNode` and `addTilemapLayer` cannot disagree about what
+ * a fresh layer is — which for `visible` is the difference between a new layer
+ * that draws and one that silently does not.
+ */
+export function createTilemapLayer(name: string, size: number): TilemapLayerDoc {
+  return { id: newId(), name, visible: true, data: Array.from({ length: size }, () => EMPTY_TILE) };
+}
+
 export function cloneWithNewIds(node: GameObjectNode): GameObjectNode {
   return {
     ...node,
     id: newId(),
     transform: { ...node.transform },
-    // The spread is shallow, and a tilemap's `data` and `collides` are the only
-    // props that are arrays — two copies sharing one would be a latent aliasing
-    // bug the moment anything here stopped being written immutably. Every path
-    // that copies a node runs through this one function, so they are copied
-    // here once.
+    // The spread is shallow, and a tilemap's layers are the only props that are
+    // arrays — two copies sharing one would be a latent aliasing bug the moment
+    // anything here stopped being written immutably. Every path that copies a
+    // node runs through this one function, so they are copied here once, and it
+    // is three levels deep now: the layer list, each layer, and each layer's own
+    // two arrays.
+    //
+    // Layer ids are *kept*, not refreshed. They only have to be unique within
+    // one node, and keeping them means a duplicated map's active layer still
+    // resolves — which a node id could not do, since two nodes sharing one would
+    // have `findNode` answer with whichever it reached first.
     props:
       node.type === 'tilemap'
         ? {
             ...node.props,
-            data: [...node.props.data],
+            layers: (node.props.layers ?? []).map((layer) => ({
+              ...layer,
+              data: [...layer.data],
+              ...(layer.collides ? { collides: [...layer.collides] } : {}),
+            })),
+            ...(node.props.data ? { data: [...node.props.data] } : {}),
             ...(node.props.collides ? { collides: [...node.props.collides] } : {}),
           }
         : { ...node.props },

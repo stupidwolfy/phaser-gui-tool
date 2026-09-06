@@ -715,12 +715,42 @@ export function hostileProject(): Project {
               assetId: 'sheet-1',
               columns: 3,
               rows: 2,
-              data: [0, -1, 2, 3, 0, -1],
-              // Solid tiles, which reach the emitted `setCollision`. One index
-              // repeated and one the tileset does not have, both of which only
-              // a hand-edited file can hold: `tileMapOf` normalises them away,
-              // so the export must show `[0, 2]` and nothing else.
-              collides: [2, 0, 2, 99],
+              layers: [
+                {
+                  id: 'l-base',
+                  name: 'floor',
+                  visible: true,
+                  data: [0, -1, 2, 3, 0, -1],
+                  // Solid tiles, which reach the emitted `setCollision`. One
+                  // index repeated and one the tileset does not have, both of
+                  // which only a hand-edited file can hold: `tileMapOf`
+                  // normalises them away, so the export must show `[0, 2]` and
+                  // nothing else.
+                  collides: [2, 0, 2, 99],
+                },
+                {
+                  id: 'l-walls',
+                  // A hostile *layer* name, which is a ninth path into the
+                  // output: it becomes a second `TILEMAPS` object-literal key,
+                  // a second variable binding and a second `setName` argument,
+                  // none of which existed before layers did. Its own solid list
+                  // is different from the floor's, which is the whole claim —
+                  // one tileset is a wall here and scenery below.
+                  name: `${breakout} walls`,
+                  visible: true,
+                  data: [-1, 1, -1, -1, -1, 3],
+                  collides: [1],
+                },
+                {
+                  id: 'l-hidden',
+                  // Hidden, and still emitted: `visible` is a modifier on the
+                  // object rather than a reason not to build it, exactly as it
+                  // is for every other node.
+                  name: 'hidden detail',
+                  visible: false,
+                  data: [2, 2, 2, 2, 2, 2],
+                },
+              ],
               alpha: 0.9,
             },
             children: [],
@@ -734,7 +764,17 @@ export function hostileProject(): Project {
             type: 'tilemap',
             visible: true,
             transform: { x: 800, y: 60, rotation: 0, scaleX: 1, scaleY: 1 },
-            props: { assetId: null, columns: 2, rows: 2, data: [-1, -1, -1, -1], alpha: 1 },
+            // Deliberately one layer, so `missingReason`'s branch is reached by
+            // a map shaped exactly as every map was before iteration 25.
+            props: {
+              assetId: null,
+              columns: 2,
+              rows: 2,
+              layers: [
+                { id: 'm-base', name: 'Layer 1', visible: true, data: [-1, -1, -1, -1] },
+              ],
+              alpha: 1,
+            },
             children: [],
           },
           {

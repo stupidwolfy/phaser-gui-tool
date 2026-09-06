@@ -292,9 +292,18 @@ test('a tilemap exports as one helper, a data table and one call per map', async
   expect(exported.contents).toContain('const TILEMAPS = {');
   expect(exported.contents).toContain('[0, -1, 2],');
   expect(exported.contents).toContain('[3, 0, -1],');
+  // A row per *layer*, not per map: the second layer's tiles are in the table
+  // under a key of its own rather than folded into the first's.
+  expect(exported.contents).toContain('[-1, 1, -1],');
 
-  // One call: the fixture holds two maps and only one of them has a tileset.
-  expect(exported.contents.split('createTilemapLayer(this, ')).toHaveLength(2);
+  // One call per layer of the one map that has a tileset — the fixture's other
+  // map has none. Layers are emitted as siblings rather than wrapped, because a
+  // `TilemapLayer` is what Arcade collides against and a wrapper would leave a
+  // collider naming this map with a Container and nothing to bind to.
+  expect(exported.contents.split('createTilemapLayer(this, ')).toHaveLength(4);
+  // A hidden layer is still built and still collides; visibility is about
+  // drawing, exactly as it is for a hidden node whose body is emitted anyway.
+  expect(exported.contents.match(/\.setVisible\(false\);$/gm) ?? []).toHaveLength(1);
   // And the other is called out rather than silently dropped, the way a sprite
   // with no image and a dangling instance already are.
   expect(exported.contents).toContain('no tileset chosen in the editor');
@@ -645,9 +654,13 @@ test('a hostile project emits its solid tiles and only the collisions it can', a
 
   // Two of the fixture's seven rows are emitted, one is a comment, and the
   // other four name something `collidersOf` refuses — a dangling id, the same
-  // node twice, a node inside a group, and two layers. None may leave a trace.
+  // node twice, a node inside a group, and two tilemaps. None may leave a trace.
+  //
+  // Four calls rather than two, because the row naming the tilemap emits one
+  // per layer: a layer collides through its *own* solid tiles, so a row that
+  // named only the first would have walls painted above the floor stop nothing.
   const calls = exported.contents.match(/this\.physics\.add\.(collider|overlap)\(/g) ?? [];
-  expect(calls).toHaveLength(2);
+  expect(calls).toHaveLength(4);
   expect(exported.contents).toContain('// A collider names an object that could not be added.');
 
   // The driven node is the hostilely named one, so its `this.<field>` has been

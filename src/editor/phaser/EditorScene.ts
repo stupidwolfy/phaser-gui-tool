@@ -26,6 +26,7 @@ import {
   prefabChildrenOf,
   sliceInsetsOf,
   textStyleOf,
+  tileLayerOf,
   tileMapOf,
   touchZonesOf,
   worldTransformOf,
@@ -36,6 +37,7 @@ import {
   type Project,
   type TextProps,
   type TileCell,
+  type TileLayer,
   type TileMap,
   type TilemapProps,
 } from '../../core/schema';
@@ -303,7 +305,13 @@ const animationKeyFor = (clip: AnimationClip, textureKey: string): string =>
  * *contents* — which change on every stroke — are deliberately not in it.
  */
 const tilemapSignatureOf = (map: TileMap, textureKey: string): string =>
-  `${textureKey}:${map.tileWidth}x${map.tileHeight}:${map.columns}x${map.rows}`;
+  `${textureKey}:${map.tileWidth}x${map.tileHeight}:${map.columns}x${map.rows}:` +
+  // The layer ids in order, because a layer added, removed or moved is a
+  // different set of Phaser maps rather than a changed one — the same claim the
+  // tile size and the column count make, one level up. Visibility and tile
+  // contents stay out: both are in-place setters, and folding either in would
+  // rebuild the whole stack on every stroke.
+  map.layers.map((layer) => layer.id).join(',');
 
 const PLACEHOLDER_TEXTURE = 'editor:no-image';
 /**
@@ -313,7 +321,7 @@ const PLACEHOLDER_TEXTURE = 'editor:no-image';
  * chosen, or one whose image has not finished decoding, still has to be a real
  * object that can be selected, dragged, resized and painted on. Giving the
  * empty case a texture of its own rather than a branch means there is one code
- * path through `createTilemapLayer`, and "no tileset yet" and "the tileset is
+ * path through `createTilemapLayers`, and "no tileset yet" and "the tileset is
  * gone" are one state rather than two.
  */
 const NO_TILESET_TEXTURE = 'editor:no-tiles';
@@ -437,18 +445,21 @@ type Renderable =
   // on them, so `localRectOf`, `hitAreaFor` and `applyHitArea` need no case for
   // either — the existing centred `width`/`height` box is already the right
   // one. Worth saying, because here "no branch needed" and "forgot a branch"
-  // look identical; a tilemap layer's top-left origin remains the one exception
-  // in this union.
+  // look identical. Since iteration 25 there is no exception left in this union
+  // at all: a tilemap's top-left origin is expressed as a published
+  // `containerBounds` box rather than as a case here.
   | Phaser.GameObjects.NineSlice
   | Phaser.GameObjects.TileSprite
   | Phaser.GameObjects.Container
   // The real thing, not a stand-in built out of Images: a layer is what the
   // export emits, so drawing one here is what makes the canvas and the
-  // generated game agree about how a map is cut, ordered and positioned. It is
-  // an ordinary Game Object with Transform, Origin, ComputedSize, Alpha and
-  // Visible on it, so every gesture and every modifier already works on one —
-  // with the single exception that its origin is its top-left, which is what
-  // `localRectOf` has a case for.
+  // generated game agree about how a map is cut, ordered and positioned.
+  //
+  // Since iteration 25 a layer is never a `displayObjects` entry — a tilemap
+  // node draws as a Container of them, the particles wrapper's shape — so it
+  // appears here only as a child of one. Its top-left origin is therefore no
+  // longer `localRectOf`'s problem: `applyNode` publishes the map's box into
+  // `containerBounds`, which that function already reads first.
   | Phaser.Tilemaps.TilemapLayer;
 
 /**
@@ -581,7 +592,7 @@ export class EditorScene extends Phaser.Scene {
    * stroke comes out dashed — and on a phone that reads as the editor dropping
    * input rather than as the frame rate it is.
    */
-  private painting: { nodeId: string; last: TileCell | null } | null = null;
+  private painting: { nodeId: string; layerId: string; last: TileCell | null } | null = null;
   /** The cell grid drawn over the map being painted, and what it last drew. */
   private paintGraphics!: Phaser.GameObjects.Graphics;
   private paintSignature = '';
@@ -593,7 +604,16 @@ export class EditorScene extends Phaser.Scene {
   private paintData: number[] | null = null;
   private paintCollides: number[] | null = null;
 
-  private tilemaps = new Map<string, Phaser.Tilemaps.Tilemap>();
+  private tilemaps = new Map<string, Phaser.Tilemaps.Tilemap[]>();
+  /**
+   * The `TilemapLayer` children of each tilemap container, in document order.
+   *
+   * The container's own child list would answer the same question, but paint
+   * mode has to resolve a *layer id* to the object that draws it, and a parallel
+   * array is what keeps that a lookup rather than a search through display
+   * objects for one carrying the right data key.
+   */
+  private tilemapLayers = new Map<string, Phaser.Tilemaps.TilemapLayer[]>();
   /**
    * The tiles each layer was last drawn with, so a sync writes only the cells
    * that actually changed.
@@ -604,7 +624,7 @@ export class EditorScene extends Phaser.Scene {
    * against the previous document, so a rebuild and a re-open start from a
    * known-empty cache rather than from an assumption.
    */
-  private tileData = new Map<string, number[]>();
+  private tileData = new Map<string, number[][]>();
   private assetTextures = new Set<string>();
   /**
    * Animation keys this scene registered.
@@ -1008,8 +1028,11 @@ export class EditorScene extends Phaser.Scene {
       this.animationForClip.clear();
       // A Tilemap is not a display object either, so the scene tearing down
       // does not take one with it. Same bookkeeping, same reason.
-      for (const tilemap of this.tilemaps.values()) tilemap.destroy();
+      for (const tilemaps of this.tilemaps.values()) {
+        for (const tilemap of tilemaps) tilemap.destroy();
+      }
       this.tilemaps.clear();
+      this.tilemapLayers.clear();
       this.tileData.clear();
       // Font faces belong to the document rather than to the game, so they
       // outlive a teardown by more than a texture does — and a family left
@@ -1292,51 +1315,86 @@ export class EditorScene extends Phaser.Scene {
   }
 
   /**
-   * Builds the `Tilemap` and the layer that draws it.
+   * Builds one `Tilemap` per document layer and wraps them in a Container.
    *
-   * The map is parsed from a plain 2D array, which is the one shape Phaser
+   * Each map is parsed from a plain 2D array, which is the one shape Phaser
    * builds a map from without a Tiled file — and it is the same array the
    * exporter writes into its `TILEMAPS` table, so the canvas and the generated
    * game are cut from one description.
    *
+   * **The wrapper is the particles wrapper's argument, not decoration.** A node
+   * is one display object in `displayObjects`, and a map is now several drawn
+   * things, so something has to hold them. A Container does, and its children
+   * are private to the renderer for the reason the emitter's marker is:
+   * `syncNodes` recurses into a container *by node type*, so nothing walks into
+   * this one, nothing measures it, and `reparent`'s index assertion never sees
+   * it.
+   *
+   * The thing that would otherwise break is `localRectOf`, since a tilemap
+   * layer's origin is its top-left where a Container's box is centred. Rather
+   * than a branch there, `applyNode` publishes the map's box into
+   * `containerBounds` — which `localRectOf` already reads first and
+   * `applyContainerBounds` already offsets the hit area from. The outline, both
+   * handles, the published bounds and the snapping all keep reading one
+   * function.
+   *
    * Neither `addTilesetImage` nor `createLayer` can fail here, which is what
-   * the two assertions say: the first returns null only for a texture key that
-   * does not exist, and `tilesetKeyFor` has just checked; the second only for a
-   * layer id that is missing or already built, and this map was made one line
-   * above with exactly one layer in it.
+   * the assertion and the cast say: the first returns null only for a texture
+   * key that does not exist, and `tilesetKeyFor` has just checked; the second
+   * only for a layer id that is missing or already built, and each map is made
+   * one line above with exactly one layer in it.
    */
-  private createTilemapLayer(props: TilemapProps, key: string): Phaser.Tilemaps.TilemapLayer {
+  private createTilemapLayers(props: TilemapProps, key: string): Phaser.GameObjects.Container {
     const map = tileMapOf(this.syncing, props);
     const textureKey = this.tilesetKeyFor(this.syncing, props.assetId);
     const grid = frameGridOf(map.asset);
 
-    const rows = Array.from({ length: map.rows }, (_, row) =>
-      map.data.slice(row * map.columns, (row + 1) * map.columns),
-    );
-    const tilemap = this.make.tilemap({
-      data: rows,
-      tileWidth: map.tileWidth,
-      tileHeight: map.tileHeight,
-    });
-    const tileset = tilemap.addTilesetImage(
-      'tiles',
-      textureKey,
-      map.tileWidth,
-      map.tileHeight,
-      grid ? grid.margin : 0,
-      grid ? grid.spacing : 0,
-    )!;
-    // `gpu: false` by explicit omission, and the cast is that decision: a GPU
-    // layer would need `generateLayerDataTexture()` after every stroke and
-    // cannot mix tilesets, and the declared return covers both kinds.
-    const layer = tilemap.createLayer(0, tileset, 0, 0) as Phaser.Tilemaps.TilemapLayer;
+    const tilemaps: Phaser.Tilemaps.Tilemap[] = [];
+    const layers: Phaser.Tilemaps.TilemapLayer[] = [];
+    for (const source of map.layers) {
+      const rows = Array.from({ length: map.rows }, (_, row) =>
+        source.data.slice(row * map.columns, (row + 1) * map.columns),
+      );
+      const tilemap = this.make.tilemap({
+        data: rows,
+        tileWidth: map.tileWidth,
+        tileHeight: map.tileHeight,
+      });
+      const tileset = tilemap.addTilesetImage(
+        'tiles',
+        textureKey,
+        map.tileWidth,
+        map.tileHeight,
+        grid ? grid.margin : 0,
+        grid ? grid.spacing : 0,
+      )!;
+      // `gpu: false` by explicit omission, and the cast is that decision: a GPU
+      // layer would need `generateLayerDataTexture()` after every stroke and
+      // cannot mix tilesets, and the declared return covers both kinds.
+      //
+      // One `Tilemap` per layer rather than one map with several: `make.tilemap`
+      // builds its layer from the `data` it is handed, and that form takes one
+      // grid. It is also exactly what the exporter emits, so the two halves of
+      // the feature are cut from one description here as they were before.
+      const layer = tilemap.createLayer(0, tileset, 0, 0) as Phaser.Tilemaps.TilemapLayer;
+      tilemaps.push(tilemap);
+      layers.push(layer);
+    }
 
-    this.tilemaps.set(key, tilemap);
+    this.tilemaps.set(key, tilemaps);
+    this.tilemapLayers.set(key, layers);
     // What is on screen, so `applyNode`'s diff starts from the truth rather
     // than from an assumption about it.
-    this.tileData.set(key, map.data);
-    return layer;
+    this.tileData.set(key, map.layers.map((layer) => layer.data));
+    // Sized here as well as in `applyNode`, so the hit area `createDisplayObject`
+    // builds from `hitAreaFor` is the map's box on the very first frame rather
+    // than the 0x0 a fresh Container reports.
+    return this.add
+      .container(0, 0, layers)
+      .setSize(map.columns * map.tileWidth, map.rows * map.tileHeight);
   }
+
+
 
   /**
    * What this node's display object was built from, or undefined for a node
@@ -1386,8 +1444,9 @@ export class EditorScene extends Phaser.Scene {
     object.destroy();
     this.displayObjects.delete(key);
     this.containerBounds.delete(key);
-    this.tilemaps.get(key)?.destroy();
+    for (const tilemap of this.tilemaps.get(key) ?? []) tilemap.destroy();
     this.tilemaps.delete(key);
+    this.tilemapLayers.delete(key);
     this.tileData.delete(key);
     // The container's own `destroy` takes the emitter and the marker with it,
     // so only the lookups have to be dropped by hand.
@@ -2941,19 +3000,28 @@ export class EditorScene extends Phaser.Scene {
     };
   }
 
-  /** The painted node, its layer and its resolved grid, or null. */
+  /** The painted node, the layer being painted, and its resolved grid. */
   private paintTarget(): {
     nodeId: string;
+    layerId: string;
     layer: Phaser.Tilemaps.TilemapLayer;
+    resolved: TileLayer;
     map: TileMap;
   } | null {
     const state = useEditorStore.getState();
     if (!state.paintingId) return null;
     const node = findNode(activeScene(state.project).children, state.paintingId);
     if (!node || node.type !== 'tilemap') return null;
-    const layer = this.displayObjects.get(state.paintingId);
-    if (!(layer instanceof Phaser.Tilemaps.TilemapLayer)) return null;
-    return { nodeId: node.id, layer, map: tileMapOf(state.project, node.props) };
+    // Resolved through `tileLayerOf` rather than read from the store directly:
+    // a null or stale `activeLayerId` means the frontmost layer, and answering
+    // that in one place is what stops the brush, the palette and the paint grid
+    // disagreeing about which layer is being worked on.
+    const map = tileMapOf(state.project, node.props);
+    const resolved = tileLayerOf(map, state.activeLayerId);
+    const index = map.layers.indexOf(resolved);
+    const layer = this.tilemapLayers.get(state.paintingId)?.[index];
+    if (!layer) return null;
+    return { nodeId: node.id, layerId: resolved.id, layer, resolved, map };
   }
 
   /**
@@ -2969,7 +3037,11 @@ export class EditorScene extends Phaser.Scene {
     const target = this.paintTarget();
     if (!target) return false;
 
-    this.painting = { nodeId: target.nodeId, last: null };
+    // The layer is fixed when the stroke starts rather than read per sample,
+    // for the reason the moving set is measured once at `DRAG_START`: a
+    // gesture is about one thing, and a layer switched mid-stroke would have
+    // one drag write two arrays inside one undo step.
+    this.painting = { nodeId: target.nodeId, layerId: target.layerId, last: null };
     useEditorStore.getState().beginTransaction();
     this.paintAt(pointer);
     return true;
@@ -3002,7 +3074,12 @@ export class EditorScene extends Phaser.Scene {
     stroke.last = cell;
 
     const state = useEditorStore.getState();
-    state.paintTiles(stroke.nodeId, cells, state.erasing ? EMPTY_TILE : state.brushTile);
+    state.paintTiles(
+      stroke.nodeId,
+      stroke.layerId,
+      cells,
+      state.erasing ? EMPTY_TILE : state.brushTile,
+    );
   }
 
   /**
@@ -3050,6 +3127,11 @@ export class EditorScene extends Phaser.Scene {
    * value: `tileMapOf` hands back the document's own arrays when they are well
    * formed, so a reference comparison is exact, and joining sixty-five thousand
    * numbers into a string every frame is the cost this gating exists to avoid.
+   *
+   * All of it is the *active* layer's, and only that layer's. The grid lines are
+   * the map's, but which cells are solid is a question about one layer since
+   * iteration 25 — and marking every layer's would say that the floor under a
+   * wall is a wall too.
    */
   private drawPaintGrid(): void {
     const target = this.paintTarget();
@@ -3059,7 +3141,7 @@ export class EditorScene extends Phaser.Scene {
       return;
     }
 
-    const { map, layer } = target;
+    const { map, layer, resolved } = target;
     const { zoom } = this.cameras.main;
     const hover = this.painting?.last;
     // The layer's *world* frame, decomposed, rather than its own transform: a
@@ -3080,18 +3162,19 @@ export class EditorScene extends Phaser.Scene {
       world.rotation,
       world.scaleX,
       world.scaleY,
+      resolved.id,
       hover ? `${hover.column},${hover.row}` : '',
     ].join(':');
     if (
       signature === this.paintSignature &&
-      map.data === this.paintData &&
-      map.collides === this.paintCollides
+      resolved.data === this.paintData &&
+      resolved.collides === this.paintCollides
     ) {
       return;
     }
     this.paintSignature = signature;
-    this.paintData = map.data;
-    this.paintCollides = map.collides;
+    this.paintData = resolved.data;
+    this.paintCollides = resolved.collides;
 
     const width = map.columns * map.tileWidth;
     const height = map.rows * map.tileHeight;
@@ -3103,10 +3186,10 @@ export class EditorScene extends Phaser.Scene {
     // Which cells will stop something. Under the grid lines rather than over
     // them, so the map still reads as a grid while the walls are being laid.
     const solidCells: number[] = [];
-    if (map.collides.length > 0) {
-      const solid = new Set(map.collides);
-      for (let index = 0; index < map.data.length; index += 1) {
-        if (solid.has(map.data[index])) solidCells.push(index);
+    if (resolved.collides.length > 0) {
+      const solid = new Set(resolved.collides);
+      for (let index = 0; index < resolved.data.length; index += 1) {
+        if (solid.has(resolved.data[index])) solidCells.push(index);
       }
       this.paintGraphics.fillStyle(BODY_COLOR, 0.18);
       for (const index of solidCells) {
@@ -3258,7 +3341,7 @@ export class EditorScene extends Phaser.Scene {
         break;
       }
       case 'tilemap':
-        object = this.createTilemapLayer(node.props, key);
+        object = this.createTilemapLayers(node.props, key);
         break;
       case 'particles':
         object = this.createEmitter(node.props, key);
@@ -3436,22 +3519,46 @@ export class EditorScene extends Phaser.Scene {
         break;
       }
       case 'tilemap': {
-        const layer = object as Phaser.Tilemaps.TilemapLayer;
+        const group = object as Phaser.GameObjects.Container;
         const map = tileMapOf(this.syncing, node.props);
+        const layers = this.tilemapLayers.get(key) ?? [];
         const drawn = this.tileData.get(key);
 
-        // Only the cells that changed. The layer was built from `drawn`, and
-        // `syncNodes` has already rebuilt it if the grid's shape moved, so the
-        // two arrays are the same length here by construction.
-        if (drawn !== map.data) {
-          for (let index = 0; index < map.data.length; index += 1) {
-            if (drawn && drawn[index] === map.data[index]) continue;
-            layer.putTileAt(map.data[index], index % map.columns, Math.floor(index / map.columns));
+        map.layers.forEach((source, index) => {
+          const layer = layers[index];
+          if (!layer) return;
+          // Only the cells that changed. The layer was built from `drawn`, and
+          // `syncNodes` has already rebuilt the whole stack if the grid's shape
+          // or the layer list moved, so the two arrays are the same length here
+          // by construction.
+          const before = drawn?.[index];
+          if (before !== source.data) {
+            for (let cell = 0; cell < source.data.length; cell += 1) {
+              if (before && before[cell] === source.data[cell]) continue;
+              layer.putTileAt(source.data[cell], cell % map.columns, Math.floor(cell / map.columns));
+            }
           }
-          this.tileData.set(key, map.data);
-        }
+          layer.setVisible(source.visible);
+        });
+        this.tileData.set(
+          key,
+          map.layers.map((source) => source.data),
+        );
 
-        layer.setAlpha(node.props.alpha);
+        // Alpha on the container, so it multiplies down onto every layer — the
+        // particles wrapper's call, and what the exported `.setAlpha` does to
+        // each emitted layer.
+        group.setAlpha(node.props.alpha);
+        // The map's own box, published where a group's measured one goes. That
+        // is what keeps a tilemap layer's top-left origin expressed in exactly
+        // one place: `localRectOf` reads `containerBounds` before it reaches its
+        // centred fallback, and `applyContainerBounds` offsets the hit area from
+        // it. See `createTilemapLayers`.
+        this.publishContainerBounds(
+          group,
+          key,
+          new Phaser.Geom.Rectangle(0, 0, map.columns * map.tileWidth, map.rows * map.tileHeight),
+        );
         break;
       }
       case 'particles': {
@@ -3605,7 +3712,23 @@ export class EditorScene extends Phaser.Scene {
     group: Phaser.GameObjects.Container,
     id: string,
   ): void {
-    const bounds = this.measureContainer(group);
+    this.publishContainerBounds(group, id, this.measureContainer(group));
+  }
+
+  /**
+   * The half of the above that does not measure.
+   *
+   * A tilemap's box is *known* rather than measured — it is the grid times the
+   * tile size — so it publishes through here instead. Sharing the tail is what
+   * keeps the half-size hit-area shift written once: a second copy of it is a
+   * second chance to get the sign wrong, and a wrong sign is a map grabbable
+   * everywhere except where it is drawn.
+   */
+  private publishContainerBounds(
+    group: Phaser.GameObjects.Container,
+    id: string,
+    bounds: Phaser.Geom.Rectangle,
+  ): void {
     this.containerBounds.set(id, bounds);
     group.setSize(bounds.width, bounds.height);
 
@@ -3657,15 +3780,12 @@ export class EditorScene extends Phaser.Scene {
       if (bounds) return bounds;
     }
     const { width, height } = object;
-    // A tilemap layer's origin is its top-left, not its centre — Phaser sets
-    // `setOrigin(0, 0)` on one and there is no meaningful way to move it, since
-    // a tile's coordinates are counted from that corner. Every other object
-    // here is centred, so this is the one place the difference is expressed:
-    // the outline, the hit area, the scale handle, the rotate knob and the
-    // published bounds all read the box back through this function.
-    if (object instanceof Phaser.Tilemaps.TilemapLayer) {
-      return new Phaser.Geom.Rectangle(0, 0, width, height);
-    }
+    // No tilemap case, and that is not an omission. A tilemap draws as a
+    // Container of layers whose box `applyNode` publishes into
+    // `containerBounds`, so a map is answered by the branch above before it ever
+    // reaches here — which is what keeps its top-left origin expressed in one
+    // place rather than two. A bare `TilemapLayer` only ever appears as a child
+    // of that container, and nothing measures those.
     return new Phaser.Geom.Rectangle(-width / 2, -height / 2, width, height);
   }
 

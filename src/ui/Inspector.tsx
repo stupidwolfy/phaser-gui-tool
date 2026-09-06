@@ -27,7 +27,9 @@ import {
   physicsOf,
   scenePhysicsOf,
   siblingsOf,
+  tileLayerOf,
   tileMapOf,
+  type TileMap,
   type GameObjectNode,
   type NineSliceProps,
   type ParticlesProps,
@@ -1627,6 +1629,100 @@ function ParticlesSection({
 }
 
 /**
+ * The map's layers, back to front, and what can be done to one.
+ *
+ * Here rather than in the scene tree, because a layer is not a `GameObjectNode`:
+ * the tree's twisty, its drag-to-reparent, its selection and its delete are all
+ * built on nodes, so a layer row there would be a second row kind rejecting most
+ * of what the rows above it accept. The paint bar carries the same choice for
+ * the moment that actually matters — mid-gesture, on a phone, where this panel
+ * is a sheet over the canvas being painted. The brush already splits that way.
+ *
+ * Listed in array order, front-most last, which is the scene tree's rule and for
+ * its reason: the array order *is* the draw order, and showing it front-first
+ * would put an index flip between every press and the store.
+ *
+ * Every accessible name carries the word "layer" or the verb it needs. The tree
+ * already owns `Hide <name>` and `Delete <name>` and the palettes own `Tile N`
+ * and `Erase tiles`, and the suite matches a name exactly — a layer a user calls
+ * the same thing as an object would otherwise put two identical buttons on the
+ * page, which is the trap the prefab buttons' `+ ` prefix exists for.
+ */
+function LayerList({ nodeId, map }: { nodeId: string; map: TileMap }) {
+  const activeLayerId = useEditorStore((s) => s.activeLayerId);
+  const setActiveLayer = useEditorStore((s) => s.setActiveLayer);
+  const addTilemapLayer = useEditorStore((s) => s.addTilemapLayer);
+  const removeTilemapLayer = useEditorStore((s) => s.removeTilemapLayer);
+  const renameTilemapLayer = useEditorStore((s) => s.renameTilemapLayer);
+  const setTilemapLayerVisible = useEditorStore((s) => s.setTilemapLayerVisible);
+  const moveTilemapLayer = useEditorStore((s) => s.moveTilemapLayer);
+
+  const active = tileLayerOf(map, activeLayerId);
+  const only = map.layers.length < 2;
+
+  return (
+    <>
+      {map.layers.map((layer, index) => (
+        <div className="layer-row" key={layer.id}>
+          <button
+            className={`layer-row__pick ${layer.id === active.id ? 'is-active' : ''}`}
+            aria-pressed={layer.id === active.id}
+            aria-label={`Paint on ${layer.name}`}
+            onClick={() => setActiveLayer(layer.id)}
+          >
+            {layer.name}
+          </button>
+          <button
+            className="layer-row__btn"
+            aria-label={layer.visible ? `Hide layer ${layer.name}` : `Show layer ${layer.name}`}
+            onClick={() => setTilemapLayerVisible(nodeId, layer.id, !layer.visible)}
+          >
+            {layer.visible ? '◉' : '○'}
+          </button>
+          <button
+            className="layer-row__btn"
+            aria-label={`Move ${layer.name} back`}
+            disabled={index === 0}
+            onClick={() => moveTilemapLayer(nodeId, layer.id, -1)}
+          >
+            ▾
+          </button>
+          <button
+            className="layer-row__btn"
+            aria-label={`Move ${layer.name} forward`}
+            disabled={index === map.layers.length - 1}
+            onClick={() => moveTilemapLayer(nodeId, layer.id, 1)}
+          >
+            ▴
+          </button>
+          {/* Disabled rather than absent on the last layer, so the panel says
+              it cannot rather than quietly not offering it — `AlignSection`'s
+              call for one object. */}
+          <button
+            className="layer-row__btn"
+            aria-label={`Delete layer ${layer.name}`}
+            disabled={only}
+            title={only ? 'A map keeps at least one layer' : 'Delete'}
+            onClick={() => removeTilemapLayer(nodeId, layer.id)}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+
+      <TextField
+        label="Layer name"
+        value={active.name}
+        onChange={(name) => renameTilemapLayer(nodeId, active.id, name)}
+      />
+      <button className="btn btn--block" onClick={() => addTilemapLayer(nodeId)}>
+        + Layer
+      </button>
+    </>
+  );
+}
+
+/**
  * The tilemap panel: the tileset, the grid, the brush, and the way into paint
  * mode.
  *
@@ -1643,12 +1739,16 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
   const paintingId = useEditorStore((s) => s.paintingId);
   const brushTile = useEditorStore((s) => s.brushTile);
   const erasing = useEditorStore((s) => s.erasing);
+  const activeLayerId = useEditorStore((s) => s.activeLayerId);
   // Derived outside the selector, not inside one: `tileMapOf` builds a fresh
   // object every call and zustand compares snapshots by identity, so selecting
   // it would re-render on every store read for ever. The same reason
   // `useSelectionNodes` reaches for `useShallow`.
   const project = useEditorStore((s) => s.project);
   const map = tileMapOf(project, node.props);
+  // The one place this panel decides which layer it is about, so the brush, the
+  // fill, the collision grid and its hint cannot disagree.
+  const layer = tileLayerOf(map, activeLayerId);
 
   const painting = paintingId === node.id;
 
@@ -1688,8 +1788,12 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
         size is the tileset's frame size.
       </p>
 
+      <div className="panel__section">Layers</div>
+      <LayerList nodeId={node.id} map={map} />
+
       <div className="panel__section">Brush</div>
       <TilePalette assetId={node.props.assetId} />
+      <p className="hint">Painting on {layer.name}.</p>
 
       {/* Toggling rather than only entering: the bar over the canvas has the ✓
           that leaves, but on a desktop the button that turned the mode on is
@@ -1703,7 +1807,7 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
       </button>
       <button
         className="btn btn--block"
-        onClick={() => fillTiles(node.id, erasing ? EMPTY_TILE : brushTile)}
+        onClick={() => fillTiles(node.id, layer.id, erasing ? EMPTY_TILE : brushTile)}
       >
         {erasing ? 'Clear every tile' : 'Fill with this tile'}
       </button>
@@ -1715,11 +1819,12 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
       <div className="panel__section">Collision</div>
       <SolidPalette
         nodeId={node.id}
+        layerId={layer.id}
         assetId={node.props.assetId}
-        collides={map.collides}
+        collides={layer.collides}
       />
       <p className="hint">
-        {map.collides.length > 0
+        {layer.collides.length > 0
           ? 'Solid tiles are outlined green while you paint. Add a collision in the Scene panel between this map and whatever should stand on it.'
           : 'Pick the tiles that should stop things — walls, floors. Then add a collision in the Scene panel between this map and whatever should stand on it.'}
       </p>

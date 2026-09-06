@@ -1018,3 +1018,51 @@ select {
   border-color: var(--accent);
   color: #fff;
 }
+
+/* One layer of a tilemap, in the inspector's Layers list.
+
+   A grid rather than a flex row, for the add-row's reason: the name has to be
+   allowed to shrink while the four square buttons never do, and `1fr` plus four
+   fixed columns says that with no breakpoint to maintain. */
+.layer-row {
+  display: grid;
+  grid-template-columns: 1fr repeat(4, 28px);
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.layer-row__pick {
+  overflow: hidden;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.layer-row__pick.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.layer-row__btn {
+  padding: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.layer-row__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
