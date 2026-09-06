@@ -168,7 +168,7 @@ test('a camera survives a save and an open, at schema 10', async ({ editor }, te
   // that predates it opens this file, draws it identically and carries the
   // camera back out on a re-save. It reads 10 because fonts added a
   // project-level table; the camera did not.
-  expect(project.schemaVersion).toBe(10);
+  expect(project.schemaVersion).toBe(11);
   expect(project.scenes[0].camera).toMatchObject({
     scrollX: 40,
     scrollY: 80,

@@ -7,9 +7,10 @@ import {
   type EditorState,
 } from '../../core/store';
 import {
+  atlasDataOf,
+  atlasOf,
   cameraOf,
   cameraViewOf,
-  clampFrame,
   containsNode,
   controlsOf,
   findAnimation,
@@ -19,6 +20,7 @@ import {
   EMPTY_TILE,
   frameGridOf,
   guidesOf,
+  resolveFrame,
   isDefaultCamera,
   physicsOf,
   prefabChildrenOf,
@@ -260,9 +262,21 @@ const MIN_GRID_PIXELS = 6;
  */
 const textureKeyForAsset = (asset: ImageAsset): string => {
   const sheet = frameGridOf(asset);
-  return sheet
-    ? `asset:${asset.id}:${sheet.frameWidth}x${sheet.frameHeight}+${sheet.margin}+${sheet.spacing}`
-    : `asset:${asset.id}`;
+  if (sheet) {
+    return `asset:${asset.id}:${sheet.frameWidth}x${sheet.frameHeight}+${sheet.margin}+${sheet.spacing}`;
+  }
+  // An atlas is folded in for the grid's reason and needs its *frames* in the
+  // signature rather than a count: re-exporting an atlas with the same number
+  // of frames in different places is the ordinary result of re-packing, and a
+  // key that could not see that difference would go on drawing the old cuts.
+  const atlas = atlasOf(asset);
+  if (atlas) {
+    const cuts = atlas
+      .map((frame) => `${frame.name}@${frame.x},${frame.y},${frame.width},${frame.height}`)
+      .join('|');
+    return `asset:${asset.id}:atlas:${cuts}`;
+  }
+  return `asset:${asset.id}`;
 };
 
 /**
@@ -272,7 +286,12 @@ const textureKeyForAsset = (asset: ImageAsset): string => {
  * changed one.
  */
 const animationKeyFor = (clip: AnimationClip, textureKey: string): string =>
-  `anim:${clip.id}:${textureKey}:${clip.frames.join(',')}:${clip.frameRate}:${clip.repeat}`;
+  `anim:${clip.id}:${textureKey}:${JSON.stringify(clip.frames)}:${clip.frameRate}:${clip.repeat}`;
+// `JSON.stringify` rather than `join(',')`, which is what this used before named
+// frames existed: joined, `['a,b']` and `['a', 'b']` are the same string, so an
+// edit between the two would keep the old key, find it already registered and go
+// on playing the animation it built first. Nothing outside this file reads the
+// key, so the change costs nothing and removes the question.
 /**
  * What a tilemap's Phaser objects are built *from*, as a string.
  *
@@ -1130,10 +1149,14 @@ export class EditorScene extends Phaser.Scene {
       const image = decodedImage(asset.dataUrl);
       if (image) {
         const sheet = frameGridOf(asset);
-        // The grid is handed to Phaser's own sprite-sheet parser rather than
-        // cut here, so the frames the editor draws are the very frames
-        // `load.spritesheet` will cut from the same numbers in exported code.
+        const atlas = atlasOf(asset);
+        // The cut is handed to Phaser's own parser rather than performed here,
+        // so the frames the editor draws are the very frames the exported code
+        // will cut from the same data. For a grid that is `load.spritesheet`
+        // and the document's four numbers; for an atlas it is `load.atlas` and
+        // `atlasDataOf`, which is the one builder both sides use.
         if (sheet) this.textures.addSpriteSheet(key, image, { ...sheet });
+        else if (atlas) this.textures.addAtlas(key, image, atlasDataOf(atlas));
         else this.textures.addImage(key, image);
         this.assetTextures.add(key);
       } else if (!this.decoding.has(asset.dataUrl)) {
@@ -1228,15 +1251,28 @@ export class EditorScene extends Phaser.Scene {
   /**
    * A frame that is certainly on the texture actually loaded.
    *
-   * `clampFrame` resolves an index against the *document's* grid, and the two
-   * disagree for as long as a decode is in flight: the object is on the
-   * single-frame placeholder while its node still says frame 3, and Phaser
+   * `resolveFrame` answers against the *document's* cut, and the two disagree
+   * for as long as a decode is in flight: the object is on the single-frame
+   * placeholder while its node still says frame 3, or `body_idle`, and Phaser
    * warns and drops to a missing texture for a frame that is not there. The
    * decode re-runs the whole sync when it lands, which is what puts the real
    * frame up.
+   *
+   * The fallback is `0`, which is the placeholder's only frame and is also the
+   * name Phaser gives the single frame of a plain image — so it is right for a
+   * name that has not arrived as well as for an index.
    */
-  private drawableFrame(textureKey: string, frame: number): number {
-    return this.textures.get(textureKey).has(String(frame)) ? frame : 0;
+  private drawableFrame(textureKey: string, frame: number | string): number | string {
+    const texture = this.textures.get(textureKey);
+    if (texture.has(String(frame))) return frame;
+    // A *number* falls back to 0, which is what this has always done and what
+    // every grid and placeholder texture answers to. A *name* cannot: an atlas
+    // texture has no frame called "0" unless a frame happens to be named that,
+    // so the old fallback would ask for one that is not there and draw the
+    // missing-texture square this function exists to avoid. `firstFrame` is
+    // Phaser's own answer to "some frame, certainly" — the first one added, or
+    // `__BASE` on a texture that has only that.
+    return typeof frame === 'string' ? texture.firstFrame : 0;
   }
 
   /**
@@ -1330,7 +1366,7 @@ export class EditorScene extends Phaser.Scene {
     if (node.type === 'nineslice' || node.type === 'tileSprite') {
       const key = this.textureKeyFor(this.syncing, node.props.assetId);
       const asset = findAsset(this.syncing, node.props.assetId);
-      return `${key}:${this.drawableFrame(key, clampFrame(asset, node.props.frame))}`;
+      return `${key}:${this.drawableFrame(key, resolveFrame(asset, node.props.frame))}`;
     }
     if (node.type !== 'tilemap') return undefined;
     return tilemapSignatureOf(
@@ -1385,9 +1421,13 @@ export class EditorScene extends Phaser.Scene {
       const textureKey = textureKeyForAsset(asset);
       if (!this.textures.exists(textureKey)) continue;
 
-      // Frames are clamped against the texture actually loaded, not against the
-      // document's idea of the grid: `generateFrameNumbers` on a frame the
-      // texture does not have produces an animation that renders nothing.
+      // Frames are checked against the texture actually loaded, not against the
+      // document's idea of how the image is cut: a frame the texture does not
+      // have produces an animation that renders nothing. `has` takes the frame
+      // as a string either way, so an atlas name and a grid index go through
+      // this untouched — which is the whole of what this half of the feature
+      // needed, because the clip already carries whichever the asset's cut
+      // calls for and `anims.create` takes both.
       const texture = this.textures.get(textureKey);
       const frames = clip.frames.filter((frame) => texture.has(String(frame)));
       if (frames.length === 0) continue;
@@ -3193,7 +3233,7 @@ export class EditorScene extends Phaser.Scene {
           0,
           0,
           key,
-          this.drawableFrame(key, clampFrame(asset, props.frame)),
+          this.drawableFrame(key, resolveFrame(asset, props.frame)),
           props.width,
           props.height,
           insets.left,
@@ -3213,7 +3253,7 @@ export class EditorScene extends Phaser.Scene {
           props.width,
           props.height,
           key,
-          this.drawableFrame(key, clampFrame(asset, props.frame)),
+          this.drawableFrame(key, resolveFrame(asset, props.frame)),
         );
         break;
       }
@@ -3320,7 +3360,7 @@ export class EditorScene extends Phaser.Scene {
         const project = this.syncing;
         const key = this.textureKeyFor(project, node.props.assetId);
         const asset = findAsset(project, node.props.assetId);
-        const frame = clampFrame(asset, node.props.frame);
+        const frame = resolveFrame(asset, node.props.frame);
 
         const clip = findAnimation(project, node.props.animationId);
         const animation = clip ? this.animationForClip.get(clip.id) : undefined;
@@ -3536,7 +3576,7 @@ export class EditorScene extends Phaser.Scene {
     const asset = findAsset(this.syncing, props.assetId);
     return {
       texture: this.textureKeyFor(this.syncing, props.assetId),
-      frame: clampFrame(asset, props.frame),
+      frame: resolveFrame(asset, props.frame),
       lifespan: props.lifespan,
       speed: { min: props.speedMin, max: props.speedMax },
       angle: { min: props.angleMin, max: props.angleMax },

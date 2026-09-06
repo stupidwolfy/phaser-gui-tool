@@ -616,6 +616,69 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * Attaches a texture atlas to the selected object's image, or replaces the
+   * one it has.
+   *
+   * One method for both, because the panel is one button for both: replacing is
+   * the ordinary case, since an atlas is re-exported every time the artwork
+   * changes.
+   *
+   * **The mime is passed empty on purpose**, which is `importFont`'s reason
+   * arriving one format over. Playwright will happily supply
+   * `application/json`, and a picker on a desktop usually does too — but a
+   * packer that writes a `.atlas` extension, or a phone's document picker,
+   * reports something else or nothing, so an empty one is the honest fixture
+   * and the only one that exercises the extension half of the accept list.
+   */
+  async attachAtlas(file: { name: string; contents: string }): Promise<void> {
+    await this.openPanel('inspect');
+    const chooser = this.page.waitForEvent('filechooser');
+    await this.panel('inspect')
+      .getByRole('button', { name: /^(Attach|Replace) atlas…$/ })
+      .click();
+    await (await chooser).setFiles({
+      name: file.name,
+      mimeType: '',
+      buffer: Buffer.from(file.contents, 'utf8'),
+    });
+    await expect(
+      this.panel('inspect').getByRole('button', { name: 'Remove atlas' }),
+    ).toBeVisible();
+    await this.settle();
+  }
+
+  /**
+   * Removes it, so the image is one whole picture again — `unsliceSheet`'s
+   * sibling, and a button rather than a checkbox for the same reason that one
+   * is a checkbox: there is no "empty atlas" to type.
+   */
+  async removeAtlas(): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByRole('button', { name: 'Remove atlas' }).click();
+    await this.settle();
+  }
+
+  /**
+   * Picks a named frame on the selected object.
+   *
+   * Two helpers rather than one with two modes, because these are two controls:
+   * a grid's frame is a number field reached through `setField('Frame', n)`,
+   * and an atlas's is a select. Merging them would hide exactly the difference
+   * the atlas suite exists to assert.
+   */
+  async setFrameName(name: string): Promise<void> {
+    await this.openPanel('inspect');
+    await this.choice('Frame').selectOption(name);
+    await this.settle();
+  }
+
+  /** The frame names the Frame select offers, in order. */
+  async frameOptions(): Promise<string[]> {
+    await this.openPanel('inspect');
+    return this.choice('Frame').locator('option').allTextContents();
+  }
+
   /** Creates a clip over every frame and plays it on the selected sprite. */
   async addAnimation(): Promise<void> {
     await this.openPanel('inspect');

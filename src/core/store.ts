@@ -22,7 +22,8 @@ import {
 import {
   cameraOf,
   canHavePhysics,
-  clampFrame,
+  atlasOf,
+  type AtlasFrame,
   collidersOf,
   composeTransform,
   containsInstance,
@@ -35,6 +36,7 @@ import {
   findPrefab,
   frameCountOf,
   frameGridOf,
+  frameNamesOf,
   guidesOf,
   isDefaultCamera,
   localTransformIn,
@@ -342,9 +344,21 @@ export interface EditorState {
    */
   setAssetSheet: (assetId: string, sheet: FrameGrid | null) => void;
   /**
-   * Creates a clip over every frame of the sprite's sheet and plays it on that
-   * sprite, in one step. There is no bare `addAnimation`: a clip nothing plays
-   * cannot be seen, so creating one and assigning it are the same act.
+   * Cuts an image by a texture atlas, or (with null) puts it back to being one
+   * picture.
+   *
+   * `setAssetSheet` one cut over, and the two are exclusive: setting either
+   * deletes the other, because an image is cut one way. Re-importing an atlas
+   * keeps every clip frame whose *name* survives and drops the rest; changing
+   * which kind of cut an image has removes its clips outright, since an index
+   * and a name cannot mean each other. One undo step.
+   */
+  setAssetAtlas: (assetId: string, frames: AtlasFrame[] | null) => void;
+  /**
+   * Creates a clip over every frame of the sprite's image — indices of a grid,
+   * or names out of an atlas — and plays it on that sprite, in one step. There
+   * is no bare `addAnimation`: a clip nothing plays cannot be seen, so creating
+   * one and assigning it are the same act.
    */
   addAnimationFor: (nodeId: string) => void;
   updateAnimation: (id: string, patch: Partial<Omit<AnimationClip, 'id' | 'assetId'>>) => void;
@@ -801,6 +815,127 @@ function mapProjectNodes(
 
   return changed ? { ...project, scenes, prefabs } : project;
 }
+
+/**
+ * The frame a node should hold once its image has been cut a different way.
+ *
+ * Within one kind of cut the document is left alone and the repair happens on
+ * read, through `resolveFrame` — a name an atlas has lost comes back the moment
+ * the atlas is re-imported with it, and rewriting it here would throw that away
+ * over a typo in somebody else's packer. What this does rewrite is a frame of
+ * the *wrong kind*: an index has no meaning against an atlas and a name has
+ * none against a grid, so switching between the two cannot be deferred.
+ *
+ * The grid branch also clamps, which is the behaviour a re-cut has always had.
+ */
+function recutFrame(asset: ImageAsset, frame: number | string): number | string {
+  const atlas = atlasOf(asset);
+  if (atlas) return typeof frame === 'string' ? frame : atlas[0].name;
+  if (typeof frame !== 'number' || !Number.isFinite(frame)) return 0;
+  return Math.min(Math.max(0, Math.floor(frame)), frameCountOf(asset) - 1);
+}
+
+/**
+ * The frames a clip should hold once its image has been cut a different way,
+ * and empty when the clip cannot survive at all.
+ *
+ * A clip is a *sequence*, so unlike a node's single frame it has no read-time
+ * fallback to lean on — `generateFrameNames` over a name the texture does not
+ * carry throws before anything is drawn. So this one repairs in the document.
+ *
+ * The two branches drop differently, and each drops the only way it can. A grid
+ * clamps, because a walk cycle should survive a one-pixel margin correction,
+ * and then de-duplicates because clamping is exactly what collapses several
+ * out-of-range indices onto one. An atlas filters, because a name has no
+ * neighbour to clamp towards — and deliberately does *not* de-duplicate, since
+ * nothing in that branch can create a repeat the user did not write, and
+ * `[a, b, c, b]` is a ping-pong.
+ *
+ * An empty answer means the clip goes: an un-cut image has no sequence to index
+ * at all, and a cut changed from one kind to the other has none this clip could
+ * ever have meant.
+ */
+function recutClipFrames(
+  asset: ImageAsset,
+  frames: readonly (number | string)[],
+): (number | string)[] {
+  const atlas = atlasOf(asset);
+  if (atlas) {
+    const names = new Set(atlas.map((frame) => frame.name));
+    return frames.filter((frame) => typeof frame === 'string' && names.has(frame));
+  }
+  if (!frameGridOf(asset)) return [];
+  const count = frameCountOf(asset);
+  return [
+    ...new Set(
+      frames
+        .filter((frame): frame is number => typeof frame === 'number')
+        .map((frame) => Math.min(frame, count - 1)),
+    ),
+  ];
+}
+
+/**
+ * Re-cutting one image: the new asset in place, every clip on it resolved
+ * against the new cut, and every node drawing it brought back into step.
+ *
+ * One traversal for both cuts and for all four types that carry a frame, so a
+ * grid and an atlas cannot come to disagree about what re-cutting means. It is
+ * `mapProjectNodes` rather than `mapProjectSprites` because a frame is about an
+ * *image*, which a sprite, an emitter, a panel and a tile sprite can all point
+ * at — and because only that traversal reaches inside a prefab definition.
+ */
+function recut(project: Project, assetId: string, next: ImageAsset): Project {
+  const removed = new Set<string>();
+  const animations = project.animations.flatMap((clip) => {
+    if (clip.assetId !== assetId) return clip;
+    const frames = recutClipFrames(next, clip.frames);
+    if (frames.length === 0) {
+      removed.add(clip.id);
+      return [];
+    }
+    return { ...clip, frames };
+  });
+
+  return mapProjectNodes(
+    {
+      ...project,
+      assets: project.assets.map((entry) => (entry.id === assetId ? next : entry)),
+      animations,
+    },
+    (node) => {
+      // Four branches rather than one condition over four types, for the reason
+      // `removeAsset` spells out: the discriminated union narrows `props` only
+      // when the check names a single type, so a combined test widens the
+      // spread to a union of all four and the result matches none of them.
+      if (node.type === 'sprite') {
+        if (node.props.assetId !== assetId) return null;
+        const frame = recutFrame(next, node.props.frame);
+        const animationId =
+          node.props.animationId && removed.has(node.props.animationId)
+            ? null
+            : node.props.animationId;
+        return frame === node.props.frame && animationId === node.props.animationId
+          ? null
+          : { ...node, props: { ...node.props, frame, animationId } };
+      }
+      if (node.type === 'particles' && node.props.assetId === assetId) {
+        const frame = recutFrame(next, node.props.frame);
+        return frame === node.props.frame ? null : { ...node, props: { ...node.props, frame } };
+      }
+      if (node.type === 'nineslice' && node.props.assetId === assetId) {
+        const frame = recutFrame(next, node.props.frame);
+        return frame === node.props.frame ? null : { ...node, props: { ...node.props, frame } };
+      }
+      if (node.type === 'tileSprite' && node.props.assetId === assetId) {
+        const frame = recutFrame(next, node.props.frame);
+        return frame === node.props.frame ? null : { ...node, props: { ...node.props, frame } };
+      }
+      return null;
+    },
+  );
+}
+
 
 /**
  * Rewrites one tilemap's props, with the node resolved through `tileMapOf`
@@ -1486,62 +1621,27 @@ export const useEditorStore = create<EditorState>((set, get) => {
       editProject((project) => {
         const asset = findAsset(project, assetId);
         if (!asset) return project;
-
         const next: ImageAsset = { ...asset };
         if (sheet) next.sheet = sheet;
         else delete next.sheet;
+        // An image is cut one way. This is the refuse-on-write half of that
+        // rule and `frameGridOf`/`atlasOf` strip on read as the other — the two
+        // look redundant and are not, exactly as the physics body's pair is:
+        // this half stops the UI offering a state that would do nothing, and
+        // the reader half is what lets every other call site need no guard.
+        if (sheet) delete next.atlas;
+        return recut(project, assetId, next);
+      }),
 
-        // Clips are indices into a grid, so re-cutting one can leave a clip
-        // naming frames that no longer exist, and un-cutting removes the grid
-        // they were indices into at all. Dropping the clips outright on a
-        // re-cut would throw away a walk cycle over a one-pixel margin
-        // correction, so they are clamped instead, and only an un-cut — where
-        // there is no longer a sequence to clamp to — removes them.
-        const count = frameCountOf(next);
-        const removed = new Set(
-          sheet
-            ? []
-            : project.animations.filter((clip) => clip.assetId === assetId).map((c) => c.id),
-        );
-        const animations = project.animations.flatMap((clip) => {
-          if (clip.assetId !== assetId) return clip;
-          if (removed.has(clip.id)) return [];
-          const frames = [...new Set(clip.frames.map((frame) => Math.min(frame, count - 1)))];
-          return { ...clip, frames };
-        });
-
-        // An emitter indexes the same grid a sprite does — `frameCountOf` is a
-        // property of the image, which is the whole point of the grid living
-        // on the asset — so its frame is clamped by the same call, in the same
-        // traversal, and for the same reason.
-        return mapProjectNodes(
-          {
-            ...project,
-            assets: project.assets.map((entry) => (entry.id === assetId ? next : entry)),
-            animations,
-          },
-          (node) => {
-            if (node.type === 'sprite') {
-              if (node.props.assetId !== assetId) return null;
-              const frame = clampFrame(next, node.props.frame);
-              const animationId =
-                node.props.animationId && removed.has(node.props.animationId)
-                  ? null
-                  : node.props.animationId;
-              return frame === node.props.frame && animationId === node.props.animationId
-                ? null
-                : { ...node, props: { ...node.props, frame, animationId } };
-            }
-            if (node.type === 'particles') {
-              if (node.props.assetId !== assetId) return null;
-              const frame = clampFrame(next, node.props.frame);
-              return frame === node.props.frame
-                ? null
-                : { ...node, props: { ...node.props, frame } };
-            }
-            return null;
-          },
-        );
+    setAssetAtlas: (assetId, frames) =>
+      editProject((project) => {
+        const asset = findAsset(project, assetId);
+        if (!asset) return project;
+        const next: ImageAsset = { ...asset };
+        if (frames) next.atlas = frames;
+        else delete next.atlas;
+        if (frames) delete next.sheet;
+        return recut(project, assetId, next);
       }),
 
     addAnimationFor: (nodeId) => {
@@ -1549,18 +1649,22 @@ export const useEditorStore = create<EditorState>((set, get) => {
       const node = findNode(activeScene(state.project).children, nodeId);
       if (!node || node.type !== 'sprite' || !node.props.assetId) return;
       const asset = findAsset(state.project, node.props.assetId);
-      // Only a sheet has a sequence to animate. A plain image is one frame, and
-      // a one-frame animation is a still picture with a frame rate.
-      if (!asset || !frameGridOf(asset)) return;
+      // Only a cut image has a sequence to animate, either way it was cut. A
+      // plain image is one frame, and a one-frame animation is a still picture
+      // with a frame rate.
+      if (!asset || (!frameGridOf(asset) && !atlasOf(asset))) return;
 
       const clip: AnimationClip = {
         id: newId(),
         name: uniqueAnimationName(state.project, 'Animation'),
         assetId: asset.id,
-        // Every frame, in order: the sheet the user has just cut is almost
+        // Every frame, in order: the image the user has just cut is almost
         // always exactly the sequence they cut it for, and trimming it is far
-        // easier than typing it out.
-        frames: Array.from({ length: frameCountOf(asset) }, (_, index) => index),
+        // easier than typing it out. For an atlas that order is the packer's
+        // own, which is the order the artist exported them in.
+        frames: atlasOf(asset)
+          ? frameNamesOf(asset)
+          : Array.from({ length: frameCountOf(asset) }, (_, index) => index),
         frameRate: DEFAULT_FRAME_RATE,
         repeat: -1,
       };
@@ -1581,10 +1685,20 @@ export const useEditorStore = create<EditorState>((set, get) => {
         const clip = project.animations.find((entry) => entry.id === id);
         if (!clip) return project;
 
-        const count = frameCountOf(findAsset(project, clip.assetId));
-        const frames = patch.frames
-          ?.filter((frame) => Number.isFinite(frame) && frame >= 0 && frame < count)
-          .map((frame) => Math.floor(frame));
+        // Validated against however the clip's own asset is cut, which is what
+        // keeps the two kinds from mixing inside one clip: a name is kept only
+        // if the atlas has it, an index only if the grid reaches it.
+        const asset = findAsset(project, clip.assetId);
+        const names = new Set(frameNamesOf(asset));
+        const count = frameCountOf(asset);
+        const frames = names.size
+          ? patch.frames?.filter((frame) => typeof frame === 'string' && names.has(frame))
+          : patch.frames
+              ?.filter(
+                (frame) =>
+                  typeof frame === 'number' && Number.isFinite(frame) && frame >= 0 && frame < count,
+              )
+              .map((frame) => Math.floor(frame as number));
         // An empty list is not a clip Phaser can create, and the field this
         // arrives from is a text box the user can empty mid-edit. Keeping the
         // frames it had is the only answer that does not lose the sequence.

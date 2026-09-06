@@ -21,6 +21,7 @@ import {
   findParent,
   frameCountOf,
   frameGridOf,
+  frameNamesOf,
   guidesOf,
   isDefaultCamera,
   physicsOf,
@@ -1048,18 +1049,42 @@ function FrameField({
   const updateProps = useEditorStore((s) => s.updateProps);
   const asset = useEditorStore((s) => findAsset(s.project, node.props.assetId));
 
-  // An emitter, a panel and a tile sprite all index the same grid and clamp
-  // against the same count, so this is the same control rather than four copies
-  // of it. Only a sprite can have a clip taking the frame over, which is why
-  // that half of the guard narrows.
-  if (!asset || !frameGridOf(asset)) return null;
+  // An emitter, a panel and a tile sprite all read the same cut, so this is the
+  // same control rather than four copies of it. Only a sprite can have a clip
+  // taking the frame over, which is why that half of the guard narrows.
+  const names = frameNamesOf(asset);
+  if (!asset || (!frameGridOf(asset) && names.length === 0)) return null;
   if (node.type === 'sprite' && node.props.animationId) return null;
+
+  // A select of names, not a text field, and that is the one place this control
+  // changes shape rather than range. A grid's frame is a number with a top and
+  // a bottom, which a number field states; a name is an *identity*, and typed
+  // by hand it is wrong by one character and the object silently draws some
+  // other frame. `FontPicker`'s argument without its free-text half — unlike a
+  // font family, a frame name is never something the machine might already
+  // have, so there is nothing for free text to reach that the list does not.
+  //
+  // A native select is also the one picker that gets an OS wheel under a thumb,
+  // and it stays one row however many frames the atlas holds, where a list of
+  // names would push the transform fields off a 390px sheet.
+  if (names.length > 0) {
+    return (
+      <div className="field-row">
+        <SelectField
+          label="Frame"
+          value={String(node.props.frame)}
+          options={names.map((name) => ({ value: name, label: name }))}
+          onChange={(frame) => updateProps(node.id, { frame })}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="field-row">
       <NumberField
         label="Frame"
-        value={node.props.frame}
+        value={typeof node.props.frame === 'number' ? node.props.frame : 0}
         min={0}
         max={frameCountOf(asset) - 1}
         onChange={(frame) => updateProps(node.id, { frame })}

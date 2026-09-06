@@ -164,13 +164,19 @@ export function SelectField({
  * A boolean toggle. No transaction wrapper: a checkbox produces exactly one
  * edit per press, so it is already one undo step.
  */
-export function CheckboxField({ label, value, onChange }: FieldProps<boolean>) {
+export function CheckboxField({
+  label,
+  value,
+  onChange,
+  disabled = false,
+}: FieldProps<boolean> & { disabled?: boolean }) {
   return (
     <label className="field field--check">
       <input
         className="field__check"
         type="checkbox"
         checked={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
       />
       <span className="field__label">{label}</span>

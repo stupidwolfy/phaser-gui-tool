@@ -189,7 +189,7 @@ test('a body and the scene gravity survive a save and an open, at schema 10', as
   // predates it opens this file and draws it identically. It reads 10 because
   // audio, then the two stretchable types, then fonts bumped it; physics still
   // did not.
-  expect(project.schemaVersion).toBe(10);
+  expect(project.schemaVersion).toBe(11);
   expect(project.scenes[0].physics).toEqual({ gravityX: 0, gravityY: 600 });
   expect(project.scenes[0].children[0].physics).toMatchObject({
     kind: 'dynamic',

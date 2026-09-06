@@ -196,7 +196,7 @@ test('the map survives a save and an open, at schema 10', async ({ editor, page 
   // with no `createDisplayObject` case leaves the object undefined and crashes,
   // where audio took it to 8 and fonts to 10 over a table an older build
   // silently drops.
-  expect(parsed.schemaVersion).toBe(10);
+  expect(parsed.schemaVersion).toBe(11);
 
   const map = parsed.scenes[0].children.find(
     (node: { name: string }) => node.name === 'Ground',

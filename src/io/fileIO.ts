@@ -1,8 +1,10 @@
 import { DEFAULT_FRAME_RATE } from '../core/defaults';
 import {
+  BASE_FRAME,
   FONT_FAMILY,
   SCHEMA_VERSION,
   type AnimationClip,
+  type AtlasFrame,
   type AudioAsset,
   type FontAsset,
   type FrameGrid,
@@ -215,6 +217,63 @@ function parseSheet(raw: unknown): FrameGrid | undefined {
 }
 
 /**
+ * The atlas table on one asset, or undefined when there is not a usable one.
+ *
+ * `parseSheet`'s sibling, and it validates more because there is more that can
+ * be wrong: a grid is four numbers, an atlas is a list of named rectangles that
+ * some other program wrote. A frame that is not a rectangle is dropped and the
+ * rest are kept — `parseAssets`' bargain, one level down — and an atlas with no
+ * readable frame at all becomes undefined, which drops the image back to being
+ * one picture rather than losing it.
+ *
+ * Whether a frame actually *fits* the image is `atlasOf`'s question, asked
+ * everywhere it is read; this only has to guarantee the shape. The one thing it
+ * does guarantee beyond shape is that a name is a non-empty string, because a
+ * name is a key in the object literal the exporter emits.
+ */
+function parseAtlas(raw: unknown): AtlasFrame[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+
+  const size = (value: unknown, min: number): number | null => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= min ? Math.floor(n) : null;
+  };
+
+  const frames: AtlasFrame[] = [];
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const entry = candidate as Partial<AtlasFrame>;
+    if (typeof entry.name !== 'string' || entry.name === '') continue;
+    // Phaser's own reserved frame name, refused here as it is at the import and
+    // for the same reason: a frame called this is dropped by `Texture.add` with
+    // no warning, and every node naming it draws the whole image.
+    if (entry.name === BASE_FRAME) continue;
+
+    const x = size(entry.x, 0);
+    const y = size(entry.y, 0);
+    const width = size(entry.width, 1);
+    const height = size(entry.height, 1);
+    if (x === null || y === null || width === null || height === null) continue;
+
+    const frame: AtlasFrame = { name: entry.name, x, y, width, height };
+    // Trim is all four numbers or none, exactly as it is on the way in: Phaser
+    // reads `spriteSourceSize` only when `trimmed` is set, and a frame claiming
+    // to be trimmed with no size to be trimmed from draws at the wrong scale.
+    const sourceWidth = size(entry.sourceWidth, 1);
+    const sourceHeight = size(entry.sourceHeight, 1);
+    if (entry.trimmed === true && sourceWidth !== null && sourceHeight !== null) {
+      frame.trimmed = true;
+      frame.sourceWidth = sourceWidth;
+      frame.sourceHeight = sourceHeight;
+      frame.offsetX = size(entry.offsetX, 0) ?? 0;
+      frame.offsetY = size(entry.offsetY, 0) ?? 0;
+    }
+    frames.push(frame);
+  }
+  return frames.length > 0 ? frames : undefined;
+}
+
+/**
  * Keeps only the assets that are actually usable, rather than failing the whole
  * open. A project with one unreadable image should still give the user back the
  * rest of their work; the sprites pointing at it fall back to the placeholder,
@@ -237,6 +296,7 @@ function parseAssets(raw: unknown): ImageAsset[] {
     }
 
     const sheet = parseSheet(asset.sheet);
+    const atlas = parseAtlas(asset.atlas);
     assets.push({
       id: asset.id,
       name: typeof asset.name === 'string' ? asset.name : 'image',
@@ -246,8 +306,17 @@ function parseAssets(raw: unknown): ImageAsset[] {
       height,
       // Spread rather than assigned so a plain image has no `sheet` key at all,
       // which is what makes `JSON.stringify` of a shape-only project identical
-      // to what it was before sheets existed.
-      ...(sheet ? { sheet } : {}),
+      // to what it was before sheets existed. The atlas follows that rule for
+      // its own reason: a project made before atlases existed has to save byte
+      // for byte what it always did.
+      //
+      // A grid wins a file that somehow holds both, because it is the older of
+      // the two and so the one an older build could have written. Nothing the
+      // editor writes can be in that state — `setAssetSheet` and
+      // `setAssetAtlas` delete each other's field — so this is the hand-edited
+      // case, and `frameGridOf`'s strip-on-read would otherwise have the atlas
+      // win by accident rather than by decision.
+      ...(sheet ? { sheet } : atlas ? { atlas } : {}),
     });
   }
   return assets;
@@ -367,11 +436,16 @@ function parseAnimations(raw: unknown, assets: ImageAsset[]): AnimationClip[] {
     if (typeof clip.id !== 'string' || !clip.id) continue;
     if (typeof clip.assetId !== 'string' || !known.has(clip.assetId)) continue;
 
-    const frames = Array.isArray(clip.frames)
-      ? clip.frames
-          .map((frame) => Number(frame))
-          .filter((frame) => Number.isFinite(frame) && frame >= 0)
-          .map((frame) => Math.floor(frame))
+    // Indices or names, matching however the clip's asset is cut. Which of the
+    // two a clip should hold is `recutClipFrames`' question and `updateAnimation`'s;
+    // this only establishes that each entry is one or the other, so a hand-edited
+    // file cannot put an object or a NaN into a list Phaser will iterate.
+    const frames: (number | string)[] = Array.isArray(clip.frames)
+      ? clip.frames.flatMap((frame): (number | string)[] => {
+          if (typeof frame === 'string') return frame === '' ? [] : [frame];
+          const index = Number(frame);
+          return Number.isFinite(index) && index >= 0 ? [Math.floor(index)] : [];
+        })
       : [];
     // A clip with no frames has nothing to play and cannot be given one.
     if (frames.length === 0) continue;
@@ -537,6 +611,17 @@ export const pickAudioFile = (): Promise<File | null> => pickFileViaInput('audio
  */
 export const pickFontFile = (): Promise<File | null> =>
   pickFileViaInput('.ttf,.otf,.woff,.woff2');
+
+/**
+ * The same, for a texture atlas's JSON.
+ *
+ * Both the extension and the mime, because a `.json` picked out of a folder
+ * reports `application/json` on every platform this runs on — unlike a font —
+ * but a packer that writes `.atlas` or nothing at all is common enough that the
+ * extension alone would hide files the user can see.
+ */
+export const pickAtlasFile = (): Promise<File | null> =>
+  pickFileViaInput('.json,application/json');
 
 function pickFileViaInput(accept: string): Promise<File | null> {
   return new Promise((resolve) => {

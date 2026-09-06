@@ -1,5 +1,6 @@
 import { useEditorStore } from '../core/store';
 import {
+  atlasOf,
   EMPTY_TILE,
   findAsset,
   frameCountOf,
@@ -104,7 +105,16 @@ export function TilePalette({ assetId }: { assetId: string | null }) {
   // unsliced image is one picture, not a set of tiles, and offering its single
   // "frame" as a tile would paint a map out of whole sprites.
   if (!frameGridOf(asset)) {
-    return (
+    // An atlas gets its own sentence, because the usual advice would destroy
+    // it: "slice this image" over an atlas-cut image drops the atlas and every
+    // clip built on it. A tileset needs a uniform tile size and an atlas is the
+    // absence of one, which is Phaser's limit rather than this editor's.
+    return atlasOf(asset) ? (
+      <p className="hint">
+        This image is cut into named frames. A tileset needs a uniform grid, so choose
+        another image — or remove the atlas above and slice it instead.
+      </p>
+    ) : (
       <p className="hint">
         Slice this image into tiles above — its frame size is the map's tile size.
       </p>

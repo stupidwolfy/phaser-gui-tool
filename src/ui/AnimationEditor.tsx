@@ -4,8 +4,10 @@ import {
   animationsForAsset,
   findAnimation,
   findAsset,
+  atlasOf,
   frameCountOf,
   frameGridOf,
+  frameNamesOf,
   type AnimationClip,
 } from '../core/schema';
 import { CheckboxField, NumberField, SelectField, TextField } from './fields';
@@ -29,14 +31,25 @@ const NO_ANIMATION = '';
  * and unedittable — while "0-11" is both, and is what a person would write.
  * Runs of one stay bare, so "0-3, 7" is exactly as short as it can be.
  */
-export function formatFrameList(frames: number[]): string {
+export function formatFrameList(frames: readonly (number | string)[]): string {
+  // Names are written out and never collapsed, and that is not a gap. A range
+  // is arithmetic on indices; `hero_run_01-hero_run_04` would mean inventing a
+  // naming convention and reading it back — which is `generateFrameNames`'
+  // `prefix`/`zeroPad` scheme entering the document as a second way to say what
+  // a list already says, and it would only work on names that happen to be
+  // numbered. A comma list is what a person would write for names anyway.
+  if (frames.some((frame) => typeof frame === 'string')) return frames.join(', ');
+
+  const indices = frames as readonly number[];
   const parts: string[] = [];
-  for (let i = 0; i < frames.length; ) {
+  for (let i = 0; i < indices.length; ) {
     let end = i;
-    while (end + 1 < frames.length && frames[end + 1] === frames[end] + 1) end += 1;
+    while (end + 1 < indices.length && indices[end + 1] === indices[end] + 1) end += 1;
     // Two in a row is written out: "0-1" is no shorter than "0, 1" and reads
     // as though a range were meant to be longer.
-    parts.push(end > i + 1 ? `${frames[i]}-${frames[end]}` : frames.slice(i, end + 1).join(', '));
+    parts.push(
+      end > i + 1 ? `${indices[i]}-${indices[end]}` : indices.slice(i, end + 1).join(', '),
+    );
     i = end + 1;
   }
   return parts.join(', ');
@@ -52,7 +65,20 @@ export function formatFrameList(frames: number[]): string {
  * runs on every keystroke, so half-typed input is the normal case and must not
  * throw the rest of the list away.
  */
-export function parseFrameList(text: string): number[] {
+export function parseFrameList(text: string, names?: readonly string[]): (number | string)[] {
+  // A cut of names parses as names, full stop — a frame called "3" is a legal
+  // atlas frame and coercing it to the number 3 would silently ask a grid
+  // question of an atlas. Which cut applies is the *asset's* answer, passed in,
+  // rather than something sniffed per part where a half-typed list could
+  // disagree with itself halfway down.
+  if (names && names.length > 0) {
+    const known = new Set(names);
+    return text
+      .split(',')
+      .map((part) => part.trim())
+      .filter((part) => known.has(part));
+  }
+
   const frames: number[] = [];
   for (const part of text.split(',')) {
     const range = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(part);
@@ -89,15 +115,17 @@ export function AnimationEditor({
   const clip = useEditorStore((s) => findAnimation(s.project, animationId));
   const addAnimationFor = useEditorStore((s) => s.addAnimationFor);
 
-  // Only a sheet has a sequence to animate: a plain image is one frame, and a
-  // one-frame animation is a still picture with a frame rate.
-  if (!asset || !frameGridOf(asset)) {
+  // Only a cut image has a sequence to animate, either way it was cut: a plain
+  // image is one frame, and a one-frame animation is a still picture with a
+  // frame rate.
+  if (!asset || (!frameGridOf(asset) && !atlasOf(asset))) {
     return (
       <p className="hint">
-        Slice this image into frames above to animate it.
+        Slice this image into frames above, or attach an atlas, to animate it.
       </p>
     );
   }
+  const names = frameNamesOf(asset);
 
   return (
     <>
@@ -117,12 +145,20 @@ export function AnimationEditor({
         New animation from all {frameCountOf(asset)} frames
       </button>
 
-      {clip && <ClipFields clip={clip} frameCount={frameCountOf(asset)} />}
+      {clip && <ClipFields clip={clip} frameCount={frameCountOf(asset)} names={names} />}
     </>
   );
 }
 
-function ClipFields({ clip, frameCount }: { clip: AnimationClip; frameCount: number }) {
+function ClipFields({
+  clip,
+  frameCount,
+  names,
+}: {
+  clip: AnimationClip;
+  frameCount: number;
+  names: readonly string[];
+}) {
   const updateAnimation = useEditorStore((s) => s.updateAnimation);
   const removeAnimation = useEditorStore((s) => s.removeAnimation);
   const uses = useEditorStore((s) => countAnimationUses(s.project, clip.id));
@@ -141,7 +177,7 @@ function ClipFields({ clip, frameCount }: { clip: AnimationClip; frameCount: num
       <TextField
         label="Frames"
         value={formatFrameList(clip.frames)}
-        onChange={(text) => updateAnimation(clip.id, { frames: parseFrameList(text) })}
+        onChange={(text) => updateAnimation(clip.id, { frames: parseFrameList(text, names) })}
       />
       <div className="field-row">
         <NumberField
@@ -158,7 +194,9 @@ function ClipFields({ clip, frameCount }: { clip: AnimationClip; frameCount: num
         onChange={(loop) => updateAnimation(clip.id, { repeat: loop ? -1 : 0 })}
       />
       <p className="hint">
-        Frames 0–{frameCount - 1} of this image.
+        {names.length > 0
+          ? `Named frames of this atlas, in order, separated by commas: ${names.join(', ')}.`
+          : `Frames 0–${frameCount - 1} of this image.`}
         {uses > 1 && ` Shared by ${uses} sprites — editing it changes all of them.`}
       </p>
       <button
