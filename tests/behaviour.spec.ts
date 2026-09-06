@@ -264,7 +264,7 @@ test('solid tiles are outlined while painting, and stop being when unmarked', as
   expect((await editor.findDrawn(BODY)).count).toBe(0);
 });
 
-test('solid tiles, a collision and controls survive a save and an open, at schema 10', async ({
+test('solid tiles, a collision and controls survive a save and an open, at schema 12', async ({
   editor,
 }, testInfo) => {
   await editor.clearScene();
@@ -294,8 +294,7 @@ test('solid tiles, a collision and controls survive a save and an open, at schem
   // in on `scenes`, which `parseProject` passes through verbatim — so a build
   // that predates them opens this file, draws it identically and carries them
   // back out on a re-save. The guides, physics and camera case exactly. It
-  // reads 10 because fonts added a project-level table; behaviour did not.
-  expect(project.schemaVersion).toBe(11);
+  expect(project.schemaVersion).toBe(12);
   expect(project.scenes[0].children[0].controls).toEqual({
     mode: 'platformer',
     scheme: 'wasd',
@@ -303,7 +302,9 @@ test('solid tiles, a collision and controls survive a save and an open, at schem
     jump: 505,
     touch: true,
   });
-  expect(project.scenes[0].children[1].props.collides).toEqual([0, 2]);
+  // On the layer since v12, because one tileset is a wall in the level and
+  // scenery in the layer behind it.
+  expect(project.scenes[0].children[1].props.layers[0].collides).toEqual([0, 2]);
   expect(project.scenes[0].colliders).toHaveLength(1);
   expect(project.scenes[0].colliders[0]).toMatchObject({ kind: 'collide' });
 

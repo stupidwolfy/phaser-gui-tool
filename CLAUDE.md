@@ -57,6 +57,10 @@ picked on the node rather than typed from memory, and an export that carries the
 so text finally looks the same on a machine that has never heard of the font. Iteration 24
 (shipped) gave an image a second way to be cut: a texture atlas, named frames of any size
 imported from a packer's JSON, and with it a `frame` that is a name rather than an index.
+Iteration 25 (shipped) made a level out of more than one pass: a tilemap node holds an
+ordered list of layers over one shared tileset and one shared grid, each with its own
+tiles, its own solid frames and its own visibility — the first iteration to close a hole
+by *nesting* an existing prop rather than adding a type or a table.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -778,8 +782,10 @@ change for that, which is the point of the shape — `activeScene`, `withActiveS
 
 ## Tilemaps
 
-A `tilemap` node is a grid of tile indices drawn as a real `Phaser.Tilemaps.TilemapLayer`,
-so what the canvas shows is what the export builds. Two decisions carry the rest of it.
+A `tilemap` node is an ordered list of layers of tile indices, drawn as real
+`Phaser.Tilemaps.TilemapLayer`s, so what the canvas shows is what the export builds. Two
+decisions carry the rest of it, and a third — see "Tilemap layers" below — arrived in
+iteration 25.
 
 - **A tileset is an image that has already been sliced, and there is no tileset type.**
   `ImageAsset.sheet` is the four numbers `addTilesetImage` takes, under the same names,
@@ -885,6 +891,130 @@ so what the canvas shows is what the export builds. Two decisions carry the rest
   so `useEditorStore((s) => tileMapOf(...))` is an infinite render loop — React error #185,
   found the first time the suite ran. Select the project and derive outside the selector, or
   reach for `useShallow` the way `useSelectionNodes` does.
+
+### Tilemap layers
+
+`TilemapProps.layers: TilemapLayerDoc[]` is the level, back to front: one tileset, one
+grid, and as many passes over it as the user wants. It is iteration 14's first deliberate
+hole closed, and it is the first feature here to close one by *nesting* an existing prop
+rather than by adding a type or a table.
+
+- **The tileset and the grid stayed on the map; only the tiles and the walls moved.** That
+  split is the one this whole file keeps making: the tile size is *derived* from the
+  tileset, so a per-layer tileset would let two layers of one map disagree about how big a
+  cell is — the second field over one number that `ImageAsset.sheet` and a sprite's missing
+  width both exist to refuse. The payoff is that `collectAssets`, `usedIn`,
+  `countAssetUses`, `removeAsset`, `recut` and `tilesetKeyFor` needed **no edit at all**,
+  which on this checklist reads exactly like a step that was forgotten.
+- **`collides` moved to the layer, and iteration 20 had already written the sentence that
+  says why.** Arguing solidity onto the node rather than onto the asset, it said: *"one
+  tileset is a wall in the level and scenery in the layer behind it."* That described a
+  feature that did not exist. It does now, and it is the whole of the argument — it is the
+  nine-slice insets' call again, one level in.
+- **`tileMapOf` is still the only reader, and it carries the migration.** It answers seven
+  questions now rather than five, and the new pair are "does this map have layers at all,
+  or is it a file written before they existed" and "is every layer id usable". A pre-v12
+  grid becomes one layer called `Layer 1` under `LEGACY_LAYER_ID` — a *constant*, because a
+  derived id has to be stable across calls: React keys and the store's `activeLayerId` both
+  hold it. Ids are also de-duplicated there, since a hand-edited file repeating one would
+  have a press on one row edit another.
+- **Each layer's `data` and `collides` keep their identity; the layer objects do not.**
+  Three caches read the first — `applyNode`'s per-layer tile diff, `drawPaintGrid`'s
+  signature gate, and the store's "nothing happened, no undo step". Nothing compares the
+  second, so building fresh layer objects per call costs nothing. `tileMapOf` is still React
+  error #185 in a selector, for the eighth time.
+- **The document holds one shape, and `editTilemapProps` is where that becomes true.**
+  Every write deletes the pre-v12 `data`/`collides` pair, whether or not the patch named
+  `layers` — `setAssetSheet` and `setAssetAtlas` deleting each other's field, one type over.
+  `editTilemapLayer` is its sibling rather than a fifth argument to it, because a
+  `Partial<TilemapProps>` merged at the top level cannot say "patch layer N".
+- **`resizeTilemap` fans out over every layer in the one step.** That is the same argument
+  that made it an action rather than two `updateProps` calls, N times over: reinterpreting a
+  flat array under a new column count shifts every row after the first, so a resize that
+  reached only the layer being painted would leave the rest silently sheared.
+- **`activeLayerId` lives beside `paintingId` and is pruned with it.** Editor state, not
+  saved, not undoable. It has one more way to go stale than the mode does —
+  `removeTilemapLayer` can take the layer out from under it without touching the node — and
+  null is a legal answer, since `tileLayerOf` reads it as the frontmost. That is why nothing
+  downstream ever has to guess a replacement.
+- **`removeTilemapLayer` refuses the last layer**, which is `removeScene`'s rule for
+  `removeScene`'s reason: a map with no layers has nothing to paint on and nothing for
+  `tileLayerOf` to answer with. "Delete the only layer" means "empty it", which the Clear
+  button already does. The button is disabled and says why rather than doing nothing.
+- **The renderer wraps the layers in a Container; the exporter emits them as siblings. That
+  disagreement is deliberate and each side is right for its own reason.** In the editor a
+  node is one entry in `displayObjects`, so several drawn things need something to hold
+  them — the particles wrapper exactly, safety argument included: `syncNodes` recurses into
+  a container *by node type*, so nothing walks into this one and `reparent`'s index
+  assertion never sees it. In the export a `TilemapLayer` *is* what Arcade collides against,
+  so a collider naming the map has to name a layer; a wrapper would leave it with a
+  Container and nothing to bind to. Siblings are also created in sequence, which is exactly
+  the display-list order the layer order asks for.
+- **The Container would have broken `localRectOf`, and the fix was to reuse rather than to
+  branch.** A tilemap layer's origin is its top-left where a Container's box is centred, so
+  `applyNode` publishes the map's known box into `containerBounds` through
+  `publishContainerBounds` — the half of `applyContainerBounds` that does not measure. The
+  outline, the hit area, both handles, the published bounds and the snapping all keep
+  reading one function, and the half-size hit-area shift stays written once. A second copy
+  of that shift is a second chance to get the sign wrong, and a wrong sign is a map
+  grabbable everywhere except where it is drawn.
+- **`tilemapSignatureOf` gained the layer ids in order, and nothing else.** A layer added,
+  removed or moved is a different set of Phaser maps rather than a changed one, so
+  `syncNodes`' existing "the shape changed, rebuild it" branch does the whole job. Tile
+  contents and `visible` stay out: both are in-place setters, and folding either in would
+  rebuild the stack on every stroke.
+- **`buildTilemapHelper` was not touched by a character**, which is the part of iteration
+  14's prediction that turned out to cost nothing: it already builds one map with one layer
+  and returns it, and that is one document layer. `constructorFor` emits the *first* layer
+  exactly as it always did, and `emitNode` emits the rest beside it — so a map with one
+  layer exports byte for byte what it exported before. The first layer's `TILEMAPS` key is
+  still `toIdentifier(node.name, …)`; the rest take the node's name and theirs.
+- **`emitNode` now answers with a list of bindings rather than one.** Everything but a
+  tilemap emits exactly one and its callers read `[0]`; the container `add([...])` list and
+  a prefab factory's `root.add` take all of them. A collider row naming a tilemap emits one
+  line per layer, because a layer collides through its *own* solid tiles — a row that named
+  only the first would have the walls stop nothing the moment they were painted on the layer
+  above the floor. `collidersOf` already refuses two tilemaps, so at most one side is ever
+  longer than one.
+- **A hidden layer is still built and still collides.** Visibility is about drawing, exactly
+  as it is for a hidden node whose Arcade body is emitted all the same. `setVisible(false)`
+  is its own statement rather than part of the chain, because the chain is `modifiersFor`'s
+  and belongs to the node.
+- **The layer list is in the inspector; the layer picker is on the paint bar.** The brush
+  already splits that way and for that reason: on a phone the Properties panel is a sheet
+  over the canvas being painted, so switching from the floor to the walls and then placing a
+  tile could never be seen at once. Layers are deliberately **not** rows in the scene tree —
+  a layer is not a `GameObjectNode`, and the tree's twisty, drag-to-reparent, selection and
+  delete are all built on nodes, so a layer row there would reject most of what the rows
+  above it accept.
+- **Listed in array order, front-most last**, which is the scene tree's rule and for its
+  reason: the array order *is* the draw order, and showing it front-first would put an index
+  flip between every press and the store. The bar's sheet reverses it, because that list is
+  read top-down under a thumb rather than as the document.
+- **Every accessible name carries "layer" or the verb it needs** — `Paint on <layer>`,
+  `Hide layer <layer>`, `Delete layer <layer>`, `Move <layer> forward`. The tree already owns
+  `Hide <name>` and `Delete <name>` and the palettes own `Tile N` and `Erase tiles`, and the
+  suite matches a name exactly: a layer called the same thing as an object would otherwise
+  put two identical buttons on the page. The prefab buttons' `+ ` prefix rule, a fourth time.
+  `pickLayerInBar` scopes to the bar sheet's own group for the same reason — on desktop the
+  inspector is not hidden, so both controls are on the page at once, which is the point of
+  them writing one field.
+- **The stroke fixes its layer at `beginPaint`**, the way the moving set is measured once at
+  `DRAG_START`: a gesture is about one thing, and a layer switched mid-stroke would have one
+  drag write two arrays inside one undo step.
+- **`SCHEMA_VERSION` bumped to 12, on the silent-data-loss half of the rule and only that
+  half — and it is the worst instance of it so far.** No new `NodeType`, so a v11
+  `createDisplayObject` has a case for everything in the file. What a v11 build does is read
+  `props.data` as `undefined`, have `tileMapOf` pad it to a grid of `EMPTY_TILE`, draw an
+  empty map, and re-save the file that way — every layer of every level gone. The v10 font
+  case and the v11 atlas case both left something visibly wrong; this one leaves a map that
+  is merely empty, which is indistinguishable from one nobody has painted yet.
+- **The suite's instrument is colour, and the claims are about *which* layer.** The fixture
+  gives every tile a solid colour of its own, so "the second layer draws over the first",
+  "hiding one shows what is under it" and "moving one back swaps them" are each one centroid
+  and one count. The resize claim is the sharp one: it hides a layer, resizes, and then shows
+  it — which is the only way to see that the layer the panel was *not* about was re-shaped
+  too.
 
 ## Nine-slice panels and tile sprites
 
@@ -2568,7 +2698,8 @@ tests/
   animation.spec.ts         slicing a sheet, drawing one frame, playing a clip
   atlas.spec.ts             an image cut into named frames of unequal size, and repacked
   prefabs.spec.ts           saving a prefab, placing it twice, editing it once
-  tilemap.spec.ts           slicing a tileset, painting it, filling and erasing
+  tilemap.spec.ts           slicing a tileset, painting it, filling and erasing, and
+                            layering it: which one is on top, hidden, moved and resized
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
@@ -3020,12 +3151,27 @@ a format break, and the editor's whole clip story is built around a Sprite's
 array-valued prop in the schema and the second `cloneWithNewIds` special case, for a look a
 single frame mostly covers.
 
-Tilemaps shipped in iteration 14 with three deliberate holes, one of which iteration 20
-then closed: **one layer per map**, **no per-tile collision**, and **no Tiled import**. The
-first is a loosening rather than a format break — `TilemapProps` would grow a list of layers
-where it has one `data`, and the exporter a `createLayer` per entry — but each one is its
-own `putTileAt` diff and a layer picker in the paint bar, which is a second mode inside a
-mode. The second is the one that closed, and it is worth reading what it used to say —
+Tilemaps shipped in iteration 14 with three deliberate holes, two of which have since
+closed: **one layer per map**, **no per-tile collision**, and **no Tiled import**. The
+first closed in iteration 25, and it is worth reading the prediction beside the work,
+because it was half right and wrong in an interesting direction. It said `TilemapProps`
+"would grow a list of layers where it has one `data`, and the exporter a `createLayer` per
+entry" — both exactly right, and the second is the half that turned out to cost *nothing*:
+`buildTilemapHelper` already builds one map with one layer and returns it, which is one
+document layer, so the emitted helper was not touched by a character. What it got wrong was
+"each one is its own `putTileAt` diff", which read as a warning and is simply true and
+cheap: the diff was already per array, so it became a loop over an array of arrays. The
+real cost was the two things the prediction did not name — where `collides` lives (see
+Tilemap layers above, and note that iteration 20 had already written the sentence that
+settles it), and the renderer needing a Container where the exporter wanted siblings. What
+is left: **no per-layer tileset**, refused for the reason a sprite has no width — the tile
+size is derived from the tileset, so two layers of one map could disagree about how big a
+cell is. **No per-layer alpha**, which is a field and would be a second answer to the
+node's own. **No scroll factor and no parallax**, which is the tile sprite's refused scroll
+speed one type over: a layer that drifts is behaviour over time, and a layer that moves at
+a different rate to the camera is a second camera's question. And **no layer inside a
+layer**, which is not a thing Phaser has. The second hole is the one iteration 20 closed,
+and it is worth reading what it used to say —
 "`setCollision([1, 2, 3])` is a line the user writes, and a per-tile flag in the schema is
 the beginning of a behaviour model" — beside where the line actually landed: which tiles are
 solid turned out to be a standing fact about the world, and what a solid tile *does* to

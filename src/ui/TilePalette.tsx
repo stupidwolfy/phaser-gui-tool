@@ -166,10 +166,13 @@ export function TilePalette({ assetId }: { assetId: string | null }) {
  */
 export function SolidPalette({
   nodeId,
+  layerId,
   assetId,
   collides,
 }: {
   nodeId: string;
+  /** Which layer these walls belong to — solidity is per layer since v12. */
+  layerId: string | null;
   assetId: string | null;
   collides: number[];
 }) {
@@ -194,7 +197,7 @@ export function SolidPalette({
           // Never the bare "Tile 0" the brush grid uses: the two grids are in
           // one panel, and the suite locates a control by its exact name.
           label={`Solid tile ${index}`}
-          onPick={() => setTileSolid(nodeId, index, !solid.has(index))}
+          onPick={() => setTileSolid(nodeId, layerId, index, !solid.has(index))}
         />
       ))}
     </div>

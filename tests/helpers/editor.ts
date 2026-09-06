@@ -348,6 +348,87 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * Adds a layer to the selected map. Adding also selects it, exactly as adding
+   * an object selects it — so a test paints on the new layer without a second
+   * call, and the multi-select suite's trap arrives here too.
+   */
+  async addLayer(): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByRole('button', { name: '+ Layer', exact: true }).click();
+    await this.settle();
+  }
+
+  /**
+   * Makes one layer the one the brush, the fill and the collision grid are
+   * about, from the inspector's list.
+   *
+   * `.first()` because the paint bar carries a row with the same accessible
+   * name while paint mode is on, which is the whole point of it being there —
+   * `pickLayerInBar` scopes to that sheet's own group to reach it deliberately.
+   */
+  async selectLayer(name: string): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect')
+      .getByRole('button', { name: `Paint on ${name}`, exact: true })
+      .first()
+      .click();
+    await this.settle();
+  }
+
+  /** The same choice from the bar over the canvas, mid-gesture. */
+  async pickLayerInBar(name: string): Promise<void> {
+    await this.closePanels();
+    await this.page.getByRole('button', { name: 'Choose a layer', exact: true }).click();
+    // Scoped to the bar's own sheet: on desktop the inspector is not hidden by
+    // `closePanels`, so it still carries a row with this exact name — which is
+    // the point of the two controls writing one field, and the reason this
+    // locator has to say which of them it means.
+    await this.page
+      .getByRole('group', { name: 'Layers', exact: true })
+      .getByRole('button', { name: `Paint on ${name}`, exact: true })
+      .click();
+    await this.settle();
+  }
+
+  /** Renames the active layer. */
+  async renameLayer(name: string): Promise<void> {
+    await this.setField('Layer name', name);
+  }
+
+  /** Shows or hides one layer. */
+  async setLayerVisible(name: string, visible: boolean): Promise<void> {
+    await this.openPanel('inspect');
+    const button = this.panel('inspect').getByRole('button', {
+      name: visible ? `Show layer ${name}` : `Hide layer ${name}`,
+      exact: true,
+    });
+    if ((await button.count()) > 0) await button.click();
+    await this.settle();
+  }
+
+  /** Moves one layer forward or back in the draw order. */
+  async moveLayer(name: string, direction: 'forward' | 'back'): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect')
+      .getByRole('button', { name: `Move ${name} ${direction}`, exact: true })
+      .click();
+    await this.settle();
+  }
+
+  /** Deletes one layer, or reports that the button refuses. */
+  async removeLayer(name: string): Promise<boolean> {
+    await this.openPanel('inspect');
+    const button = this.panel('inspect').getByRole('button', {
+      name: `Delete layer ${name}`,
+      exact: true,
+    });
+    if (await button.isDisabled()) return false;
+    await button.click();
+    await this.settle();
+    return true;
+  }
+
   /** Fills every cell of the selected map with the current brush. */
   async fillTiles(): Promise<void> {
     await this.openPanel('inspect');

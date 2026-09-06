@@ -69,7 +69,10 @@ on a desktop.
   frames is its tileset, and **Edit tiles** turns the canvas into a paint surface — tap or
   drag to lay the tile you picked, ⌫ to rub tiles out, ✓ when you are done. Set the map's
   size in columns and rows, fill the whole thing with one tile, and export it as a real
-  `make.tilemap` / `addTilesetImage` / `createLayer`, tile data and all
+  `make.tilemap` / `addTilesetImage` / `createLayer`, tile data and all. A map holds as
+  many **layers** as you like over the one tileset — a floor, the walls that stand on it,
+  the leaves in front — each with its own tiles, its own solid frames and its own show/hide,
+  reorderable back to front, and switchable from the paint bar without leaving the canvas
 - Throw **particles**: `+ Particles` adds an emitter, an imported image is what it
   throws, and the inspector shapes it — lifespan, how fast and in which directions, how it
   grows and fades, how many and how often, gravity, tint and blend mode. It sits still
@@ -196,12 +199,14 @@ rather than code.
 
 **Solid tiles.** Under Collision in a tilemap's inspector, pick the frames of its tileset
 that should stop things — walls, floors. They outline green on the map while you paint, and
-export as `layer.setCollision([...])`.
+export as `layer.setCollision([...])`. Solidity belongs to the *layer*, so one tileset can
+be a wall on the layer you are painting and scenery on the layer behind it.
 
 **Collisions.** Under Collisions in the scene panel, name two things that should meet:
 Solid stops them, Overlap only reports the touch. A tilemap is a valid side, so "the player
-stands on the ground" is one row. It exports as a real `this.physics.add.collider(...)` or
-`overlap(...)`, written after the objects it names.
+stands on the ground" is one row — and a multi-layer map contributes one collider per
+layer, so walls painted above the floor still stop things. It exports as a real
+`this.physics.add.collider(...)` or `overlap(...)`, written after the objects it names.
 
 **Controls.** Any object with a dynamic body can be given **Player controls** — Platformer
 (walk and jump) or Top-down (walk any way), on the arrow keys or WASD, with a walk speed and

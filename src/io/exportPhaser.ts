@@ -873,11 +873,27 @@ function buildAnimationLines(
  * one module-level object, so two scenes' maps sit side by side in it rather
  * than each scene carrying a copy of the table's shape.
  */
+interface UsedTilemapLayer {
+  /** Its row in the `TILEMAPS` table. */
+  key: string;
+  /** What the emitted object is called and named, when it is not the first. */
+  name: string;
+  visible: boolean;
+  data: number[];
+  solid: number[];
+}
+
 interface UsedTilemap {
   map: TileMap;
-  /** Its row in the `TILEMAPS` table, and the asset key it draws from. */
-  key: string;
   assetKey: string;
+  /**
+   * One entry per document layer, in draw order, and never empty.
+   *
+   * The first layer's key is `toIdentifier(node.name, …)` — exactly what a
+   * single-layer map's key has always been, which is the whole of why a project
+   * that predates layers exports byte for byte what it exported before.
+   */
+  layers: UsedTilemapLayer[];
 }
 
 function collectTilemaps(
@@ -894,10 +910,20 @@ function collectTilemaps(
       if (node.type === 'tilemap' && node.props.assetId) {
         const asset = assets.get(node.props.assetId);
         if (asset && frameGridOf(asset.asset)) {
+          const map = tileMapOf(project, node.props);
           used.set(node.id, {
-            map: tileMapOf(project, node.props),
-            key: toIdentifier(node.name, keys),
+            map,
             assetKey: asset.key,
+            layers: map.layers.map((layer, index) => ({
+              // The first layer answers to the node's own name and the rest to
+              // the node's name and theirs, so one layer's key is unchanged and
+              // a reader of a multi-layer export can tell which row is which.
+              key: toIdentifier(index === 0 ? node.name : `${node.name} ${layer.name}`, keys),
+              name: index === 0 ? node.name : `${node.name} ${layer.name}`,
+              visible: layer.visible,
+              data: layer.data,
+              solid: layer.collides,
+            })),
           });
         }
       }
@@ -925,15 +951,16 @@ function buildTilemapTable(used: Map<string, UsedTilemap>, indent: string): stri
     ' * Tile data from the editor, row by row. -1 is an empty cell.',
     ' */',
     'const TILEMAPS = {',
-    ...[...used.values()].flatMap(({ map, key }) => [
-      `  ${str(key)}: [`,
-      ...Array.from(
-        { length: map.rows },
-        (_, row) =>
-          `    [${map.data.slice(row * map.columns, (row + 1) * map.columns).join(', ')}],`,
-      ),
-      '  ],',
-    ]),
+    ...[...used.values()].flatMap(({ map, layers }) =>
+      layers.flatMap(({ key, data }) => [
+        `  ${str(key)}: [`,
+        ...Array.from(
+          { length: map.rows },
+          (_, row) => `    [${data.slice(row * map.columns, (row + 1) * map.columns).join(', ')}],`,
+        ),
+        '  ],',
+      ]),
+    ),
     '};',
   ];
   return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
@@ -1229,6 +1256,38 @@ interface EmitContext {
  * Null means "emit nothing for this node": a sprite with no image chosen, or an
  * instance whose prefab is gone. Neither has a valid constructor call to make.
  */
+/**
+ * One `createTilemapLayer(...)` call, for one layer of one map.
+ *
+ * Shared by `constructorFor`, which emits the first layer as the node's own
+ * binding, and by `emitNode`, which emits the rest beside it — so the two
+ * cannot disagree about a margin or a tile size, which is the same reason
+ * `EditorScene` and this file are both handed `tileMapOf`'s answer.
+ *
+ * The solid list is inline where the tile data is tabled, and the split is the
+ * one `TILEMAPS` was created by: the data is thousands of numbers and the thing
+ * a reader moves out to a JSON file, while which frames are walls is a handful
+ * of them and a fact about the tileset rather than about this level. Putting it
+ * in the table would turn every row from an array into an object for one short
+ * line.
+ */
+function tilemapCall(
+  entry: UsedTilemap,
+  index: number,
+  ctx: EmitContext,
+  x: number,
+  y: number,
+): string {
+  const grid = frameGridOf(entry.map.asset);
+  const layer = entry.layers[index];
+  return (
+    `${ctx.tilemapFn}(${ctx.receiver}, ${num(x)}, ${num(y)}, ${str(entry.assetKey)}, ` +
+    `TILEMAPS[${str(layer.key)}], ${num(entry.map.tileWidth)}, ${num(entry.map.tileHeight)}, ` +
+    `${num(grid ? grid.margin : 0)}, ${num(grid ? grid.spacing : 0)}, ` +
+    `[${layer.solid.join(', ')}])`
+  );
+}
+
 function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
   const { x, y } = node.transform;
   const { assets: used, animations, receiver } = ctx;
@@ -1292,23 +1351,11 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
     case 'tilemap': {
       const entry = ctx.tilemaps.get(node.id);
       if (!entry) return null;
-      const grid = frameGridOf(entry.map.asset);
+      // The *first* layer, and the rest are emitted beside it by `emitNode`.
       // A call rather than an `add.*`, exactly as an instance is: the helper
       // does the adding, and because it returns the layer every modifier below
       // — and the `setName` after them — chains onto it unchanged.
-      //
-      // The solid list is inline where the tile data is tabled, and the split
-      // is the one `TILEMAPS` was created by: the data is thousands of numbers
-      // and the thing a reader moves out to a JSON file, while which frames are
-      // walls is a handful of them and a fact about the tileset rather than
-      // about this level. Putting it in the table would turn every row from an
-      // array into an object for the sake of one short line.
-      return (
-        `${ctx.tilemapFn}(${receiver}, ${num(x)}, ${num(y)}, ${str(entry.assetKey)}, ` +
-        `TILEMAPS[${str(entry.key)}], ${num(entry.map.tileWidth)}, ${num(entry.map.tileHeight)}, ` +
-        `${num(grid ? grid.margin : 0)}, ${num(grid ? grid.spacing : 0)}, ` +
-        `[${entry.map.collides.join(', ')}])`
-      );
+      return tilemapCall(entry, 0, ctx, x, y);
     }
     case 'particles': {
       const entry = node.props.assetId ? used.get(node.props.assetId) : undefined;
@@ -1518,7 +1565,7 @@ function emitNode(
   used: Set<string>,
   lines: string[],
   nested = false,
-): string | null {
+): string[] | null {
   const constructor = constructorFor(node, ctx);
   if (constructor === null) {
     // Say so rather than skipping silently: an object missing from the export
@@ -1542,12 +1589,46 @@ function emitNode(
   // coordinates, and a child of a Container has neither.
   const body = physicsOf(node, !nested);
   if (body) lines.push(...bodyLines(id, body, ctx));
+
+  // A tilemap's further layers, each one its own object beside the first.
+  //
+  // Siblings rather than a wrapper Container, and the reason is the one the
+  // renderer answers the other way round. A `TilemapLayer` *is* the thing
+  // Arcade collides against, so a collider naming this map has to name a layer;
+  // wrapping them would leave it with a Container and nothing to bind to. They
+  // are also created in sequence, which is exactly the display-list order the
+  // document's layer order asks for. And because the first layer is emitted by
+  // `constructorFor` unchanged, a map with one layer emits what it always did,
+  // character for character.
+  //
+  // Every modifier is applied to each layer rather than to one: the transform,
+  // the angle, the scale and the alpha belong to the node, and the layers are
+  // the same object drawn in several passes.
+  const ids = [id];
+  const tilemap = node.type === 'tilemap' ? ctx.tilemaps.get(node.id) : undefined;
+  if (tilemap) {
+    const { x, y } = node.transform;
+    tilemap.layers.slice(1).forEach((layer, offset) => {
+      const layerId = toIdentifier(layer.name, used);
+      const call = tilemapCall(tilemap, offset + 1, ctx, x, y);
+      lines.push(`const ${layerId} = ${call}${chain};`);
+      lines.push(`${layerId}.setName(${str(layer.name)});`);
+      ids.push(layerId);
+    });
+    // A hidden layer is still built and still collides — visibility is about
+    // drawing, exactly as it is for a hidden node whose Arcade body is emitted
+    // all the same. It is a statement rather than part of the chain because the
+    // chain is `modifiersFor`'s and belongs to the node, and the first layer's
+    // has already been written by the time this is known.
+    tilemap.layers.forEach((layer, index) => {
+      if (!layer.visible) lines.push(`${ids[index]}.setVisible(false);`);
+    });
+  }
   lines.push('');
 
   if (node.type === 'container' && node.children.length > 0) {
     const childIds = node.children
-      .map((child) => emitNode(child, ctx, used, lines, true))
-      .filter((childId): childId is string => childId !== null);
+      .flatMap((child) => emitNode(child, ctx, used, lines, true) ?? []);
     // Added after the children are built, and in document order: a container's
     // list order is its draw order, exactly as the scene's array is.
     if (childIds.length > 0) {
@@ -1556,7 +1637,7 @@ function emitNode(
     }
   }
 
-  return id;
+  return ids;
 }
 
 /** Why a node emitted nothing, for the comment that stands in its place. */
@@ -1638,9 +1719,9 @@ function buildFactories(
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
-    const childIds = entry.prefab.children
-      .map((child) => emitNode(child, inner, used, lines, true))
-      .filter((childId): childId is string => childId !== null);
+    const childIds = entry.prefab.children.flatMap(
+      (child) => emitNode(child, inner, used, lines, true) ?? [],
+    );
     if (childIds.length > 0) lines.push(`root.add([${childIds.join(', ')}]);`, '');
     lines.push('return root;');
 
@@ -2086,10 +2167,12 @@ function buildCreateBody(
   // The two blocks above each end on a blank, so this is the separator only
   // when there was neither to separate from.
   if (scene.children.length > 0 && lines.at(-1) !== '') lines.push('');
-  const bindings = new Map<string, string>();
+  // A list per node rather than one binding, because a tilemap emits one object
+  // per layer. Everything else emits exactly one and reads `[0]`.
+  const bindings = new Map<string, string[]>();
   for (const node of scene.children) {
-    const id = emitNode(node, ctx, used, lines);
-    if (id !== null) bindings.set(node.id, id);
+    const ids = emitNode(node, ctx, used, lines);
+    if (ids !== null) bindings.set(node.id, ids);
   }
 
   // The first of three things this exporter emits *after* the object list, and
@@ -2098,7 +2181,7 @@ function buildCreateBody(
   // the prologue with the background, where a reader looks for how the shot is
   // set up.
   if (camera.followId !== null) {
-    const target = bindings.get(camera.followId);
+    const target = bindings.get(camera.followId)?.[0];
     if (lines.at(-1) !== '') lines.push('');
     if (target === undefined) {
       // Say so rather than dropping it silently, the treatment `missingReason`
@@ -2134,8 +2217,17 @@ function buildCreateBody(
       // `collider`, not `collide`: the document says "collide" because that is
       // what the row means to a person reading it, and `ArcadeFactory` calls
       // the method `collider`. One is the word and one is the API.
+      //
+      // One line per pair of bindings, which for a multi-layer tilemap is one
+      // per layer — a layer collides through its own solid tiles, so a row that
+      // named only the first would have the walls stop nothing the moment they
+      // were painted on the layer above the floor. `collidersOf` refuses two
+      // tilemaps, so at most one side is ever longer than one and this is a
+      // loop rather than a product in practice.
       const fn = collider.kind === 'overlap' ? 'overlap' : 'collider';
-      lines.push(`this.physics.add.${fn}(${a}, ${b});`);
+      for (const left of a) {
+        for (const right of b) lines.push(`this.physics.add.${fn}(${left}, ${right});`);
+      }
     }
   }
 
@@ -2144,7 +2236,7 @@ function buildCreateBody(
   // outlive its `const`.
   const driven: DrivenObject[] = [];
   for (const node of drivenNodes) {
-    const binding = bindings.get(node.id);
+    const binding = bindings.get(node.id)?.[0];
     if (binding === undefined) continue;
     driven.push({
       field: toIdentifier(node.name, fieldNames),
