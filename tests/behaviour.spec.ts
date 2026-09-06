@@ -295,7 +295,7 @@ test('solid tiles, a collision and controls survive a save and an open, at schem
   // that predates them opens this file, draws it identically and carries them
   // back out on a re-save. The guides, physics and camera case exactly. It
   // reads 10 because fonts added a project-level table; behaviour did not.
-  expect(project.schemaVersion).toBe(10);
+  expect(project.schemaVersion).toBe(11);
   expect(project.scenes[0].children[0].controls).toEqual({
     mode: 'platformer',
     scheme: 'wasd',

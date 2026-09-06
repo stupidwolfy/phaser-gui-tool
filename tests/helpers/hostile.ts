@@ -1,5 +1,5 @@
 import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
-import { stripPng } from './png';
+import { rectsPng, stripPng } from './png';
 import { blockTtf } from './ttf';
 import { silentWav } from './wav';
 
@@ -38,6 +38,12 @@ export function hostileProject(): Project {
   // a stub data URL would be dropped by `parseAssets` and take the sprite, the
   // clip and this whole path out of the export with it.
   const sheet = `data:image/png;base64,${stripPng(8, ['#ff0000', '#00ff00', '#0000ff', '#ffff00']).toString('base64')}`;
+  // Real bytes for the same reason, one cut over: the export path runs Phaser's
+  // own atlas parser and `generateFrameNames` against them.
+  const atlas = `data:image/png;base64,${rectsPng(32, 16, '#101418', [
+    { x: 0, y: 0, w: 32, h: 8, hex: '#ff00ff' },
+    { x: 0, y: 8, w: 8, h: 8, hex: '#00ffff' },
+  ]).toString('base64')}`;
 
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -57,6 +63,27 @@ export function hostileProject(): Project {
         width: 32,
         height: 8,
         sheet: { frameWidth: 8, frameHeight: 8, margin: 0, spacing: 0 },
+      },
+      {
+        id: 'atlas-1',
+        // Plainly named, deliberately: the texture key path is already hostile
+        // through `sheet-1`, and what is new here is the *frame names*, which
+        // are the strings this feature added to the output. A hostile file name
+        // on top would only make the assertions harder to read.
+        name: 'atlas.png',
+        mimeType: 'image/png',
+        dataUrl: atlas,
+        width: 32,
+        height: 16,
+        // Frames of two different sizes, so the emitted table is not something
+        // a grid could have produced — and two hostile names, so the object-key
+        // path and the call-argument path each carry one. Non-overlapping and
+        // inside the image, or `atlasOf` would drop them and take the whole
+        // path out of the export the way a stub data URL would.
+        atlas: [
+          { name: `${breakout} wide`, x: 0, y: 0, width: 32, height: 8 },
+          { name: `${breakout} small`, x: 0, y: 8, width: 8, height: 8 },
+        ],
       },
     ],
     audio: [
@@ -137,6 +164,22 @@ export function hostileProject(): Project {
         // range that a start/end pair would also have produced.
         frames: [0, 2, 1, 2],
         frameRate: 8,
+        repeat: -1,
+      },
+      {
+        id: 'anim-2',
+        // The atlas half: a clip whose frames are *names*, which is the only
+        // thing that reaches `generateFrameNames` — and the only place two
+        // hostile strings land inside an array literal rather than as a lone
+        // argument. Repeating, for `anim-1`'s reason.
+        name: `${breakout} shimmer`,
+        assetId: 'atlas-1',
+        frames: [
+          `${breakout} wide`,
+          `${breakout} small`,
+          `${breakout} wide`,
+        ],
+        frameRate: 6,
         repeat: -1,
       },
     ],
@@ -501,6 +544,125 @@ export function hostileProject(): Project {
             // with nothing to chain, so without this the `true` argument never
             // reaches either toolchain.
             physics: { kind: 'static' as const, ...NO_MOTION },
+            children: [],
+          },
+          {
+            id: 'atlas-sprite',
+            // The atlas's three output paths, one node each. This one is the
+            // call argument: `add.sprite(...).play(...)`, so the clip's own
+            // named frames reach `generateFrameNames` as well.
+            name: 'atlas player',
+            type: 'sprite',
+            visible: true,
+            transform: { x: 150, y: 500, rotation: 0, scaleX: 2, scaleY: 2 },
+            props: {
+              assetId: 'atlas-1',
+              alpha: 1,
+              tint: '#ffffff',
+              flipX: false,
+              flipY: false,
+              frame: `${breakout} wide`,
+              animationId: 'anim-2',
+            },
+            children: [],
+          },
+          {
+            id: 'atlas-still',
+            // The still half: `add.image(..., "<name>")` rather than a sprite,
+            // which is where a frame *name* meets the argument a frame *index*
+            // used to occupy — and the one place the emitted call would still
+            // compile while asking for a frame that does not exist.
+            name: 'atlas still',
+            type: 'sprite',
+            visible: true,
+            transform: { x: 300, y: 500, rotation: 0, scaleX: 2, scaleY: 2 },
+            props: {
+              assetId: 'atlas-1',
+              alpha: 1,
+              tint: '#ffffff',
+              flipX: false,
+              flipY: false,
+              frame: `${breakout} small`,
+              animationId: null,
+            },
+            children: [],
+          },
+          {
+            id: 'atlas-panel',
+            // A nine-slice over an atlas frame: the ten-argument call, and the
+            // one place `sliceInsetsOf` has to measure against *this frame*
+            // rather than against the image — an 8x8 frame whose insets would
+            // fit the 32x16 picture and not the frame it is actually cut from.
+            name: 'atlas panel',
+            type: 'nineslice',
+            visible: true,
+            transform: { x: 450, y: 500, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: {
+              assetId: 'atlas-1',
+              frame: `${breakout} small`,
+              width: 80,
+              height: 40,
+              left: 3,
+              right: 3,
+              top: 3,
+              bottom: 3,
+              tint: '#ffffff',
+              alpha: 1,
+            },
+            children: [],
+          },
+          {
+            id: 'atlas-emitter',
+            // The emitter config's `frame:` key, which is the third and last
+            // place a frame reaches the output — and the only one where it sits
+            // inside an object literal that `tsc --strict` checks against
+            // `ParticleEmitterConfig`.
+            name: 'atlas sparks',
+            type: 'particles',
+            visible: true,
+            transform: { x: 600, y: 500, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: {
+              assetId: 'atlas-1',
+              frame: `${breakout} wide`,
+              lifespan: 700,
+              speedMin: 20,
+              speedMax: 90,
+              angleMin: 0,
+              angleMax: 360,
+              scaleStart: 1,
+              scaleEnd: 0,
+              alphaStart: 1,
+              alphaEnd: 0,
+              quantity: 2,
+              frequency: 60,
+              gravityX: 0,
+              gravityY: 0,
+              tint: '#ffffff',
+              blendMode: 'NORMAL' as const,
+              alpha: 1,
+            },
+            children: [],
+          },
+          {
+            id: 'atlas-missing',
+            // A frame the atlas does not have, which only a hand-edited file
+            // can hold: the store writes a name out of the picker and the
+            // parser keeps whatever is in the file. `resolveFrame` has to fall
+            // back to the atlas's first frame rather than emitting a name
+            // Phaser would warn on and draw nothing for.
+            name: 'atlas gone',
+            type: 'sprite',
+            visible: true,
+            transform: { x: 750, y: 500, rotation: 0, scaleX: 2, scaleY: 2 },
+            props: {
+              assetId: 'atlas-1',
+              alpha: 1,
+              tint: '#ffffff',
+              flipX: false,
+              flipY: false,
+              frame: 'no such frame',
+              animationId: null,
+            },
             children: [],
           },
           {

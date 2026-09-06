@@ -30,6 +30,48 @@ export function solidPng(width: number, height: number, hex: string): Buffer {
 }
 
 /** The PNG container around already-filtered RGBA rows. */
+/**
+ * A background with coloured rectangles painted onto it.
+ *
+ * `stripPng`'s generalisation, and the one a texture atlas needs: an atlas's
+ * whole claim is that its frames are *not* on a grid, so no strip and no sheet
+ * parameterised by a frame size can be its fixture. The rectangles may be any
+ * size, anywhere, with unpainted background between them — which is exactly
+ * what a grid cannot describe and therefore what a test can use to tell the two
+ * cuts apart.
+ *
+ * The rects live here and the JSON that names them lives in `atlas.ts`, which
+ * calls this: two helpers that could disagree about where a frame is would be
+ * the very failure the feature's one-builder rule exists to prevent.
+ */
+export function rectsPng(
+  width: number,
+  height: number,
+  backgroundHex: string,
+  rects: readonly { x: number; y: number; w: number; h: number; hex: string }[],
+): Buffer {
+  const raw = Buffer.alloc(height * (1 + width * 4));
+  const background = rgb(backgroundHex);
+
+  for (let y = 0; y < height; y += 1) {
+    const start = y * (1 + width * 4);
+    raw[start] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const hit = rects.find(
+        (rect) => x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h,
+      );
+      const [r, g, b] = hit ? rgb(hit.hex) : background;
+      const i = start + 1 + x * 4;
+      raw[i] = r;
+      raw[i + 1] = g;
+      raw[i + 2] = b;
+      raw[i + 3] = 255;
+    }
+  }
+
+  return encodePng(width, height, raw);
+}
+
 function encodePng(width: number, height: number, raw: Buffer): Buffer {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);

@@ -156,9 +156,20 @@ serve real image files in your own project instead, replace each value in it wit
 An image sliced into frames is loaded with `this.load.spritesheet(...)` and the same four
 numbers you set in the editor, so the frames your game cuts are the frames you drew with.
 
-A tileset is just such an image: the frames you slice it into are the tiles you paint with,
-and a tilemap's tile size is its frame size — so one image can be a sprite sheet and a
-tileset at once, and there is nothing extra to set up.
+An image can instead be cut by a **texture atlas** — the `.json` a packer such as
+TexturePacker writes, holding named frames of any size and position. Attach it in the same
+place you slice a grid, because an image is cut one way: attaching an atlas clears the
+grid, and slicing a grid clears the atlas. A sprite, a panel, a tiled image or an emitter
+then *names* the frame it draws, and an animation is a list of names — so re-packing your
+art and re-importing keeps every frame that kept its name, where indices would all have
+shifted. Exported code carries the frames inline in an `ATLASES` object and loads them
+with `this.load.atlas(...)`; replace a value with a path to serve the real `.json`
+instead.
+
+A tileset is just such an image, sliced on a grid: the frames you slice it into are the
+tiles you paint with, and a tilemap's tile size is its frame size — so one image can be a
+sprite sheet and a tileset at once, and there is nothing extra to set up. An atlas cannot
+be a tileset, because a tile size has to be uniform and an atlas is the absence of one.
 
 ### Physics
 
@@ -222,12 +233,17 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; twenty-two iterations in, it is a
-working editor but a small one.
+The goal is to eventually cover the whole Phaser surface; twenty-four iterations in, it is
+a working editor but a small one.
 
-**Not built yet** — text has typography but not fonts: `Font family` names a font the page
-already has, so there is no web-font loading, no bitmap fonts, no gradient fill, no
-background colour behind the text and no per-word styling. Texture atlases. Panels and tiled images are in, with three limits: a
+**Not built yet** — text has typography and its own imported fonts, with four limits: a
+family is one face, so bold and italic are the browser's synthesis rather than a real bold
+file; there are no bitmap fonts; there is no gradient fill or background colour behind the
+text (a coloured box behind something is a rectangle, which this editor has had since the
+first iteration); and there is no per-word styling. Texture atlases are in, with five
+limits: one image per atlas (no multi-page packs), rotated frames are refused rather than
+drawn on trust, an atlas cannot be a tileset, frames are named by the file rather than
+renameable here, and there is no packing or rect-editing in the editor — bring a `.json`. Panels and tiled images are in, with three limits: a
 panel's scalable regions stretch rather than repeating, a tiled image has an offset but no
 scroll speed (a background that drifts is one line in your own `update()`), and neither can
 play an animation, which is Phaser's limit rather than this editor's. Cameras are in, with

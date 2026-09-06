@@ -54,8 +54,10 @@ and slant, a wrap and an alignment, spacing, a stroke and a shadow — the first
 widen an existing node type's props rather than add a type. Iteration 23 (shipped) gave
 that typography a font to be set in: a third asset table holding font files, a family
 picked on the node rather than typed from memory, and an export that carries the bytes —
-so text finally looks the same on a machine that has never heard of the font. See the
-README for the user-facing feature list.
+so text finally looks the same on a machine that has never heard of the font. Iteration 24
+(shipped) gave an image a second way to be cut: a texture atlas, named frames of any size
+imported from a packer's JSON, and with it a `frame` that is a name rather than an index.
+See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -131,6 +133,10 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
    `familiesIn` in the exporter matches on `node.type === 'text'`, so a new type carrying a
    `fontFamily` would export a scene whose text is drawn in a font the page never loaded —
    which looks exactly like the bug iteration 23 exists to remove.
+   A `text` type has a sixth, and any type carrying a `frame` has a seventh: `resolveFrame`
+   answers for a grid *and* an atlas, so a new frame-carrying type must resolve rather than
+   read `props.frame` raw, or it draws a missing texture the moment its image is cut by an
+   atlas.
 7. `tests/` — the two silent steps are exactly the two the suite covers: add the type to
    `tests/editing.spec.ts` (it draws where the document says, and survives a save and an
    open) and give it a hostile instance in `tests/helpers/hostile.ts`, which puts its
@@ -253,6 +259,12 @@ Consequences worth knowing before touching any of it:
 - **`removeAsset` also clears every sprite pointing at the image**, in one undo step, so
   the document can never hold a dangling reference by any action in the editor.
   `parseProject` still tolerates one, because a hand-edited file can.
+- **An atlas is the first untrusted field in this table that is not a data URL**, and its
+  guard is about a different thing. `ASSET_DATA_URL` exists because an SVG data URL can
+  carry script into an `<img>`; a frame name carries no script anywhere, since `str()` sits
+  between it and all three places it reaches the output. What `parseAtlas` guards is the
+  *cut*: names non-empty, never `__BASE`, rects four finite positive numbers — because a
+  bad one is a frame that silently draws as another. See "Texture atlases".
 - **The asset table is untrusted input on open.** `parseAssets` accepts only
   `data:image/png|jpeg;base64,…` — an SVG data URL can carry script, and these strings go
   into an `<img>` and into exported code. It drops bad entries rather than failing the
@@ -266,6 +278,11 @@ Consequences worth knowing before touching any of it:
 An image can be cut into frames, and a sprite can play a sequence of them. Both are
 document state, and the shape of them follows from where each thing actually belongs.
 
+- **A grid is now one of two cuts.** Iteration 24 added `ImageAsset.atlas` beside
+  `ImageAsset.sheet`, and everything below still describes the grid: `frameGridOf`,
+  `frameLayoutOf` and `formatFrameList`'s ranges are all about *indices*, which is what a
+  grid has and an atlas does not. The two are mutually exclusive and `atlasOf` breaks the
+  tie — see "Texture atlases" below.
 - **The frame grid is on the asset, the clip is on the project, the choice is on the
   node.** `ImageAsset.sheet?: FrameGrid` is how *that image* is cut, so every sprite
   drawing it reads the same cuts and no two can disagree about how many frames it has.
@@ -344,6 +361,176 @@ document state, and the shape of them follows from where each thing actually bel
 - **The clip's field is labelled "Animation name", not "Name".** The object's own name
   field is a few rows up the same panel. Two fields labelled Name is ambiguous to a reader
   as well as to a test locator, and this one is the key the exported code plays by.
+
+## Texture atlases
+
+An image can be cut a second way: `ImageAsset.atlas?: AtlasFrame[]` holds **named frames of
+any size and position**, as a packer like TexturePacker writes them, and a node then *names*
+the frame it draws rather than indexing one. It is one claim and everything follows from it:
+an atlas is a second answer to `ImageAsset.sheet`'s question, not a second question.
+
+- **So it lives where the first answer lives.** How an image is cut is a property of the
+  *bytes* — how many frames it has and what they are called is not a thing two sprites
+  drawing it may disagree about. That is `ImageAsset.sheet`'s argument unchanged, and it is
+  deliberately **not** the nine-slice insets' one: an inset decides nothing about the image,
+  which is why that lives on the use. It is also what makes `removeAsset` need no edit — an
+  atlas goes with the bytes it cuts, so there is no third table to clean up and no dangling
+  reference to prune, `removeFont`'s one-liner arriving for the same structural reason.
+- **An image is cut one way, and the tie is broken in exactly one place.** `atlasOf` answers
+  null when `asset.sheet` is present, and `frameGridOf` is untouched — a grid wins a file
+  that says both, because it is the older of the two and so the one an older build could have
+  written. The rejected shape was a check on *both* sides, which is circular; the other
+  rejected shape was "both means neither", which is a third state to explain. Nothing the
+  editor writes can be in that state at all — `setAssetSheet` and `setAssetAtlas` delete each
+  other's field and `parseAssets` keeps only one — so this fires only on a hand-edited file:
+  **strip on read, refuse on write**, the physics body's pair for the third time.
+- **`frameGridOf` needed no edit, and that is the load-bearing accident.** An atlas-cut asset
+  has no `sheet`, so every existing consumer of a grid — `tilesetKeyFor`, `tileMapOf`,
+  `collectAssets`' tileset gate, `collectTilemaps`, `TilePalette`, `buildPreloadBody` —
+  already answers "not a grid" for one, which is exactly the right answer everywhere. Only
+  the *wording* changed. Said out loud because here "already covered" and "forgotten" read
+  identically, and the next reader will otherwise add a redundant guard or delete a live one.
+- **A node names a frame, and identity is the whole point rather than a detail of it.** A
+  packer re-run with one sprite added renumbers every frame after it, so an index would
+  silently redraw half a scene while a name either still exists or visibly does not. That is
+  `EMPTY_TILE`'s argument arriving from the other side: there a re-cut must be able to blank
+  the answer and hand it back whole, and here a re-import must be able to *keep* an answer
+  that a position could not. `atlas.spec.ts` asserts it with a repack, which is the one claim
+  an index-based implementation fails while passing every other test in the file.
+- **`atlasOf` is the only reader**, in the `guidesOf` / `frameGridOf` / `tileMapOf` /
+  `physicsOf` / `soundsOf` / `cameraOf` / `sliceInsetsOf` / `textStyleOf` / `fontStackOf` /
+  `prefabChildrenOf` family, and it answers four questions at once: is this an atlas, is it
+  the only cut, does every rect lie inside the image, and is every name usable. The last one
+  is new in kind. A name must be **unique**, because it is a key in the object literal the
+  exporter emits and JavaScript resolves a repeat by silently keeping the last — one frame
+  drawing as another, in the export only. And a name may not be **`__BASE`**, which is the
+  sharpest small trap here: `Texture.add` answers `null` for a name the texture already
+  holds, every texture holds `__BASE` from its constructor, so a frame called that is dropped
+  by Phaser with no warning and every node naming it draws the whole image. The `CSS_GENERICS`
+  decision one format over. A fresh array per call, so
+  `useEditorStore((s) => atlasOf(...))` is React error #185 — the `tileMapOf` trap, seventh time.
+- **`clampFrame` became `resolveFrame`, renamed rather than widened, and the rename is the
+  point.** Ten call sites each had to decide what a *named* frame means to them, and a rename
+  is a compile error at each where a widened return type is not — the `NodeType` union's trick
+  applied to a function. For a grid it is `clampFrame` to the digit, which is what keeps every
+  existing export byte for byte what it was. For an atlas it resolves by identity and falls
+  back to the first frame, because a name has no near neighbour to clamp towards.
+- **`frameSizeOf` was factored out of `sliceInsetsOf`, and a trimmed frame answers with its
+  *source* size.** An atlas's frames are not all one size — that is the whole of what an atlas
+  is — so a panel cut from one measures its insets against *its* frame rather than the image.
+  The trim half is the subtle one: Phaser's `Frame.setTrim` sets `width`/`height` to the
+  untrimmed size, so measuring against the packed rect would have the editor's insets and
+  Phaser's slice disagree by exactly the trim, on a panel where being wrong is invisible until
+  it is stretched.
+- **`this.load.atlas`'s second argument may be the frame data itself, so the cut rides
+  inline.** Phaser's `AtlasJSONFile` takes "a well formed JSON object" in place of the atlas
+  URL and skips the fetch — no second file, no boot-order question. That is the `load.font`
+  discovery of iteration 23 arriving a second time, and it is why this is one iteration rather
+  than two. Read the loader before predicting this kind of thing, which is what "Phaser 4, not
+  3" has been saying all along.
+- **One builder, two consumers.** `atlasDataOf` is handed to `textures.addAtlas` by the
+  renderer and printed into `ATLASES` by the exporter, so the canvas and the export cannot
+  disagree about where a frame is. `textStyleOf`'s two-consumer argument, and the sharpest
+  version of it yet: a disagreement about pixel coordinates is invisible in *both* outputs
+  until somebody looks at the game.
+- **`ATLASES` is a projection of `ASSETS`, not a second collection.** Unlike `TILEMAPS`, which
+  is keyed by node, an atlas is a property of an image already in the asset table — so
+  `collectAssets` and `usedIn` gained nothing, and `EmitContext` gained nothing. On the export
+  checklist a table with no `collect*` beside it reads exactly like a missed step, which is
+  why it says so here. It is gated on *something being cut by an atlas* rather than on the
+  asset table being non-empty, or every project with a plain image would emit an empty
+  `const ATLASES = {}` — which passes every test and breaks the byte-for-byte property every
+  table before it has kept.
+- **The clip emits its frames, and `generateFrameNames` is refused even though it is the
+  obvious call.** Its runtime does the right thing — `prefix + Pad(frame, 0) + suffix` leaves
+  a name alone — but Phaser types its config's `frames` as `boolean | number[]`, so the
+  exported `.ts` does not compile under `--strict`, and the `create()` body is the same plain
+  JavaScript in the `.ts`, the `.js` and the runnable page, so it can carry no cast. The
+  answer is `Types.Animations.AnimationFrame` — `{ key, frame: string | number }` — which
+  `anims.create` takes directly and which `EditorScene.syncAnimations` was *already* building,
+  so the two halves of the feature now say the same thing the same way. A grid keeps
+  `generateFrameNumbers`, unchanged to the character. **Only `export-toolchain.spec.ts` could
+  have found this**: the emitted text is correct, the runnable page runs it, and the `.js`
+  bundles.
+- **`syncAnimations` needed nothing at all.** `texture.has(String(frame))` and
+  `AnimationFrameConfig.frame` both already take a name, so the editor's half of the clip
+  story is the type widening and no logic. Worth writing down, because a reader will come here
+  looking for the branch the *exporter* has and find none.
+- **`drawableFrame`'s fallback had to split.** A number falls back to `0`, which is what it
+  has always done; a name cannot, because an atlas texture has no frame called "0" unless one
+  happens to be named that — so it falls back to `texture.firstFrame`, Phaser's own answer to
+  "some frame, certainly". This only shows up mid-decode, which is to say on a cold open,
+  which is to say the path every real user takes and only a `reload` test reaches.
+- **`animationKeyFor` stopped joining with a comma.** Joined, `['a,b']` and `['a', 'b']` are
+  the same string, so an edit between the two would keep the old key, find it already
+  registered and go on playing the animation built first. `JSON.stringify` is one word longer
+  and removes the question; nothing outside that file reads the key.
+- **The import accepts both packer shapes and stores one.** JSON Hash keys its frames by name
+  and JSON Array carries a `filename` inside each record; they are one dropdown apart in the
+  same tool, and refusing whichever a user's team picked is refusing a file that plainly is an
+  atlas — `fontMimeOf`'s argument, one format over. Storing the file verbatim would be the
+  `project.tilesets` mistake: the same facts in a second shape, with a parser at every read
+  site rather than at the one write site.
+- **A frame name reaches the output in three places and `str()` covers all three** — an
+  object-literal key in `ATLASES`, a call argument (`add.image`, `add.nineslice`,
+  `add.tileSprite`, the emitter config's `frame:`), and an `AnimationFrame` entry. Nothing new
+  escapes: `generateRunnableHtml` still composes the whole script and escapes it once at the
+  end, which is precisely the rule that exists so a newly added interpolation cannot be
+  forgotten.
+- **The Frame control changes shape, not range.** A grid's frame is a number with a top and a
+  bottom, which a `NumberField` states; a name is an identity, and typed by hand it is wrong
+  by one character and the object silently draws some other frame — so an atlas gets a
+  `SelectField` of names. `FontPicker`'s argument without its free-text half, because unlike a
+  font family a frame name is never something the machine might already have. A native select
+  is also the one picker that gets an OS wheel under a thumb and stays one row however many
+  frames there are, where a list of names would push the transform fields off a 390px sheet.
+  The label stays exactly "Frame": nothing else in the panel is called that.
+- **`formatFrameList` stops collapsing runs for names, and that is not a regression.** A range
+  is arithmetic on indices; `hero_run_01-hero_run_04` would mean inventing a naming convention
+  and reading it back, which is `generateFrameNames`' `prefix`/`zeroPad` scheme entering the
+  document as a second way to say what a list already says — and it would only work on names
+  that happen to be numbered. `parseFrameList` takes the asset's names as an argument rather
+  than sniffing per part, so a half-typed list cannot disagree with itself halfway down.
+- **A clip keeps its own order through a re-import.** `recutClipFrames` filters the *clip's*
+  list rather than rebuilding it from the atlas, because the sequence is the thing the user
+  authored and a repack that moved the rectangles did not reorder their animation. It also
+  does not de-duplicate, where the grid branch does — that de-duplication exists only to undo
+  the collisions clamping creates, and nothing in the atlas branch can create a repeat the
+  user did not write, so `[a, b, c, b]` survives as the ping-pong it is.
+- **`SCHEMA_VERSION` bumped to 11, on the silent-data-loss half of the rule and only that
+  half — twice over, which is new.** There is **no crash half at all**: no new `NodeType`, so
+  a v10 `createDisplayObject` has a case for everything in the file. What a v10 build does is
+  drop `asset.atlas` in `parseAssets`' field-by-field rebuild *and* coerce every named frame
+  to `NaN` in `parseAnimations`, dropping the clip entirely — two tables lost in one open. And
+  what it leaves behind is worse than either: the nodes still name frames, `clampFrame` turns
+  a name into 0, and the picture is wrong with nothing having said so. The v8 audio and v10
+  font case at its worst so far. `atlas.spec.ts` asserts the 11 in the saved artefact.
+- **Almost none of the "Adding a Phaser object type" checklist applies**, and listing which is
+  half of what a reader needs — the typography case for the second time. There is no new type,
+  so `NodeType`, `ADDABLE`, the colour chip, `PHYSICS_TYPES`, `createDisplayObject`,
+  `constructorFor`, `localRectOf` and `editing.spec.ts` are all untouched. What this feature
+  did instead was **widen an existing field's type across four node types and one table**,
+  which is a compile error at every consumer — the closest thing to the union's own trick that
+  a non-type change can get, and the reason the renderer and the exporter were mechanical.
+  The steps that carried real risk were the silent ones, as always: the branch order in
+  `syncTextures` and `buildPreloadBody` (an atlas has no grid, so a fall-through adds a
+  one-frame texture and ships `load.image`, which boots and draws the sheet whole), the
+  `ATLASES` gate, and `drawableFrame`'s fallback.
+- **The suite's instruments are colour for *which* frame and extent for *what size*.** Colour
+  is `animation.spec.ts`' instrument and separates a cut that reached Phaser's parser from one
+  that reached the document only. Extent is the claim that proves this is an atlas at all: the
+  fixture's frames have different aspect ratios, which is the one thing four grid numbers
+  cannot describe, so an implementation that quietly fell back to a grid passes every colour
+  claim and fails that one. The **ratio** is asserted rather than the pixels, because the two
+  projects draw at different zooms and the claim is about the picture rather than the screen —
+  and a centroid could not make it at all, since a two-pixel edge lands on a different
+  sub-pixel phase on each side.
+- **`tests/helpers/atlas.ts` builds the image and both JSON shapes from one array of
+  rectangles**, which is `png.ts`'s, `wav.ts`'s and `ttf.ts`'s argument with one addition of
+  its own: an atlas is *two files stating one fact*, and two fixture helpers free to disagree
+  about where a frame is would be exactly the failure this feature's one-builder rule exists
+  to prevent. `rectsPng` is `stripPng` generalised, and it exists because no fixture
+  parameterised by a frame size can be a fixture for an atlas.
 
 ## Nesting
 
@@ -602,6 +789,12 @@ so what the canvas shows is what the export builds. Two decisions carry the rest
   call. A
   `project.tilesets` table would be those same four numbers in a second place, free to
   disagree with the first, plus a parser and a picker.
+- **A tileset is still a grid, and an atlas cannot be one.** `addTilesetImage` needs a
+  uniform tile size and an atlas is the absence of one, which is Phaser's limit rather than
+  this editor's. It cost no code: `frameGridOf` answers null for an atlas-cut image, so
+  `tilesetKeyFor`, `tileMapOf`, the tileset gate in `collectAssets`, `collectTilemaps` and
+  `TilePalette` all already refuse one. Only the *wording* changed — worth saying, because
+  on this list "already covered" and "forgotten" read the same.
 - **The tile size is derived from the tileset, never stored on the node.** The argument
   that put the frame grid on the image, and the argument for a sprite having no width or
   height: two maps drawing one tileset cannot disagree about how big a tile is.
@@ -718,6 +911,11 @@ where each one's fields live and why.
   16px corners and a health bar with 4px ones — and nothing downstream indexes an inset the
   way a tile index indexes a frame. So it belongs to the *use*, which is the call
   `SceneSound`'s `loop` and `volume` already made.
+- **The insets are measured against the node's own frame**, which since iteration 24 means
+  a *named* frame of any size rather than a grid cell. `frameSizeOf` was factored out of
+  `sliceInsetsOf` for that, and a trimmed atlas frame answers with its untrimmed size,
+  because that is what Phaser's `Frame.width` is and therefore the box the slice is cut
+  against.
 - **`sliceInsetsOf` is the only reader**, in the `frameGridOf` / `tileMapOf` / `guidesOf` /
   `physicsOf` / `soundsOf` / `cameraOf` family and answering three questions at once: is
   there a source to measure against, how big is one *frame* of it, and do these four
@@ -2315,6 +2513,12 @@ Groups are emitted flat: the container's `const`, then its children's, then one
 cost the reader a binding per object — every object in the scene stays reachable by name,
 which is the point of emitting names at all.
 
+An atlas-cut image adds an `ATLASES` object beside `ASSETS` and loads through
+`this.load.atlas(key, ASSETS[key], ATLASES[key])` — the frame data inline, because Phaser's
+loader takes an object where a URL would go. It is a *projection* of `ASSETS` rather than a
+second collection, so nothing in `collectAssets`, `usedIn` or `EmitContext` knows about it;
+on this checklist a table with no `collect*` beside it reads exactly like a missed step.
+
 Images are emitted as an `ASSETS` object literal at the top of the output, and a
 `preload()` that loads from it (`this.load.image(key, ASSETS[key])` — Phaser's loader
 detects `data:` URLs itself, see `File.js`). Three things about that shape are deliberate:
@@ -2362,6 +2566,7 @@ tests/
   rotation.spec.ts          the rotate knob, and an angle landing on a neighbour or a step
   guides.spec.ts            placing a guide, dragging it, and a drag agreeing with it
   animation.spec.ts         slicing a sheet, drawing one frame, playing a clip
+  atlas.spec.ts             an image cut into named frames of unequal size, and repacked
   prefabs.spec.ts           saving a prefab, placing it twice, editing it once
   tilemap.spec.ts           slicing a tileset, painting it, filling and erasing
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
@@ -2380,7 +2585,8 @@ tests/
   helpers/editor.ts         the page object: panels, fields, gestures, downloads
   helpers/pixels.ts         canvas readback, colour centroids and colour extents
   helpers/hostile.ts        the project made of everything a project should not contain
-  helpers/png.ts            solid, striped, framed and marked PNGs, readable in a diff
+  helpers/png.ts            solid, striped, framed, marked and rect-painted PNGs
+  helpers/atlas.ts          an atlas image and both packer JSON shapes, from one array
   helpers/wav.ts            a synthesised WAV, for the same reason and with no encoder
 ```
 
@@ -2711,9 +2917,34 @@ scene tree already names one at a time, and a range is `collides` written shorte
 per-tile properties beyond solid** — a tile is a wall or it is not, and anything finer (ice,
 a one-way platform, damage) is the beginning of the behaviour model the first hole refuses.
 
-Texture atlases: the asset table holds whole images cut on a regular grid, and an atlas is
-named frames of arbitrary size, which is `generateFrameNames` and a second parser rather
-than more of this one.
+Texture atlases shipped in iteration 24, and it is worth reading what this paragraph used
+to say beside what the work turned out to be, because half the prediction was right and the
+expensive half was wrong in a new way. It said an atlas was "`generateFrameNames` and a
+second parser rather than more of this one". The second parser is real and is `atlas.ts`,
+which is most of the iteration's core. `generateFrameNames` is the half that was wrong, and
+not for the reason the fonts prediction was wrong — there the answer turned out to be
+easier, here it turned out to be *unusable*: Phaser's runtime concatenates a name happily
+and its own type declares `frames?: boolean | number[]`, so the exported `.ts` does not
+compile under `--strict` and the shared `create()` body has nowhere to put a cast. See
+Texture atlases above. Five deliberate holes were left. **No multi-page atlas** — a
+multipack is *n* images and one JSON naming each page, and the whole feature rests on a cut
+being a property of one set of bytes; a page set is a second kind of asset row rather than
+a field, and it is refused at the picker with a message instead of silently dropping pages.
+**No rotated frames**, refused at import rather than forwarded, and this is the hole that
+was nearly a field: rotation is pure pass-through to Phaser's parser and would have cost
+six lines, but it is *off by default* in every packer, it interacts with `frameSizeOf`, a
+panel's insets and a tile sprite's pattern, and it is invisible on any symmetric fixture —
+so it would have been a field carried on trust and wrong on somebody's real sheet.
+`useAdvancedWrap`'s refusal with a sharper edge: not merely unexplained, unverified.
+**No `scale9Borders` and no `anchor`/`pivot`** — the first would be a second answer to
+`NineSliceProps`' four insets, which iteration 19 deliberately put on the *node* because one
+64px texture is a dialog frame with 16px corners and a health bar with 4px ones; the second
+is a second answer to the origin every object here already centres. **No atlas authoring and
+no renaming** — the editor cuts a grid because a grid is four numbers, while an arbitrary
+rect set is a packer, and a name is the link the document holds, so renaming one here would
+break every node that named the old string (`FontAsset.family`'s refusal exactly). **And no
+Starling, Unity or `.atlasXML` forms** — a parser per format is the `.tmj` argument at a
+smaller scale, and JSON Hash plus JSON Array is what the tool people actually use writes.
 
 Nine-slice panels and tile sprites shipped in iteration 19 with four deliberate holes.
 **No `tileX`/`tileY` on a panel** — Phaser 4 can repeat a nine-slice's scalable regions

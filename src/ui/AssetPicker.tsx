@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { countAssetUses, useEditorStore } from '../core/store';
 import {
+  atlasOf,
   findAsset,
   frameCountOf,
   frameGridOf,
@@ -10,7 +11,8 @@ import {
 } from '../core/schema';
 import { CheckboxField, NumberField } from './fields';
 import { ImageImportError, formatAssetSize, importImageFile } from '../core/assets';
-import { pickImageFile } from '../io/fileIO';
+import { AtlasImportError, importAtlasFile } from '../core/atlas';
+import { pickAtlasFile, pickImageFile } from '../io/fileIO';
 
 /**
  * Choosing the image a sprite draws, and importing new ones.
@@ -227,14 +229,23 @@ export function SheetSection({ assetId }: { assetId: string | null }) {
   if (!asset) return null;
 
   const sheet = frameGridOf(asset);
+  const atlas = atlasOf(asset);
   const set = (patch: Partial<FrameGrid>) =>
     setAssetSheet(asset.id, { ...(asset.sheet ?? guessGrid(asset)), ...patch });
 
   return (
     <>
+      {/* An image is cut one way, so the two controls exclude each other rather
+          than stacking. The checkbox is disabled while an atlas is attached
+          because ticking it would silently destroy the atlas and every clip
+          built on it — a control that quietly deletes work is worse than one
+          that says it cannot — and the disabled state is what makes the
+          exclusivity something the user sees rather than something that
+          happens to them. */}
       <CheckboxField
         label="Sliced into frames"
         value={asset.sheet !== undefined}
+        disabled={atlas !== null}
         onChange={(on) => setAssetSheet(asset.id, on ? guessGrid(asset) : null)}
       />
 
@@ -271,7 +282,97 @@ export function SheetSection({ assetId }: { assetId: string | null }) {
           <SheetSummary asset={asset} usable={sheet !== null} />
         </>
       )}
+
+      <AtlasControls asset={asset} />
     </>
+  );
+}
+
+/**
+ * Attaching, replacing and removing a texture atlas.
+ *
+ * In `SheetSection` rather than in a section of its own, because this section
+ * *is* the question "how is this image cut" and a second place to answer it is a
+ * second place the two answers could disagree. It is also what makes the two
+ * cuts visibly alternatives: they sit one above the other, each disabled while
+ * the other is live.
+ *
+ * Replace is the same button as Attach, not a separate flow, because replacing
+ * is the ordinary case — an atlas is re-exported every time the artwork changes,
+ * and that path is the one that keeps a clip's frames by name.
+ */
+function AtlasControls({ asset }: { asset: ImageAsset }) {
+  const setAssetAtlas = useEditorStore((s) => s.setAssetAtlas);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const atlas = atlasOf(asset);
+  const sliced = asset.sheet !== undefined;
+
+  const attach = async () => {
+    setError(null);
+    const file = await pickAtlasFile();
+    if (!file) return;
+    setBusy(true);
+    try {
+      setAssetAtlas(asset.id, await importAtlasFile(file, asset));
+    } catch (failure) {
+      setError(
+        failure instanceof AtlasImportError
+          ? failure.message
+          : `Could not read ${file.name}.`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        className="btn btn--block"
+        disabled={busy || sliced}
+        onClick={() => void attach()}
+      >
+        {busy ? 'Reading…' : atlas ? 'Replace atlas…' : 'Attach atlas…'}
+      </button>
+
+      {error && <p className="hint hint--error">{error}</p>}
+
+      {atlas && (
+        <>
+          <AtlasSummary frames={atlas} />
+          <button
+            className="btn btn--block btn--danger"
+            onClick={() => setAssetAtlas(asset.id, null)}
+          >
+            Remove atlas
+          </button>
+        </>
+      )}
+
+      {!atlas && sliced && (
+        <p className="hint">An image is cut one way. Un-slice it to attach an atlas instead.</p>
+      )}
+    </>
+  );
+}
+
+/**
+ * `SheetSummary`'s sibling, and it reports a *range* of sizes where that one
+ * reports a single size — because frames of one size is exactly what an atlas
+ * is not, and the range is the shortest way to say the cut is doing its job.
+ */
+function AtlasSummary({ frames }: { frames: { name: string; width: number; height: number }[] }) {
+  const widths = frames.map((frame) => frame.width);
+  const heights = frames.map((frame) => frame.height);
+  const smallest = `${Math.min(...widths)}×${Math.min(...heights)}`;
+  const largest = `${Math.max(...widths)}×${Math.max(...heights)}`;
+  return (
+    <p className="hint">
+      {frames.length} named frame{frames.length === 1 ? '' : 's'},{' '}
+      {smallest === largest ? `${smallest}px` : `${smallest} to ${largest}px`}.
+    </p>
   );
 }
 

@@ -111,8 +111,19 @@
  * strictly worse than the audio case it copies: a sound that loses its table
  * makes no noise, where text that loses its font goes on drawing, in a face
  * the user never chose and with nothing at all having said so.
+ *
+ * **v11 is texture atlases, and it is the first bump to turn on both halves of
+ * the rule at once for the same reason.** `parseAssets` rebuilds every asset
+ * field by field, so a v10 build drops `asset.atlas` on open and re-saves
+ * without it — the v4 and v10 case. What makes this one worse than either is
+ * what the file still holds afterwards: a node's `frame` is now a *name* when
+ * its image is cut by an atlas, and a v10 build that has just thrown the atlas
+ * away hands that string to `setFrame` and to `add.nineslice`, which is a
+ * missing-texture square rather than a crash and rather than anything that says
+ * what happened. The grid case at least degraded to "the sheet is drawn whole";
+ * this one degrades to nothing being drawn at all.
  */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -158,8 +169,24 @@ export interface ImageAsset {
    * and an animation is a list of indices that only means anything against
    * them. Recording it per sprite would let two of them disagree about how
    * many frames their own image has.
+   *
+   * Never present beside `atlas`: an image is cut one way. The refusal is in
+   * the store, and `frameGridOf` strips this on read as the second half of it.
    */
   sheet?: FrameGrid;
+  /**
+   * Absent on a plain image; present when the image is a texture atlas.
+   *
+   * `sheet`'s argument exactly, and it is worth saying so because a reader will
+   * wonder why this is not on the node the way a nine-slice's insets are. An
+   * atlas decides how many frames an image *has* and what each one is called,
+   * which is a property of the bytes and which two sprites drawing it must not
+   * disagree about. An inset decides nothing about the image, which is why that
+   * one lives on the use.
+   *
+   * Read through `atlasOf`, never directly.
+   */
+  atlas?: AtlasFrame[];
 }
 
 /**
@@ -343,6 +370,175 @@ export interface FrameGrid {
 }
 
 /**
+ * One frame of a texture atlas: a named rectangle inside the image.
+ *
+ * The fields are Phaser's own, flattened. Its `JSONHash` parser reads a frame
+ * as `{ frame: {x,y,w,h}, trimmed, sourceSize, spriteSourceSize, rotated }`,
+ * and `atlasDataOf` puts them back into exactly that shape — so what the
+ * document stores is one flat record per frame rather than the packer's
+ * nesting. That is a third of the bytes in a file where every image is already
+ * base64, and it is the form every reader here actually wants.
+ *
+ * Trim is carried rather than dropped, because TexturePacker trims by default
+ * and a trimmed frame drawn without its offsets is drawn in the wrong place —
+ * which reads as the editor being broken, not as an option nobody implemented.
+ * Nothing here ever *produces* the flag; it is a pass-through to Phaser's own
+ * parser, which has handled it since v3.
+ *
+ * **Rotation is refused instead**, at the import, and that asymmetry is the
+ * decision worth knowing. Trim is off by one number that a fixture can see;
+ * rotation turns the frame, interacts with `frameSizeOf`, with a nine-slice's
+ * insets and with a tile sprite's pattern, and is *off by default* in every
+ * packer — so it would be a field carried on trust, invisible on any symmetric
+ * fixture and wrong on a real sprite sheet. `useAdvancedWrap`'s refusal with a
+ * sharper edge: not merely unexplained, unverified.
+ */
+export interface AtlasFrame {
+  /** The name the packer gave it — and the string a node stores to draw it. */
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** True when the packer cropped transparent pixels off this frame. */
+  trimmed?: boolean;
+  /** The size the frame had before it was trimmed. */
+  sourceWidth?: number;
+  sourceHeight?: number;
+  /** Where the trimmed rectangle sits inside that original size. */
+  offsetX?: number;
+  offsetY?: number;
+}
+
+/**
+ * The frame name every Phaser texture already carries, and therefore the one
+ * name an atlas may not use.
+ */
+export const BASE_FRAME = '__BASE';
+
+/**
+ * The asset's atlas, but only when its frames can actually be cut out.
+ *
+ * The single reader of `asset.atlas`, in the `guidesOf` / `frameGridOf` /
+ * `sliceInsetsOf` / `physicsOf` / `soundsOf` / `cameraOf` / `tileMapOf` /
+ * `textStyleOf` / `fontStackOf` / `prefabChildrenOf` family, and it answers
+ * three questions at once:
+ *
+ * - *Is this image cut by an atlas at all?* Null for a grid-cut or plain image,
+ *   which is what makes `frameGridOf` and this one a pair rather than two
+ *   independent flags.
+ * - *Is every frame a rectangle inside the image?* A frame that runs off the
+ *   edge samples pixels that are not there. A rotated frame is measured with
+ *   its sides swapped, because the packer stores an upright `w`/`h` for a
+ *   region it turned on its side.
+ * - *Are the names usable?* Non-empty and **unique**, and the uniqueness is not
+ *   tidiness: a name is a key in the object literal the exporter emits, and a
+ *   repeated key in JavaScript silently keeps the last one — so two frames
+ *   sharing a name is one frame drawing as another, in the export only.
+ *
+ * A dropped frame is dropped rather than repaired, which is the treatment
+ * `tileMapOf` gives an out-of-range tile: a node naming it falls back on read,
+ * and the atlas can be re-imported whole.
+ *
+ * A fresh array per call, so `useEditorStore((s) => atlasOf(...))` is an
+ * infinite render loop — React error #185, the `tileMapOf` trap for the seventh
+ * time. Select the project and derive outside the selector.
+ */
+export function atlasOf(asset: ImageAsset | undefined): AtlasFrame[] | null {
+  const raw = asset?.atlas;
+  if (!asset || !Array.isArray(raw) || raw.length === 0) return null;
+  // The tie, decided here so it is decided once. Nothing this editor writes can
+  // be in that state — `setAssetSheet` and `setAssetAtlas` delete each other's
+  // field, and `parseAssets` keeps only one — so this fires on a hand-edited
+  // file, and it hands that file to the older of the two cuts rather than to a
+  // rule a reader would have to look up.
+  if (asset.sheet) return null;
+
+  const seen = new Set<string>();
+  const usable: AtlasFrame[] = [];
+  for (const frame of raw) {
+    if (!frame || typeof frame.name !== 'string' || frame.name === '') continue;
+    // Phaser's `Texture.add` answers null for a name the texture already holds,
+    // and every texture holds `__BASE` from its constructor — so a frame called
+    // that is dropped by Phaser with no warning, and every node naming it draws
+    // the whole image instead. Refusing it here means "the atlas did not apply"
+    // is never the thing a user has to diagnose. `CSS_GENERICS` one format over.
+    if (frame.name === BASE_FRAME) continue;
+    if (seen.has(frame.name)) continue;
+    const fits =
+      Number.isFinite(frame.x) &&
+      Number.isFinite(frame.y) &&
+      Number.isFinite(frame.width) &&
+      Number.isFinite(frame.height) &&
+      frame.width > 0 &&
+      frame.height > 0 &&
+      frame.x >= 0 &&
+      frame.y >= 0 &&
+      frame.x + frame.width <= asset.width &&
+      frame.y + frame.height <= asset.height;
+    if (!fits) continue;
+    seen.add(frame.name);
+    usable.push(frame);
+  }
+  return usable.length > 0 ? usable : null;
+}
+
+
+/**
+ * The atlas as Phaser's own JSON Hash, which is what both the renderer and the
+ * exporter hand to it.
+ *
+ * One builder for two consumers, which is `textStyleOf`'s argument and the
+ * sharpest version of it here: `this.textures.addAtlas` in the editor and
+ * `this.load.atlas` in the export are two places that must agree exactly about
+ * how an image is cut, and a disagreement between them is invisible until the
+ * game is in somebody else's hand.
+ *
+ * `frames` is an object rather than an array on purpose — that is the shape
+ * `TextureManager.addAtlas` routes to `JSONHash` on, and it is the compact one,
+ * since the name is the key rather than a `filename` field repeated inside
+ * every record.
+ */
+export function atlasDataOf(frames: readonly AtlasFrame[]): AtlasData {
+  const out: Record<string, AtlasDataFrame> = {};
+  for (const frame of frames) {
+    const entry: AtlasDataFrame = {
+      frame: { x: frame.x, y: frame.y, w: frame.width, h: frame.height },
+    };
+    // Both keys or neither: Phaser reads `spriteSourceSize` only when `trimmed`
+    // is set, and reads `sourceSize` to know what the frame's size *was*.
+    if (frame.trimmed) {
+      entry.trimmed = true;
+      entry.sourceSize = {
+        w: frame.sourceWidth ?? frame.width,
+        h: frame.sourceHeight ?? frame.height,
+      };
+      entry.spriteSourceSize = {
+        x: frame.offsetX ?? 0,
+        y: frame.offsetY ?? 0,
+        w: frame.width,
+        h: frame.height,
+      };
+    }
+    out[frame.name] = entry;
+  }
+  return { frames: out };
+}
+
+/** One frame in the shape Phaser's `JSONHash` parser reads. */
+export interface AtlasDataFrame {
+  frame: { x: number; y: number; w: number; h: number };
+  trimmed?: boolean;
+  sourceSize?: { w: number; h: number };
+  spriteSourceSize?: { x: number; y: number; w: number; h: number };
+}
+
+/** A whole atlas in that shape. `frames` is an object, which is what picks it. */
+export interface AtlasData {
+  frames: Record<string, AtlasDataFrame>;
+}
+
+/**
  * The asset's frame grid, but only when it can actually cut a frame out.
  *
  * The single reader of `asset.sheet`, for the reason `guidesOf` is the single
@@ -354,6 +550,13 @@ export interface FrameGrid {
  */
 export function frameGridOf(asset: ImageAsset | undefined): FrameGrid | null {
   const sheet = asset?.sheet;
+  // An image is cut one way, and the tie is broken in `atlasOf` rather than
+  // here: a grid wins a file that somehow says both, because it is the older of
+  // the two and therefore the one an older build could have written. Putting
+  // the check on both sides would be circular, and putting it only here would
+  // be dead — an atlas-cut asset has no `sheet`, so this already answers null
+  // for one, which is what makes `tilesetKeyFor`, `tileMapOf`, the tile palette
+  // and `buildPreloadBody` all treat an atlas as "not a tileset" with no edit.
   if (!sheet) return null;
   const usable =
     Number.isFinite(sheet.frameWidth) &&
@@ -395,22 +598,81 @@ export function frameLayoutOf(asset: ImageAsset): { columns: number; rows: numbe
  */
 export function frameCountOf(asset: ImageAsset | undefined): number {
   if (!asset) return 1;
+  const atlas = atlasOf(asset);
+  if (atlas) return atlas.length;
   const { columns, rows } = frameLayoutOf(asset);
   return columns * rows;
 }
 
 /**
- * A frame index that certainly exists on the asset.
+ * The names an atlas cuts the image into, in the order the packer listed them,
+ * and empty for an image cut any other way.
  *
- * A sprite keeps its frame number when its image is swapped for a smaller
- * sheet, and a hand-edited file can name any index at all — and Phaser's
- * `setFrame` on a frame that is not there warns and leaves the sprite on a
- * missing texture. Clamping in one place means neither the renderer nor the
- * exporter has to decide what an out-of-range frame means.
+ * The order is the packer's rather than sorted, because it is the order the
+ * artist's own export produced and it is what makes "every frame, in order" the
+ * sensible seed for a new clip.
  */
-export function clampFrame(asset: ImageAsset | undefined, frame: number): number {
-  if (!Number.isFinite(frame)) return 0;
-  return Math.min(Math.max(0, Math.floor(frame)), frameCountOf(asset) - 1);
+export function frameNamesOf(asset: ImageAsset | undefined): string[] {
+  return atlasOf(asset)?.map((frame) => frame.name) ?? [];
+}
+
+/**
+ * A frame that certainly exists on the asset — an index into a grid, or a name
+ * out of an atlas.
+ *
+ * One function for the two cuts, because every caller wants the same thing and
+ * none of them should be deciding what an unusable frame means. A sprite keeps
+ * its frame when its image is swapped for a smaller sheet or a different atlas,
+ * and a hand-edited file can name anything at all; Phaser's `setFrame` on a
+ * frame that is not there warns and leaves the object on a missing texture.
+ *
+ * The two halves fall back differently, and each falls back the only way it
+ * can: a grid index clamps into range, while a name has no near neighbour to
+ * clamp to, so it drops to the atlas's first frame. Both are repairs made on
+ * **read** — the document keeps what the user chose, so an atlas re-imported
+ * with the name restored brings the node back with it. That is the treatment
+ * `tileMapOf` gives an out-of-range tile, and for its reason.
+ */
+export function resolveFrame(
+  asset: ImageAsset | undefined,
+  frame: number | string,
+): number | string {
+  const atlas = atlasOf(asset);
+  if (atlas) {
+    return atlas.some((entry) => entry.name === frame) ? (frame as string) : atlas[0].name;
+  }
+  const index = typeof frame === 'number' ? frame : Number(frame);
+  if (!Number.isFinite(index)) return 0;
+  return Math.min(Math.max(0, Math.floor(index)), frameCountOf(asset) - 1);
+}
+
+/**
+ * How big one frame of the asset is, in the image's own pixels.
+ *
+ * The question `sliceInsetsOf` has always asked and used to answer inline off
+ * the grid. An atlas's frames are not all one size — that is the whole of what
+ * an atlas is — so a panel cut from one has to measure its insets against *its*
+ * frame rather than against the image or against some average of them.
+ *
+ * A trimmed frame reports its untrimmed size, because that is the box Phaser
+ * draws it into and therefore the box the insets are cut against.
+ */
+export function frameSizeOf(
+  asset: ImageAsset | undefined,
+  frame: number | string,
+): { width: number; height: number } | null {
+  if (!asset) return null;
+  const atlas = atlasOf(asset);
+  if (atlas) {
+    const entry = atlas.find((candidate) => candidate.name === frame) ?? atlas[0];
+    return {
+      width: entry.sourceWidth ?? entry.width,
+      height: entry.sourceHeight ?? entry.height,
+    };
+  }
+  const grid = frameGridOf(asset);
+  if (grid) return { width: grid.frameWidth, height: grid.frameHeight };
+  return { width: asset.width, height: asset.height };
 }
 
 /**
@@ -455,11 +717,17 @@ export interface SpriteProps {
   flipX: boolean;
   flipY: boolean;
   /**
-   * Which frame of the asset's sheet to draw. Always 0 for a plain image,
-   * which has exactly one frame — so this needs no "is it a sheet" branch
-   * anywhere that reads it, only a `clampFrame`.
+   * Which frame of the asset to draw: an index into its grid, or a name out of
+   * its atlas. Always 0 for a plain image, which has exactly one frame — so
+   * this needs no "is it cut" branch anywhere that reads it, only a
+   * `resolveFrame`.
+   *
+   * A name rather than a position for an atlas, and that is the point of an
+   * atlas rather than a detail of it: a packer re-run with one sprite added
+   * renumbers every frame after it, so an index would silently redraw half the
+   * scene while a name either still exists or visibly does not.
    */
-  frame: number;
+  frame: number | string;
   /**
    * The clip this sprite plays, or null for a still frame.
    *
@@ -497,8 +765,8 @@ export interface SpriteProps {
 export interface NineSliceProps {
   /** Null until an image is chosen; the canvas draws the placeholder until then. */
   assetId: string | null;
-  /** Which frame of the asset's sheet to slice, clamped by `clampFrame`. */
-  frame: number;
+  /** Which frame of the asset to slice, resolved by `resolveFrame`. */
+  frame: number | string;
   width: number;
   height: number;
   /**
@@ -538,8 +806,8 @@ export interface NineSliceProps {
 export interface TileSpriteProps {
   /** Null until an image is chosen; the canvas draws the placeholder until then. */
   assetId: string | null;
-  /** Which frame of the asset's sheet to repeat, clamped by `clampFrame`. */
-  frame: number;
+  /** Which frame of the asset to repeat, resolved by `resolveFrame`. */
+  frame: number | string;
   width: number;
   height: number;
   /** Where in the texture the top-left of the box starts, in source pixels. */
@@ -564,8 +832,9 @@ export interface TileSpriteProps {
  *
  * - *Is there a source to measure against?* With no asset the frame is the
  *   placeholder's own square, which is what the canvas actually draws.
- * - *How big is one frame of it?* A sliced sheet's frame, not the whole image —
- *   the same distinction `clampFrame` is built on.
+ * - *How big is one frame of it?* A cut frame, not the whole image — the same
+ *   distinction `resolveFrame` is built on, and for an atlas it is this node's
+ *   own frame, since no two of them need be the same size.
  * - *Do these four numbers fit?* Phaser needs `left + right` to be no wider
  *   than both the frame it cuts them from and the box it draws them into, and
  *   the same vertically. Exceeding the frame samples pixels that are not there;
@@ -585,9 +854,12 @@ export function sliceInsetsOf(
   // so the exporter never has a frame size to be missing.
   fallbackFrameSize = 0,
 ): { left: number; right: number; top: number; bottom: number } {
-  const sheet = asset ? frameGridOf(asset) : undefined;
-  const frameWidth = sheet ? sheet.frameWidth : (asset?.width ?? fallbackFrameSize);
-  const frameHeight = sheet ? sheet.frameHeight : (asset?.height ?? fallbackFrameSize);
+  // `frameSizeOf` answers for both cuts, and for an atlas it has to be asked
+  // about *this node's* frame: an atlas's frames are not all one size, which is
+  // the whole of what an atlas is.
+  const size = frameSizeOf(asset, props.frame);
+  const frameWidth = size?.width ?? fallbackFrameSize;
+  const frameHeight = size?.height ?? fallbackFrameSize;
 
   // Both limits at once: the picture the insets are cut from, and the box they
   // are drawn into. Whichever is smaller is the one that binds.
@@ -899,13 +1171,12 @@ export interface ParticlesProps {
   /** Null until an image is chosen; the canvas draws the emitter marker until then. */
   assetId: string | null;
   /**
-   * Which frame of the asset's sheet each particle draws, clamped by
-   * `clampFrame` exactly as a sprite's is. One frame rather than a list: a
-   * `frames` array would be the second array-valued prop in the schema and the
-   * second `cloneWithNewIds` special case, for a look a single frame mostly
-   * covers.
+   * Which frame of the asset each particle draws, resolved by `resolveFrame`
+   * exactly as a sprite's is. One frame rather than a list: a `frames` array
+   * would be the third array-valued prop in the schema and the third
+   * `cloneWithNewIds` special case, for a look a single frame mostly covers.
    */
-  frame: number;
+  frame: number | string;
   /** How long one particle lives, in milliseconds. */
   lifespan: number;
   /** Phaser's `speed: { min, max }`, in pixels per second. */
@@ -1330,11 +1601,17 @@ export interface AnimationClip {
   /** The sheet the frame indices are read against. */
   assetId: string;
   /**
-   * Frame indices in playback order. Free to repeat and to run backwards: a
-   * ping-pong is `[0, 1, 2, 1]`, which is why this is a list rather than a
-   * start and an end.
+   * Frames in playback order — indices into a grid, or names out of an atlas,
+   * matching however the clip's own asset is cut. Free to repeat and to run
+   * backwards: a ping-pong is `[0, 1, 2, 1]`, which is why this is a list
+   * rather than a start and an end.
+   *
+   * The two never mix within one clip, because a clip names one asset and an
+   * asset is cut one way. That is what lets the exporter pick between
+   * `generateFrameNumbers` and `generateFrameNames` from the asset rather than
+   * from the entries.
    */
-  frames: number[];
+  frames: (number | string)[];
   frameRate: number;
   /** Phaser's own: -1 loops forever, 0 plays once. */
   repeat: number;
@@ -2061,7 +2338,7 @@ export interface TileMap {
  * arrives here has already been re-shaped, or was never written by this editor.
  *
  * A tile the tileset does not have reads as *empty*, not as the nearest one it
- * does. That is the opposite of `clampFrame`, deliberately: a sprite has no way
+ * does. That is the opposite of `resolveFrame`, deliberately: a sprite has no way
  * to show "no frame", so clamping is the only answer there, while `-1` is a
  * first-class value here and Phaser's own. It is also what lets a re-cut leave
  * the document alone — the map goes blank while the sheet is mid-edit and comes

@@ -206,9 +206,11 @@ test('an emitter exports as one add.particles with its whole config', async ({
   const exported = await editor.exportCode('ts');
 
   // An `add.*` rather than a helper call: an emitter is one expression, so it
-  // does not need the route a tilemap and an instance had to take. One call,
-  // because the fixture holds two emitters and only one has an image.
-  expect(exported.contents.split('.add.particles(')).toHaveLength(2);
+  // does not need the route a tilemap and an instance had to take. Two calls,
+  // because the fixture holds three emitters — one over a sheet, one over an
+  // atlas frame, and one with no image at all, which takes `constructorFor`'s
+  // null return.
+  expect(exported.contents.split('.add.particles(')).toHaveLength(3);
 
   // The config is emitted whole, defaults included, so the generated code says
   // exactly what the document says rather than half-hiding settings behind
@@ -233,10 +235,12 @@ test('a panel and a tiled image export as one add.* each, whole', async ({
 
   const exported = await editor.exportCode('ts');
 
-  // Two panels reach the output: the fixture holds three and the third has no
-  // image, which takes `constructorFor`'s null return exactly as the unfinished
-  // emitter does.
-  expect(exported.contents.split('.add.nineslice(')).toHaveLength(3);
+  // Three panels reach the output: the fixture holds four and one has no image,
+  // which takes `constructorFor`'s null return exactly as the unfinished
+  // emitter does. The third is cut from an atlas frame rather than a grid, so
+  // this count is also what says `sliceInsetsOf` measured against a *frame*
+  // rather than refusing a node whose frame is a name.
+  expect(exported.contents.split('.add.nineslice(')).toHaveLength(4);
   expect(exported.contents.split('.add.tileSprite(')).toHaveLength(2);
 
   // The insets are emitted whole, beside the box they are cut against — the
@@ -322,12 +326,15 @@ test('two scenes named the same thing export as two classes with two keys', asyn
   expect(keys).toHaveLength(2);
   expect(new Set(keys).size).toBe(2);
 
-  // One texture, one factory, one animation key — the tables are file-wide, so
-  // a second scene drawing the same sheet adds nothing to them.
-  expect(exported.contents.match(/^ {2}"[^"]*": "data:image/gm) ?? []).toHaveLength(1);
+  // One row per *image*, not per use — the tables are file-wide, so a second
+  // scene drawing the same sheet adds nothing to them. Two, because the fixture
+  // holds two images: one cut by a grid and one by an atlas.
+  expect(exported.contents.match(/^ {2}"[^"]*": "data:image/gm) ?? []).toHaveLength(2);
   // And the clip is registered in each scene that plays it, guarded, because
   // an animation belongs to the game rather than to whichever scene ran first.
-  expect(exported.contents.match(/this\.anims\.exists\(/g) ?? []).toHaveLength(2);
+  // Three: the sheet's clip in both scenes, and the atlas's in the one that
+  // plays it.
+  expect(exported.contents.match(/this\.anims\.exists\(/g) ?? []).toHaveLength(3);
 });
 
 test('a group exports as a container its children are added to', async ({ editor }) => {

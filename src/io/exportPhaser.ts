@@ -2,7 +2,8 @@ import { activeScene } from '../core/store';
 import {
   TARGET_PHASER_VERSION,
   cameraOf,
-  clampFrame,
+  atlasDataOf,
+  atlasOf,
   collidersOf,
   controlsOf,
   findAnimation,
@@ -13,6 +14,7 @@ import {
   fontFormatOf,
   fontStackOf,
   frameGridOf,
+  resolveFrame,
   isDefaultCamera,
   physicsOf,
   scenePhysicsOf,
@@ -102,6 +104,17 @@ const str = (value: string): string => JSON.stringify(value);
 
 /** Trims trailing zeroes so the output reads 480 rather than 480.0000001. */
 const num = (value: number): string => String(Number(value.toFixed(4)));
+
+/**
+ * A frame as an argument: a quoted name for an atlas, a bare number for a grid.
+ *
+ * One helper rather than the same ternary at four call sites, because getting
+ * it wrong is not a type error in the *emitted* code — `add.image(k, "2")` is
+ * legal JavaScript that asks a sprite sheet for a frame called "2" and gets a
+ * missing texture.
+ */
+const frameArg = (frame: number | string): string =>
+  typeof frame === 'string' ? str(frame) : num(frame);
 
 /**
  * A safe, unique JavaScript identifier derived from the object's name. Names in
@@ -346,6 +359,59 @@ function buildAssetTable(used: Map<string, UsedAsset>, indent: string): string {
 }
 
 /**
+ * The frame data for every atlas-cut image in the file, in Phaser's own JSON
+ * Hash shape.
+ *
+ * A named const beside `ASSETS` for `ASSETS`' reason and `TILEMAPS`': the bytes
+ * and the cuts are the two things a reader swaps for real files, and both are
+ * one object to edit rather than a literal buried in a `preload` line. It is
+ * keyed by the same texture key the image is, so the two rows line up.
+ *
+ * Built through `atlasDataOf`, which is also what the editor's own
+ * `textures.addAtlas` is handed — one builder, so the canvas and the export
+ * cannot come to disagree about where a frame is. That is `textStyleOf`'s
+ * two-consumer argument, and here it is the sharper one, because a
+ * disagreement about pixel coordinates is invisible in both outputs until
+ * somebody looks at the game.
+ *
+ * One line per frame rather than one blob, because an atlas can carry hundreds
+ * and a diff of a re-packed atlas should be readable. `JSON.stringify` writes
+ * each record, so a frame name is quoted by exactly the rule `str` follows and
+ * the whole thing still goes through `escapeForScriptTag` on the way into the
+ * runnable page.
+ */
+function buildAtlasTable(used: Map<string, UsedAsset>, indent: string): string {
+  const rows: string[] = [];
+  for (const { asset, key } of used.values()) {
+    const frames = atlasOf(asset);
+    if (!frames) continue;
+    rows.push(`  ${str(key)}: {`);
+    rows.push('    frames: {');
+    for (const [name, entry] of Object.entries(atlasDataOf(frames).frames)) {
+      rows.push(`      ${str(name)}: ${JSON.stringify(entry)},`);
+    }
+    rows.push('    },');
+    rows.push('  },');
+  }
+
+  const lines = [
+    '/**',
+    ' * Texture atlases from the editor: which named frame sits where in each',
+    ' * image. To load a real atlas file instead, replace a value with its path.',
+    ' */',
+    'const ATLASES = {',
+    ...rows,
+    '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/** Whether any image the file loads is cut by an atlas rather than a grid. */
+function hasAtlasIn(used: Map<string, UsedAsset>): boolean {
+  return [...used.values()].some(({ asset }) => atlasOf(asset) !== null);
+}
+
+/**
  * A cache key for each sound some scene registers, in use order.
  *
  * `collectAssets`' sibling, with two differences that each look like an
@@ -508,10 +574,11 @@ function buildFontTable(used: Map<string, FontAsset>, indent: string): string {
  * menu that loads the whole game's artwork is a menu that waits for it.
  *
  * A sheet loads through `load.spritesheet` with the document's own four
- * numbers, so the frames the exported game cuts are the frames the editor drew.
- * A plain image still loads through `load.image`, unchanged — emitting every
- * image as a one-frame sheet would work and would make every shape-only-plus-
- * image export differ from what it was for no gain.
+ * numbers, and an atlas through `load.atlas` with the document's own frames, so
+ * the frames the exported game cuts are the frames the editor drew. A plain
+ * image still loads through `load.image`, unchanged — emitting every image as a
+ * one-frame sheet would work and would make every shape-only-plus-image export
+ * differ from what it was for no gain.
  */
 function buildPreloadBody(
   used: Map<string, UsedAsset>,
@@ -525,6 +592,15 @@ function buildPreloadBody(
     .filter(({ asset }) => ids.has(asset.id))
     .map(({ asset, key }) => {
       const sheet = frameGridOf(asset);
+      // An atlas loads through `load.atlas`, and its second argument is the
+      // frame data *object* rather than a URL — Phaser's `AtlasJSONFile` takes
+      // "a well formed JSON object" there and skips the fetch, which is what
+      // lets the cuts ride inside this file exactly as the bytes already do.
+      // It is the `load.font` shape one table over, and it is the whole reason
+      // an atlas needed no second file and no boot-order question.
+      if (!sheet && atlasOf(asset)) {
+        return `    this.load.atlas(${str(key)}, ASSETS[${str(key)}], ATLASES[${str(key)}]);`;
+      }
       if (!sheet) return `    this.load.image(${str(key)}, ASSETS[${str(key)}]);`;
       return (
         `    this.load.spritesheet(${str(key)}, ASSETS[${str(key)}], {\n` +
@@ -578,6 +654,8 @@ function buildPreloadBody(
  */
 interface UsedAnimation {
   clip: AnimationClip;
+  /** True when the clip's asset is cut by an atlas, so its frames are names. */
+  named: boolean;
   key: string;
   /** The texture key its frames are read from. */
   textureKey: string;
@@ -610,6 +688,12 @@ function collectAnimations(
             clip,
             key: uniqueKey(clip.name, keys),
             textureKey: entry.key,
+            // Which generator the clip needs is a fact about the *asset's* cut,
+            // not about the entries in the list: a clip names one asset and an
+            // asset is cut one way, so this is settled once here rather than
+            // sniffed per frame where a hand-edited file could make it
+            // disagree with itself halfway down the array.
+            named: atlasOf(entry.asset) !== null,
           });
         }
       }
@@ -722,18 +806,40 @@ function buildAnimationLines(
   ids: ReadonlySet<string>,
 ): string[] {
   const lines: string[] = [];
-  for (const { clip, key, textureKey } of used.values()) {
+  for (const { clip, key, textureKey, named } of used.values()) {
     if (!ids.has(clip.id)) continue;
     lines.push(`if (!this.anims.exists(${str(key)})) {`);
     lines.push('  this.anims.create({');
     lines.push(`    key: ${str(key)},`);
-    // `generateFrameNumbers` with an explicit list rather than a start and an
-    // end: the document stores a list, and a list is what expresses a sequence
+    // An explicit list rather than a start and an end, either way the image is
+    // cut: the document stores a list, and a list is what expresses a sequence
     // that repeats or runs backwards — a ping-pong is [0, 1, 2, 1].
-    lines.push(
-      `    frames: this.anims.generateFrameNumbers(${str(textureKey)}, ` +
-        `{ frames: [${clip.frames.join(', ')}] }),`,
-    );
+    //
+    // A grid keeps `generateFrameNumbers`, unchanged to the character, so every
+    // export that predates atlases is byte for byte what it was.
+    //
+    // An atlas emits the frames themselves, and **`generateFrameNames` is not
+    // usable here even though it is the obvious call**. Its runtime does the
+    // right thing — `prefix + Pad(frame, 0) + suffix` leaves a name alone — but
+    // Phaser's own type for its config declares `frames?: boolean | number[]`,
+    // so the exported `.ts` does not compile under `--strict`, and the shared
+    // `create()` body has nowhere to put a cast. `Types.Animations.AnimationFrame`
+    // is `{ key, frame: string | number }`, which `anims.create` takes directly
+    // — and it is exactly what `EditorScene.syncAnimations` already builds, so
+    // the two halves of this feature now say the same thing the same way.
+    // Only `export-toolchain.spec.ts` could have found this.
+    if (named) {
+      lines.push('    frames: [');
+      for (const frame of clip.frames) {
+        lines.push(`      { key: ${str(textureKey)}, frame: ${frameArg(frame)} },`);
+      }
+      lines.push('    ],');
+    } else {
+      lines.push(
+        `    frames: this.anims.generateFrameNumbers(${str(textureKey)}, ` +
+          `{ frames: [${clip.frames.join(', ')}] }),`,
+      );
+    }
     lines.push(`    frameRate: ${num(clip.frameRate)},`);
     lines.push(`    repeat: ${num(clip.repeat)},`);
     lines.push('  });');
@@ -1145,10 +1251,14 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
       }
       // Frame 0 is `add.image`'s own default, so a plain image emits exactly
       // the call it always did.
-      const frame = clampFrame(entry.asset, node.props.frame);
+      const frame = resolveFrame(entry.asset, node.props.frame);
+      // Frame 0 is `add.image`'s own default, so a still sprite on a plain
+      // image emits exactly what it always did. An atlas has no such default:
+      // every frame there has a name and none of them is the one Phaser would
+      // reach for, so the argument is always printed.
       return frame === 0
         ? `${receiver}.add.image(${num(x)}, ${num(y)}, ${str(entry.key)})`
-        : `${receiver}.add.image(${num(x)}, ${num(y)}, ${str(entry.key)}, ${num(frame)})`;
+        : `${receiver}.add.image(${num(x)}, ${num(y)}, ${str(entry.key)}, ${frameArg(frame)})`;
     }
     case 'nineslice': {
       const entry = node.props.assetId ? used.get(node.props.assetId) : undefined;
@@ -1163,7 +1273,7 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
       // physics body's, not the chained modifier's.
       return (
         `${receiver}.add.nineslice(${num(x)}, ${num(y)}, ${str(entry.key)}, ` +
-        `${num(clampFrame(entry.asset, p.frame))}, ${num(p.width)}, ${num(p.height)}, ` +
+        `${frameArg(resolveFrame(entry.asset, p.frame))}, ${num(p.width)}, ${num(p.height)}, ` +
         `${num(insets.left)}, ${num(insets.right)}, ${num(insets.top)}, ${num(insets.bottom)})`
       );
     }
@@ -1176,7 +1286,7 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
       // when they differ from a plain repeat.
       return (
         `${receiver}.add.tileSprite(${num(x)}, ${num(y)}, ${num(p.width)}, ${num(p.height)}, ` +
-        `${str(entry.key)}, ${num(clampFrame(entry.asset, p.frame))})`
+        `${str(entry.key)}, ${frameArg(resolveFrame(entry.asset, p.frame))})`
       );
     }
     case 'tilemap': {
@@ -1216,7 +1326,7 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
       // one place rather than half-hidden behind a default they cannot see.
       return (
         `${receiver}.add.particles(${num(x)}, ${num(y)}, ${str(entry.key)}, {\n` +
-        `      frame: ${num(clampFrame(entry.asset, p.frame))},\n` +
+        `      frame: ${frameArg(resolveFrame(entry.asset, p.frame))},\n` +
         `      lifespan: ${num(p.lifespan)},\n` +
         `      speed: { min: ${num(p.speedMin)}, max: ${num(p.speedMax)} },\n` +
         `      angle: { min: ${num(p.angleMin)}, max: ${num(p.angleMax)} },\n` +
@@ -1456,10 +1566,13 @@ function missingReason(node: GameObjectNode): string {
   }
   // Two ways for a tilemap to have no tileset, and they need different fixes:
   // one is answered in the asset picker and the other in the slicer, so the
-  // comment says which.
+  // comment says which. The first now covers an atlas-cut image as well as an
+  // uncut one — "not cut into a uniform grid" is the true thing about both, and
+  // the fix is the same either way, so this stays one branch rather than
+  // growing a project parameter it would need to tell them apart.
   if (node.type === 'tilemap') {
     return node.props.assetId
-      ? 'its image is not sliced into tiles, so there is no tileset to build.'
+      ? 'its image is not cut into a uniform grid of tiles, so there is no tileset to build.'
       : 'no tileset chosen in the editor, so nothing to add.';
   }
   // The fallback covers a sprite, an emitter, a panel and a tile sprite alike,
@@ -2334,6 +2447,11 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // the same kind of thing — embedded bytes a reader swaps for paths — and
   // before `TILEMAPS`, which is derived from an asset rather than being one.
   const audio = ctx.audio.size > 0 ? `\n${buildAudioTable(ctx.audio, '')}\n` : '';
+  // Gated on an image actually being cut by an atlas rather than on the asset
+  // table having anything in it, or every project with a plain image would emit
+  // an empty `const ATLASES = {}` — which passes every test and breaks the
+  // byte-for-byte property every table before it has kept.
+  const atlases = hasAtlasIn(ctx.assets) ? `\n${buildAtlasTable(ctx.assets, '')}\n` : '';
   const fonts = ctx.fonts.size > 0 ? `\n${buildFontTable(ctx.fonts, '')}\n` : '';
   // Same rule again: no tilemaps, no table and no helper, so every project that
   // predates them exports byte for byte what it always did.
@@ -2360,7 +2478,7 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
 
   return `${header(project)}${physicsNote(physics.any)}
 import Phaser from 'phaser';
-${table}${audio}${fonts}${tiles}${bodies}${buttons}${factories}
+${table}${audio}${atlases}${fonts}${tiles}${bodies}${buttons}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -2386,6 +2504,9 @@ export function generateRunnableHtml(project: Project): string {
     ctx.assets.size > 0 ? `${buildAssetTable(ctx.assets, '      ')}\n\n` : '';
   const audio =
     ctx.audio.size > 0 ? `${buildAudioTable(ctx.audio, '      ')}\n\n` : '';
+  const atlases = hasAtlasIn(ctx.assets)
+    ? `${buildAtlasTable(ctx.assets, '      ')}\n\n`
+    : '';
   const fonts =
     ctx.fonts.size > 0 ? `${buildFontTable(ctx.fonts, '      ')}\n\n` : '';
   const tiles =
@@ -2432,7 +2553,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${fonts}${tiles}${bodies}${buttons}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${tiles}${bodies}${buttons}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,
