@@ -101,8 +101,18 @@
  * an ordinary image, sliced or not, and their own props ride in on `scenes`,
  * verbatim. Cameras did not bump it and these do, which is the whole difference
  * between a field on a scene and a new kind of object in one.
+ *
+ * **v10 is the font table, and it is the v8 case rather than any of the crash
+ * cases.** There is no crash half at all: fonts add no `NodeType`, so a v9
+ * build has a `createDisplayObject` case for everything in the file and draws
+ * it without complaint. What it does is drop `project.fonts` on open — the
+ * field-by-field reconstruction again — and re-save without it, leaving every
+ * text node naming a family whose bytes have just been thrown away. That is
+ * strictly worse than the audio case it copies: a sound that loses its table
+ * makes no noise, where text that loses its font goes on drawing, in a face
+ * the user never chose and with nothing at all having said so.
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -189,6 +199,101 @@ export interface AudioAsset {
    * from the fields this schema keeps refusing.
    */
   duration: number;
+}
+
+/**
+ * An imported font, held in the document as a data URL.
+ *
+ * The `ImageAsset` and `AudioAsset` argument for the third time — the bytes are
+ * in the document because `JSON.stringify(project)` is the whole of the save.
+ * What is worth knowing is the one field the other two have not got.
+ *
+ * **`family` is stored, where an audio key is derived.** `audioKeyOf` works a
+ * sound's key out from its name at export time because nothing in the document
+ * refers to it; a text node reaches a font by *holding this string* in its
+ * `fontFamily`, so it has to be stable for the life of the project and unique
+ * within it. Derived once by `fontFamilyFor` at import and never editable
+ * afterwards, which is an image's treatment rather than a sound's, and for an
+ * image's reason: renaming would break every node that named the old string.
+ *
+ * There is no metrics field, and that is the `AudioAsset.duration` test coming
+ * out the other way. A duration is one number, intrinsic to the bytes, and
+ * shown in a panel row that cannot wait for a decode. A font's metrics are
+ * neither one number nor meaningful without a size, and nothing in this editor
+ * reads them: the canvas measures the glyphs it actually drew, which is what
+ * `publishMeasuredBounds` has always done for text.
+ */
+export interface FontAsset {
+  id: string;
+  /** The file name it was imported from. Shown in the picker; never a key. */
+  name: string;
+  /**
+   * The CSS family this font is registered under, and the string a text node's
+   * `fontFamily` names to use it.
+   *
+   * An identifier-safe token by construction — see `fontFamilyFor` — which is
+   * what lets `fontStackOf` be a plain split and what makes the name safe in
+   * every place it is printed.
+   */
+  family: string;
+  /** One of `FONT_MIME_TYPES`; like a sound's, and unlike an image's, not re-encoded. */
+  mimeType: string;
+  dataUrl: string;
+}
+
+/**
+ * The `format()` hint for a stored font, which both the editor's `FontFace` and
+ * the exported `this.load.font(...)` have to be handed.
+ *
+ * Here rather than in `fonts.ts` so that the renderer and the exporter read one
+ * answer, which is `textStyleOf`'s argument one table over. It is not optional
+ * at either call site: a browser handed the wrong hint refuses the font
+ * outright, and Phaser's own default is `'truetype'` — so a WOFF2 left to that
+ * default is a font that silently fails to load and falls back.
+ */
+export function fontFormatOf(mimeType: string): string {
+  switch (mimeType) {
+    case 'font/otf':
+      return 'opentype';
+    case 'font/woff':
+      return 'woff';
+    case 'font/woff2':
+      return 'woff2';
+    default:
+      return 'truetype';
+  }
+}
+
+/**
+ * A family name a font may be stored under: a letter, then letters and digits.
+ *
+ * The gate for a hand-edited file, and the reason nothing downstream has to
+ * escape a family. `fontFamilyFor` produces only these, so a family that fails
+ * this test came from outside the editor — and `parseFonts` drops the whole
+ * entry rather than repairing it, because a repaired family would no longer be
+ * the string the text nodes name.
+ */
+export const FONT_FAMILY = /^[A-Za-z][A-Za-z0-9]*$/;
+
+/**
+ * The families a `fontFamily` asks for, in order.
+ *
+ * The only reader of that field beyond `textStyleOf`, in the `guidesOf` /
+ * `frameGridOf` / `sliceInsetsOf` / `soundsOf` / `cameraOf` / `tileMapOf`
+ * family, and here because `fontFamily` has always been a CSS *stack* rather
+ * than a name: `system-ui, sans-serif` is what a new text node ships with. The
+ * renderer asks "which imported fonts does this node need" and the exporter
+ * asks "which does this scene preload", and those must be one answer — a node
+ * whose stack is `Chunky, sans-serif` has to count as using `Chunky` in both.
+ *
+ * A plain split is enough because a stored family can hold neither a comma nor
+ * a space (`FONT_FAMILY`), so no CSS quoting can ever be involved.
+ */
+export function fontStackOf(fontFamily: string): string[] {
+  return String(fontFamily ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -1767,6 +1872,16 @@ export interface Project {
    */
   audio: AudioAsset[];
   /**
+   * Fonts, shared across every scene for the reason the images and sounds are.
+   *
+   * What a text node holds is not a pointer in here at all: it names a
+   * `family`, which is the same field it has always used to name Georgia. That
+   * is the whole design — see `FontAsset` — and it is why this table has no
+   * per-node or per-scene companion the way `audio` has `SceneSound`. A font is
+   * not tuned; it is either the family a node names or it is not.
+   */
+  fonts: FontAsset[];
+  /**
    * Animations, shared across every scene exactly as the assets they read are.
    *
    * A separate table rather than a field on the asset because a clip is
@@ -1799,6 +1914,28 @@ export function findAudio(
   id: string | null | undefined,
 ): AudioAsset | undefined {
   return id ? project.audio.find((asset) => asset.id === id) : undefined;
+}
+
+/**
+ * The imported font a family names, if any.
+ *
+ * The `findAsset` / `findAudio` / `findAnimation` row, and **the only one keyed
+ * by something other than an id** — because a text node names a font rather
+ * than pointing at one. There is deliberately no `findFont(project, id)` beside
+ * it: nothing in the document holds a font id, so a by-id finder would have no
+ * caller and would imply a kind of reference this design does not have.
+ *
+ * A family matching nothing is not a failure. It is `system-ui`, or `Georgia`,
+ * or a font the project no longer carries — all of which mean the same thing to
+ * a browser and are drawn the same way, which is what makes "no font chosen",
+ * "the font is gone" and "an ordinary system family" one state and one code
+ * path.
+ */
+export function fontByFamily(
+  project: Project,
+  family: string | null | undefined,
+): FontAsset | undefined {
+  return family ? project.fonts.find((asset) => asset.family === family) : undefined;
 }
 
 export function findAnimation(

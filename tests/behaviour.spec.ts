@@ -264,7 +264,7 @@ test('solid tiles are outlined while painting, and stop being when unmarked', as
   expect((await editor.findDrawn(BODY)).count).toBe(0);
 });
 
-test('solid tiles, a collision and controls survive a save and an open, at schema 9', async ({
+test('solid tiles, a collision and controls survive a save and an open, at schema 10', async ({
   editor,
 }, testInfo) => {
   await editor.clearScene();
@@ -289,12 +289,13 @@ test('solid tiles, a collision and controls survive a save and an open, at schem
   const saved = await editor.saveToFile();
   const project = JSON.parse(saved.contents);
 
-  // Unbumped, and asserted so a future bump is a deliberate act rather than
-  // something that happens to a file. None of the three is a new node type, and
-  // all three ride in on `scenes`, which `parseProject` passes through verbatim
-  // — so a deployed v9 build opens this file, draws it identically and carries
-  // them back out on a re-save. The guides, physics and camera case exactly.
-  expect(project.schemaVersion).toBe(9);
+  // Asserted so a future bump is a deliberate act rather than something that
+  // happens to a file. None of the three is a new node type, and all three ride
+  // in on `scenes`, which `parseProject` passes through verbatim — so a build
+  // that predates them opens this file, draws it identically and carries them
+  // back out on a re-save. The guides, physics and camera case exactly. It
+  // reads 10 because fonts added a project-level table; behaviour did not.
+  expect(project.schemaVersion).toBe(10);
   expect(project.scenes[0].children[0].controls).toEqual({
     mode: 'platformer',
     scheme: 'wasd',

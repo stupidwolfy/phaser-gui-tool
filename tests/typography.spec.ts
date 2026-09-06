@@ -156,13 +156,14 @@ test('every typography field survives a save and an open', async ({ editor }) =>
   const saved = await editor.saveToFile();
   const project = JSON.parse(saved.contents);
 
-  // Unbumped, and asserted so a future bump is a deliberate act rather than
-  // something that happens to a file — the guides, scenes, physics, camera and
-  // behaviour precedent. These are fields on `props`, which rides in on
-  // `scenes`, the one part of a file the parser passes through verbatim, so a
-  // deployed older build opens this file, draws the text with the three keys it
-  // knows and carries the rest back out on a re-save.
-  expect(project.schemaVersion).toBe(9);
+  // Asserted so a future bump is a deliberate act rather than something that
+  // happens to a file — the guides, scenes, physics, camera and behaviour
+  // precedent. These are fields on `props`, which rides in on `scenes`, the one
+  // part of a file the parser passes through verbatim, so a build that predates
+  // them opens this file, draws the text with the three keys it knows and
+  // carries the rest back out on a re-save. It reads 10 because fonts added a
+  // project-level table one iteration later; typography itself did not bump.
+  expect(project.schemaVersion).toBe(10);
   expect(project.scenes[0].children[0].props).toMatchObject({
     bold: true,
     italic: true,

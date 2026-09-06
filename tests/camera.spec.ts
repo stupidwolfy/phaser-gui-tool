@@ -144,7 +144,7 @@ test('deleting the followed object leaves the camera following nothing', async (
   expect(await editor.choice('Camera follows').inputValue()).toBe('');
 });
 
-test('a camera survives a save and an open, at schema 9', async ({ editor }, testInfo) => {
+test('a camera survives a save and an open, at schema 10', async ({ editor }, testInfo) => {
   await editor.clearScene();
   await editor.addObject('Rectangle');
   await editor.deselect();
@@ -162,12 +162,13 @@ test('a camera survives a save and an open, at schema 9', async ({ editor }, tes
   const saved = await editor.saveToFile();
   const project = JSON.parse(saved.contents);
 
-  // Unbumped, and asserted so a future bump is a deliberate act rather than
-  // something that happens to a file — the guides, scenes and physics
-  // precedent. A camera rides in on `scenes`, which the parser passes through
-  // verbatim, so a deployed older build opens this file, draws it identically
-  // and carries the camera back out on a re-save.
-  expect(project.schemaVersion).toBe(9);
+  // Asserted so a future bump is a deliberate act rather than something that
+  // happens to a file — the guides, scenes and physics precedent. A camera
+  // rides in on `scenes`, which the parser passes through verbatim, so a build
+  // that predates it opens this file, draws it identically and carries the
+  // camera back out on a re-save. It reads 10 because fonts added a
+  // project-level table; the camera did not.
+  expect(project.schemaVersion).toBe(10);
   expect(project.scenes[0].camera).toMatchObject({
     scrollX: 40,
     scrollY: 80,

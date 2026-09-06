@@ -1,4 +1,4 @@
-import { expect, type CDPSession, type Locator, type Page } from '@playwright/test';
+import { expect, type CDPSession, type Dialog, type Locator, type Page } from '@playwright/test';
 import { findColor, findColorBox, type ColorBlob, type ColorBox } from './pixels';
 
 /** The default scene, from `src/core/defaults.ts`. */
@@ -92,6 +92,22 @@ export class EditorPage {
 
   get canvas(): Locator {
     return this.page.locator('.viewport canvas');
+  }
+
+  /**
+   * Reloads the page, which comes back on the autosaved draft.
+   *
+   * The one way to reach a genuinely cold boot from inside a test. Everything
+   * else a spec can do — `newProject`, `openFile` — happens in a page that has
+   * already decoded whatever it is about to be handed, because the decode
+   * caches in `assets.ts`, `audio.ts` and `fonts.ts` are module-level and
+   * survive any amount of opening and closing. So a spec whose subject is *the
+   * asynchronous load itself* has to come through here, or it silently asserts
+   * the synchronous path twice.
+   */
+  async reload(): Promise<void> {
+    await this.page.reload();
+    await this.waitForCanvas();
   }
 
   /** Resolves once Phaser has booted and drawn at least one frame. */
@@ -939,6 +955,34 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * Imports a font through the `<input type="file">` path, which is the only
+   * one the font picker offers.
+   *
+   * A text object must be selected: the picker lives in its inspector section,
+   * where a sprite's image picker is, so this assumes a node the way
+   * `importImage` does rather than deselecting the way `importAudio` does.
+   *
+   * **The mime is passed empty on purpose, and that is the point of the
+   * helper.** Playwright will happily supply `font/ttf`, which is what a
+   * desktop Linux picker reports and what nothing else does — phones and
+   * several browsers report `application/octet-stream` or nothing at all. An
+   * empty one is therefore the honest fixture, and it is the only thing that
+   * exercises `fontMimeOf`'s extension fallback: with a clean mime handed in,
+   * a regression that dropped that fallback would pass the whole suite and
+   * fail on every real phone.
+   */
+  async importFont(file: { name: string; buffer: Buffer }): Promise<void> {
+    await this.openPanel('inspect');
+    const chooser = this.page.waitForEvent('filechooser');
+    await this.panel('inspect').getByRole('button', { name: 'Import font…' }).click();
+    await (await chooser).setFiles({ name: file.name, mimeType: '', buffer: file.buffer });
+    // By title, because the row's own text is a size and a family — the same
+    // reason `importImage` and `importAudio` each wait on one.
+    await expect(this.panel('inspect').getByTitle(`Use ${file.name}`)).toBeVisible();
+    await this.settle();
+  }
+
   /** Registers an already-imported sound in the active scene. */
   async addSceneSound(name: string): Promise<void> {
     await this.deselect();
@@ -947,12 +991,33 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * Discards the project and starts a new one.
+   *
+   * The confirm has to be accepted, and without that this method **silently
+   * does nothing** on a dirty project: `handleNew` asks before discarding, and
+   * Playwright dismisses a dialog it has no handler for. Every existing caller
+   * happens to follow this with `openFile`, which replaces the project anyway —
+   * so the no-op was invisible until a test called this and then went on using
+   * the editor, and saw the old project's assets still in it.
+   *
+   * Scoped with `on`/`off` rather than `once`: on a clean project no dialog
+   * fires at all, and a `once` left armed would accept the next dialog from
+   * anywhere in the test — a remove confirm, say, which some specs deliberately
+   * dismiss.
+   */
   async newProject(): Promise<void> {
-    await this.openPanel('file');
-    await this.panel('file')
-      .getByRole('button', { name: this.isMobile ? 'New project' : 'New', exact: true })
-      .click();
-    await this.settle();
+    const accept = (dialog: Dialog) => void dialog.accept();
+    this.page.on('dialog', accept);
+    try {
+      await this.openPanel('file');
+      await this.panel('file')
+        .getByRole('button', { name: this.isMobile ? 'New project' : 'New', exact: true })
+        .click();
+      await this.settle();
+    } finally {
+      this.page.off('dialog', accept);
+    }
   }
 
   /** Saves the project and returns the file the browser was handed. */

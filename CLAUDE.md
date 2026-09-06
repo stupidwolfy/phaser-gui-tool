@@ -51,8 +51,11 @@ buttons, derived from the scene rectangle rather than stored, drawn by the edito
 it will never press and by the export as a real HUD. Iteration 22 (shipped) went back to
 the one type that had not changed since iteration 1 and made text into typography: weight
 and slant, a wrap and an alignment, spacing, a stroke and a shadow — the first iteration to
-widen an existing node type's props rather than add a type. See the README for the
-user-facing feature list.
+widen an existing node type's props rather than add a type. Iteration 23 (shipped) gave
+that typography a font to be set in: a third asset table holding font files, a family
+picked on the node rather than typed from memory, and an export that carries the bytes —
+so text finally looks the same on a machine that has never heard of the font. See the
+README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
 a thumb on a 390px-wide screen.
@@ -124,7 +127,10 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
    from that one leaves the document holding a dangling `assetId`, which is the invariant
    nothing else in the editor is allowed to break. `PHYSICS_TYPES` in `schema.ts` is a second such list and the
    **fourth silent step**: a new type is not body-eligible until it is named there, and
-   nothing anywhere fails if it should have been.
+   nothing anywhere fails if it should have been. A type that draws *text* has a fifth:
+   `familiesIn` in the exporter matches on `node.type === 'text'`, so a new type carrying a
+   `fontFamily` would export a scene whose text is drawn in a font the page never loaded —
+   which looks exactly like the bug iteration 23 exists to remove.
 7. `tests/` — the two silent steps are exactly the two the suite covers: add the type to
    `tests/editing.spec.ts` (it draws where the document says, and survives a save and an
    open) and give it a hostile instance in `tests/helpers/hostile.ts`, which puts its
@@ -917,6 +923,168 @@ read identically.
   `Phaser.Types.GameObjects.Text.TextStyle` under `tsc --strict`, which is where a key
   renamed between Phaser versions fails and nowhere else. The hostile emitter's argument,
   one type over.
+
+## Web fonts
+
+`project.fonts` holds font files as data URLs, and a text node is drawn in one by *naming
+its family* — the same `fontFamily` field it has always used to name Georgia. It closes
+iteration 22's first hole, which was that a project could look right on the machine it was
+made on and render in Courier on somebody else's.
+
+- **The predicted hard part does not exist, and that is the first thing to know.**
+  CLAUDE.md said this needed "a `document.fonts.load` that has to finish before `create()`
+  — a boot-order question this exporter has never had to answer". Phaser 4 ships
+  `this.load.font(key, url, format)` (`LoaderPlugin#font`, since 3.87), so the answer is
+  the `preload()` that has been here since images: `create()` already runs only once the
+  loader is done. Three details of `FontFile` are what make it fit with no adaptation at
+  all — it sets `FILE_POPULATED` in its constructor and therefore **skips XHR**, handing
+  its URL straight to `new FontFace`; `GetURL` returns a `data:` URL as-is, which is the
+  only form anything in this document has ever been stored in; and **the loader key *is*
+  the family name**, so `load.font('Chunky', …)` is what makes `fontFamily: 'Chunky'`
+  resolve. A failure is a `console.warn` and the loader carries on, so a bad font degrades
+  to the fallback rather than breaking the boot. The prediction was made from Phaser 3
+  memory, which is the thing "Phaser 4, not 3" above tells every reader not to do.
+- **A text node names a font; it does not point at one, and everything else follows from
+  that.** `textStyleOf` is untouched, `constructorFor`'s `'text'` case is untouched, and
+  `TextProps` gains no field — a family that names an imported font resolves to it, and one
+  that names `Georgia` does what it always did. The rejected shape was a `fontId` beside
+  `fontFamily`, which is two fields answering one question: the argument that gives a
+  sprite no width of its own, a tilemap no tile size and a camera no rectangle.
+- **So there is no dangling reference, and `removeFont` is one line.** Beside
+  `removeAsset`'s walk of every node in the project that looks exactly like a forgotten
+  step, which is why it says so in a comment. A family naming nothing is not a dangling id;
+  it is what every text node in every project made before this feature already said. The
+  text keeps the name the user chose and falls back, so **"no font chosen", "the font is
+  gone" and "an ordinary system family" are one state and one code path** —
+  `PLACEHOLDER_TEXTURE`'s argument for a case that needs no placeholder at all.
+- **`family` is stored on the asset, where an audio key is derived.** `audioKeyOf` works a
+  sound's key out at export time because nothing in the document points at it; a family is
+  named *by the document*, so it has to be stable for the life of the project and unique
+  within it. `fontFamilyFor` allocates it once at import against the families already
+  there. Not editable, which is an image's treatment rather than a sound's and for an
+  image's reason: renaming would break every node that named the old string.
+- **It is an identifier-safe token — no spaces, no punctuation.** `Press Start 2P.ttf`
+  imports as `PressStart2P`. That is what lets `fontStackOf` be a plain split with no CSS
+  quoting anywhere, and it is what makes a family safe in every place it is printed.
+- **A derived family may not be a CSS generic, and this is the sharpest small trap here.**
+  `serif.ttf` would otherwise import as `Serif`, register cleanly, be written into the node
+  — and draw the browser's default serif, because generic keywords are matched
+  case-insensitively and win over a registered face. Every part of the editor would insist
+  the font had been applied. `CSS_GENERICS` goes into `fontFamilyFor`'s taken set rather
+  than being rewritten, so a generic takes the same numeric suffix a real clash would and
+  there is one de-duplication rule rather than two. Only the hyphen-free keywords are in
+  that set, because `sans-serif.ttf` already derives `SansSerif` and cannot collide.
+- **`fontStackOf` is the only reader**, in the `guidesOf` / `frameGridOf` / `sliceInsetsOf`
+  / `physicsOf` / `soundsOf` / `cameraOf` / `tileMapOf` / `textStyleOf` family, and it
+  exists because `fontFamily` has always been a *stack*: a new text node ships with
+  `system-ui, sans-serif`. The renderer asks which imported fonts a node needs and the
+  exporter asks which a scene preloads, and a node reading `Chunky, serif` has to count as
+  using `Chunky` in both.
+- **`FONT_FAMILY` is checked on open and the entry is dropped, not repaired.** A repaired
+  family would no longer be the string the text nodes name, so the font would sit in the
+  table looking imported and apply to nothing; dropping it lands in the fallback state that
+  already has a code path. It also means **a hostile family cannot survive an open**, so
+  the exporter's `str(...)` around one is belt-and-braces rather than the only guard.
+- **The mime is decided by the extension whenever the browser's claim is not one of the
+  four, and this is the one place fonts do not follow audio.** `importAudioFile` trusts
+  `file.type` because every platform reports an audio mime; for a font they report
+  `font/ttf`, `application/x-font-ttf`, `application/octet-stream` or the empty string
+  depending on the OS and the picker, so trusting it would refuse good fonts on most
+  machines. The stored mime is always re-derived, which is what keeps `FONT_DATA_URL` as
+  tight as its two siblings. `pickFontFile` is the same problem one layer up: `font/*` is
+  not an accept wildcard browsers honour, so it names extensions.
+- **The cap is 1 MB, half a sound's**, and set against `autosave.ts`'s ~5 MB draft the way
+  that one is. It is the only lever there is — an oversized image is scaled down, and a
+  font can only be refused. A WOFF2 Latin face is tens of kilobytes; the thing this refuses
+  is a CJK face, which needs subsetting rather than a bigger number.
+- **The import decodes before it accepts**, which is what a canvas round-trip is for an
+  image: `FontFace.load()` runs the browser's own sanitiser, so bytes that are not really a
+  font are refused while the user is at the picker. That matters more here than anywhere
+  else, because the failure it prevents is *silent* — a rejected font draws in the fallback
+  family, which looks exactly like nothing having happened.
+- **`syncFonts` is `syncTextures` one table over, and the one line that is not a copy is
+  the whole feature.** `applyTextStyle` is cache-guarded on the style object, and a font
+  landing **does not change the style by a character** — the node still says
+  `fontFamily: 'Chunky'`, exactly as it did while the font was loading. So the re-sync
+  finds every signature unchanged, skips every `setStyle`, and Phaser's `Text` does not
+  re-measure itself when `document.fonts` gains a family: it holds a canvas it rasterised
+  in the fallback face and has no reason to think otherwise. **`syncFonts` must clear
+  `textStyles` when a face arrives or departs.** That is the `play(key, true)` and
+  `setConfig` guard family arriving *inverted*: those exist to stop an apply firing on
+  every store change, and this one has to break the guard, because what changed is outside
+  the document the signature is computed from. Opening a project always takes this path.
+- **Faces are tracked and removed on SHUTDOWN**, the `assetTextures` / `animationKeys`
+  bookkeeping for the third time and the widest version of it: a texture belongs to the
+  game and an animation to the game's manager, while `document.fonts` belongs to the
+  *page* and outlives the game entirely.
+- **`fontFaceKey` folds the bytes in beside the family, and that is
+  `textureKeyForAsset`'s signature trick rather than caution.** With the bytes in the key
+  the existing "add what is wanted, remove what is not" diff handles a change of face with
+  no special case: the new key is missing so it is added, the old one is unwanted so it
+  goes. Tracked by family alone it does not, and **the reproduction needs no empty state in
+  between**, which is the part worth writing down. Opening one project directly over
+  another whose `Chunky` is a different file gives a sync that sees `Chunky` both before
+  and after: the add loop skips it as already registered, the prune loop keeps it as still
+  wanted, and the first project's glyphs go on being drawn for the second project's font.
+  Go via a new project first and the prune drops the family before the next one arrives, so
+  it works by accident — which is why `fonts.spec.ts` deliberately opens one file straight
+  over the other.
+- **The picker is in `TextSection`, not `SceneInspector`.** `AssetPicker`'s placement
+  rather than `AudioSection`'s, and for the stated reason: a sound is scene state, a font
+  is what *this object* is drawn in. **The free-text Font family field stays** — typing
+  `Georgia, serif` goes on working, and a project has every right to name a font it expects
+  the machine to have. What the picker adds is the one thing free text cannot: making a
+  *derived* family reachable without reading it off a row and retyping it. That is a gap
+  `audioKeyOf`'s "plays as jump" row can afford to leave open, because an audio key is a
+  hint for a line written later while a family is the link itself — wrong by one letter and
+  the font silently does nothing.
+- **The export is a `FONTS` table and one `preload` line**, gated like every other table so
+  a project with no font emits byte for byte what it always did. The `format` argument is
+  emitted rather than defaulted: Phaser's own default is `'truetype'`, so a WOFF2 left to it
+  is refused by the browser and falls back with only a console warning — which is why
+  `fontFormatOf` sits beside the asset and is read by the renderer and the exporter alike.
+- **`usedIn` gains a fourth set, and it is a *walk* where the audio set is a read.** A text
+  node can sit inside a prefab definition exactly as a sprite can, so this half has the
+  images' shape. `collectFonts` and `usedIn` share `familiesIn` rather than asking the
+  question twice — unlike an image, a font has no second question about what it is *called*
+  for the file-wide half to answer on its own.
+- **Nothing reaches the HTML: no `@font-face`, no `<link>`, no `<style>` entry**, and that
+  is worth stating because a reader will go looking for the piece that is missing. Phaser's
+  loader builds the `FontFace` itself inside `preload()`, so the family and the bytes stay
+  inside the one script `generateRunnableHtml` composes and escapes in a single pass. The
+  markup around it is guarded only by `escapeHtml` and `cssColor`, so an `@font-face` would
+  have been a new unescaped surface carrying a family and a data URL — in the half of that
+  output where the escaping has historically been got wrong.
+- **No game-config key and no header note**, the fifth entry in the comment block above
+  `arcadeConfig` where the audio, camera, keyboard and touch refusals already are.
+- **`SCHEMA_VERSION` bumped to 10, on the silent-data-loss half of the rule and only that
+  half — the v8 audio case exactly.** No new `NodeType`, so a v9 `createDisplayObject` has
+  a case for everything in the file. What a v9 build does is drop `project.fonts` on open
+  and re-save without it, and that is *worse* than the audio case it copies: a sound that
+  loses its table makes no noise, where text that loses its font goes on drawing, in a face
+  the user never chose, with nothing having said so.
+- **The suite's instrument is a density, not a colour and not only an extent.** Text is the
+  same colour in every font, so a centroid says nothing; an extent says how *big* it is
+  drawn but not *which face*. The fixture's every glyph is a filled em-square, so text set
+  in it inks nearly the whole of its own bounding box where a real face inks a fraction —
+  a property of the shapes rather than their size, so it does not move with the zoom, the
+  font size or the string. `lll` is the string for that reason: three narrow letters make
+  the difference a factor of three both ways, where `MMM` made it four pixels.
+- **`tests/helpers/ttf.ts` synthesises the font**, `png.ts`'s and `wav.ts`'s argument for a
+  third time and the one that needed the most defending. Ten tables, which is what Chrome's
+  sanitiser accepts against the fifteen to seventeen a real face carries. TrueType rather
+  than WOFF for `wav.ts`'s reason: it is the only one of the four allowed formats that
+  needs no compressor. The one thing to know before editing it is that **the sanitiser
+  rejects silently** — a font it refuses is a warning and a fall back, which from the canvas
+  is indistinguishable from the feature not working.
+- **`EditorPage.reload` exists for one test and is the only cold boot available.** The
+  decode caches in `assets.ts`, `audio.ts` and `fonts.ts` are module-level, so `newProject`
+  followed by `openFile` re-opens a project the page has *already decoded* — which means
+  every other test here silently asserts the synchronous path twice. Only a reload reaches
+  the asynchronous branch of `syncFonts`, and only that test fails when the `textStyles`
+  clear above is removed. It opens a saved file after the reload rather than trusting the
+  autosaved draft it comes back on, because that draft is written on an 800ms debounce and
+  caught the import on one project and not the other.
 
 ## Particles
 
@@ -2199,6 +2367,7 @@ tests/
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
+  fonts.spec.ts             a font imported, drawn, round-tripped, removed and exported
   physics.spec.ts           a body drawn, never simulated, and refused inside a group
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
@@ -2416,6 +2585,22 @@ Traps, each of which produced a confident wrong answer at some point:
   instead: immune to it, because a one-pixel edge and a two-pixel edge start in the same
   place, and it is the only reading that can also say how big something is drawn. Both
   edges have to be on screen for it to mean anything.
+- **`EditorPage.newProject` silently does nothing on a dirty project unless the confirm is
+  accepted.** `handleNew` asks before discarding and Playwright dismisses a dialog nothing
+  handles, so the click lands, the panel closes, and the old project is still there. It was
+  invisible for twenty-two iterations because every caller followed it with `openFile`,
+  which replaces the project anyway — the first test to call it and then keep *using* the
+  editor saw the previous project's assets still in the table. It now accepts the dialog,
+  with `on`/`off` rather than `once`: a clean project raises no dialog at all, and a `once`
+  left armed would accept the next one from anywhere in the test, including the remove
+  confirms some specs deliberately dismiss.
+- **`reuseExistingServer` means a leftover `vite preview` serves a stale build.** The
+  config sets it outside CI, so if a previous run's server is still on the port a new run
+  attaches to it and **skips `npm run build` entirely** — every assertion then describes
+  code that is no longer on disk. It looks exactly like a fix not working: the source is
+  right, the test is right, and the page is old. It bites hardest while iterating on one
+  spec after interrupting a full run. Check the port, or check `dist`'s timestamp, before
+  believing a failure that contradicts the source.
 - `@playwright/test` is pinned to `~1.56` because that is the release whose bundled
   Chromium (1194) is the one preinstalled in the container this repo is developed in — do
   not run `playwright install` there. `CHROMIUM_PATH` overrides the executable if a
@@ -2461,14 +2646,32 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
-Typography shipped in iteration 22 with six deliberate holes, and the first of them is the
-one that matters. **No web-font loading** — `fontFamily` names a font the *page* already
-has, which is why a project that looks right on the machine it was made on can render in
-Courier on somebody else's. Loading one means font bytes in the document, which is the
-asset table again for a second kind of asset with its own mime allowlist and its own size
-cap, plus a `document.fonts.load` that has to finish before `create()` — a boot-order
-question this exporter has never had to answer, and the one hole here that is an iteration
-rather than a field. **No BitmapText**, which is a second node type with a `.fnt` and its
+Web fonts shipped in iteration 23 with four deliberate holes. **No `descriptors`** — the
+loader takes `{ weight, style }` and would let a real bold face be registered under the
+same family, but the editor's Bold and Italic are two booleans and the browser synthesises
+from the one face it has. Doing it properly is not a field: it is a *pairing* model, two or
+more asset rows that together mean one family, with a UI saying which is the italic of
+which. **No Google Fonts and no loading by URL** — a network dependency in a document whose
+whole premise is that `JSON.stringify(project)` is a complete save, and a project that
+stops rendering when a CDN does is exactly what embedding the bytes is for. **No
+subsetting**, which would need a parser per format in the allowlist and is the thing that
+would actually make a CJK face fit under the cap. And **no font in the export's own
+`<style>`** — not deferred at all, but the thing the feature refuses: Phaser's loader
+builds the `FontFace`, so there is nothing for CSS to do and adding it would put a family
+name and a data URL into the one half of that output the escaping does not cover.
+
+Typography shipped in iteration 22 with six deliberate holes, and the first of them — **no
+web-font loading** — is the one that closed, in iteration 23. It is worth reading what this
+paragraph used to say beside what the work turned out to be, because half of the prediction
+was wrong and it was the expensive half. It said loading a font would mean "the asset table
+again for a second kind of asset with its own mime allowlist and its own size cap, plus a
+`document.fonts.load` that has to finish before `create()` — a boot-order question this
+exporter has never had to answer, and the one hole here that is an iteration rather than a
+field." The first half was exactly right. The second half described a problem that does not
+exist: Phaser 4 ships `this.load.font`, so the boot-order question is answered by the
+`preload()` this exporter has emitted since images existed. See Web fonts above — and note
+that the prediction was made from Phaser 3 memory, which is the thing CLAUDE.md tells every
+reader not to do. **No BitmapText**, which is a second node type with a `.fnt` and its
 own parser: the texture-atlas argument, and it does not become smaller by sitting next to a
 `Text`. **No background colour behind the text** — a coloured box behind something is a
 rectangle, which this editor has had since iteration 1 and which has a draw order of its

@@ -1,5 +1,6 @@
 import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
 import { stripPng } from './png';
+import { blockTtf } from './ttf';
 import { silentWav } from './wav';
 
 /**
@@ -92,6 +93,36 @@ export function hostileProject(): Project {
         mimeType: 'audio/wav',
         dataUrl: `data:audio/wav;base64,${silentWav(20).toString('base64')}`,
         duration: 0.02,
+      },
+    ],
+    fonts: [
+      {
+        id: 'font-1',
+        // A hostile *file name*, which is the row label in the panel. The
+        // family beside it is deliberately a plain token, and that is the point
+        // rather than a gap: `FONT_FAMILY` means a hostile family cannot
+        // survive an open at all, so the string that actually reaches the
+        // export — the `load.font` key and the `fontFamily` in the style
+        // literal — is safe by construction. What is left to cover is the name,
+        // and the fact that a font used by a text node is emitted at all.
+        name: `${breakout} chunky.ttf`,
+        family: 'Chunky',
+        mimeType: 'font/ttf',
+        // Real bytes, for the reason the sheet and the sounds are real: the
+        // export tests load this through Phaser's own `FontFile` in a browser,
+        // and a stub would be refused by the sanitiser and take the whole font
+        // path out of the export with it.
+        dataUrl: `data:font/ttf;base64,${blockTtf().toString('base64')}`,
+      },
+      {
+        // Imported and named by no text node, which is the case that proves
+        // only *used* fonts are emitted — the rule the images and the sounds
+        // already follow, arriving at a table whose per-scene half is a walk.
+        id: 'font-2',
+        name: 'unused.ttf',
+        family: 'Unused',
+        dataUrl: `data:font/ttf;base64,${blockTtf(600).toString('base64')}`,
+        mimeType: 'font/ttf',
       },
     ],
     animations: [
@@ -362,7 +393,12 @@ export function hostileProject(): Project {
               text: 'wrapped\nand styled',
               fontSize: 24,
               color: '#ffe066',
-              fontFamily: 'Georgia, serif',
+              // An imported family at the head of a stack whose tail is a font
+              // the browser supplies. That is what makes this node the one that
+              // exercises `fontStackOf` on both halves at once: `Chunky` has to
+              // reach `collectFonts` and the scene's `preload`, and `serif` has
+              // to reach neither while still being printed in the style.
+              fontFamily: 'Chunky, serif',
               alpha: 0.9,
               bold: true,
               italic: true,

@@ -1,8 +1,10 @@
 import { DEFAULT_FRAME_RATE } from '../core/defaults';
 import {
+  FONT_FAMILY,
   SCHEMA_VERSION,
   type AnimationClip,
   type AudioAsset,
+  type FontAsset,
   type FrameGrid,
   type ImageAsset,
   type Prefab,
@@ -173,6 +175,17 @@ const ASSET_DATA_URL = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/;
 const AUDIO_DATA_URL = /^data:audio\/(mpeg|ogg|wav|mp4|webm);base64,[A-Za-z0-9+/]+=*$/;
 
 /**
+ * The only data URLs a font may carry.
+ *
+ * A third sibling, never a loosening of either of the two above, for the reason
+ * `AUDIO_DATA_URL` already gives: these guard three tables that reach three
+ * different places, and one pattern covering all of them would let a font mime
+ * through to the `<img>` and the `ASSETS` literal. The list is the same one
+ * `fonts.ts` allows on import.
+ */
+const FONT_DATA_URL = /^data:font\/(ttf|otf|woff|woff2);base64,[A-Za-z0-9+/]+=*$/;
+
+/**
  * An asset's frame grid, rebuilt field by field like the asset around it.
  *
  * Undefined for anything that is not four finite non-negative numbers with a
@@ -276,6 +289,54 @@ function parseAudio(raw: unknown): AudioAsset[] {
       duration: Number.isFinite(Number(asset.duration)) && Number(asset.duration) > 0
         ? Number(asset.duration)
         : 0,
+    });
+  }
+  return table;
+}
+
+/**
+ * The font table, rebuilt field by field like the two tables above it.
+ *
+ * Two things are dropped rather than repaired, and the second is the one worth
+ * explaining. A bad data URL, as everywhere else. And **a family that is not a
+ * plain token**, because a repaired family would no longer be the string the
+ * text nodes name — so the font would sit in the table, look imported, and
+ * apply to nothing. Dropping it lands in the state this feature already has a
+ * code path for: the text draws in the browser's fallback, which is what it did
+ * before the font existed.
+ *
+ * That is also what means nothing downstream escapes a family. Every family
+ * that survives an open matches `FONT_FAMILY`, so the exporter's `str(...)`
+ * around it is belt-and-braces rather than the only guard — which is the
+ * opposite of how the scene name and the background colour once reached the
+ * runnable page raw.
+ */
+function parseFonts(raw: unknown): FontAsset[] {
+  if (!Array.isArray(raw)) return [];
+
+  const table: FontAsset[] = [];
+  const families = new Set<string>();
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const asset = candidate as Partial<FontAsset>;
+    if (typeof asset.id !== 'string' || !asset.id) continue;
+    if (typeof asset.dataUrl !== 'string' || !FONT_DATA_URL.test(asset.dataUrl)) continue;
+    if (typeof asset.family !== 'string' || !FONT_FAMILY.test(asset.family)) continue;
+    // Two fonts under one family would have `fontByFamily` answer with whichever
+    // it reached first, and the exporter emit one `load.font` for both.
+    if (families.has(asset.family)) continue;
+    families.add(asset.family);
+
+    table.push({
+      id: asset.id,
+      name: typeof asset.name === 'string' ? asset.name : 'font',
+      family: asset.family,
+      // Re-derived from the data URL rather than trusted from the file, which
+      // is `parseAudio`'s call and for its reason: there are four of them, and
+      // a ternary's fallback would quietly relabel a WOFF2 as a TTF — a font
+      // handed the wrong `format()` hint is refused outright by the browser.
+      mimeType: asset.dataUrl.slice('data:'.length, asset.dataUrl.indexOf(';')),
+      dataUrl: asset.dataUrl,
     });
   }
   return table;
@@ -408,6 +469,12 @@ export function parseProject(contents: string): Project {
     // the line the version bump is about: an older build reaching this point
     // does not have it, so it drops the table and re-saves without it.
     audio: parseAudio(candidate.audio),
+    // Absent before v10, which is a valid project whose text is all drawn in
+    // fonts the machine already has. This is the line the v10 bump is about,
+    // and it is the audio one made worse: a v9 build reaching here drops the
+    // table and re-saves without it, leaving every text node naming a family
+    // whose bytes are gone — and going on drawing, in some other face.
+    fonts: parseFonts(candidate.fonts),
     // Absent before v4, which is a valid project whose sprites are all still.
     animations: parseAnimations(candidate.animations, assets),
     // Absent before v5, which is a valid project that uses no prefabs.
@@ -460,6 +527,16 @@ export const pickImageFile = (): Promise<File | null> => pickFileViaInput('image
 
 /** The same, for a sound. `audio/*` is what opens a phone's music library. */
 export const pickAudioFile = (): Promise<File | null> => pickFileViaInput('audio/*');
+
+/**
+ * The same, for a font — and the one accept list that names extensions.
+ *
+ * `font/*` is not a wildcard browsers honour, and the mime a platform reports
+ * for a font file is unreliable enough that `fonts.ts` declines to trust it at
+ * all. An extension list is what actually filters the picker here.
+ */
+export const pickFontFile = (): Promise<File | null> =>
+  pickFileViaInput('.ttf,.otf,.woff,.woff2');
 
 function pickFileViaInput(accept: string): Promise<File | null> {
   return new Promise((resolve) => {

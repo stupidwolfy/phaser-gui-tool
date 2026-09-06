@@ -44,7 +44,7 @@ test('a registered sound survives a save and an open', async ({ editor }, testIn
 
   // Asserted in the artefact so that a future bump is a deliberate act, the way
   // `guides.spec`, `scenes.spec` and `physics.spec` each assert their own.
-  expect(parsed.schemaVersion).toBe(9);
+  expect(parsed.schemaVersion).toBe(10);
   expect(parsed.audio).toHaveLength(1);
   // Nothing but the five allowed mime types is ever written or read back.
   expect(parsed.audio[0].dataUrl).toMatch(/^data:audio\/wav;base64,/);

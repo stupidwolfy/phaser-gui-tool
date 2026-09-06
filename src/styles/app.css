@@ -580,6 +580,18 @@ select {
   border-radius: 4px;
 }
 
+/* A font row's thumbnail is a <span> rather than an <img>, so it needs the
+   centring an image got from `object-fit` and none of the checkerboard: there
+   is no transparency to show, and glyphs over a checkerboard are unreadable. */
+.assets__thumb--font {
+  display: grid;
+  place-items: center;
+  background: #1e222b;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+}
+
 .assets__meta {
   display: flex;
   min-width: 0;
