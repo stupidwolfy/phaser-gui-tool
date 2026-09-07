@@ -1872,6 +1872,28 @@ export function collidersOf(scene: SceneDoc): SceneCollider[] {
   return colliders;
 }
 
+/**
+ * The validated rows that name this node, in document order.
+ *
+ * `collidersOf` filtered, never `scene.colliders` read a second time — the
+ * whole point of that function being the only reader is that a row it has
+ * dropped cannot come back to life on some other panel. `touchZonesOf` is built
+ * on `controlsOf` for the same reason.
+ *
+ * It exists because a body that nothing collides with is a body that falls
+ * through everything, and the object's own panel is where a person is standing
+ * when they need to know that. The scene-wide table is still `collidersOf`;
+ * this is that table asked about one object.
+ *
+ * A fresh array every call, exactly as `collidersOf` builds one, so
+ * `useEditorStore((s) => collidersNaming(...))` compares unequal on every store
+ * change and loops forever (React error #185) — the `tileMapOf` trap, ninth
+ * time. Select the scene and derive outside the selector.
+ */
+export function collidersNaming(scene: SceneDoc, nodeId: string): SceneCollider[] {
+  return collidersOf(scene).filter((row) => row.aId === nodeId || row.bId === nodeId);
+}
+
 /** The nodes a collider row may name, which is what the inspector offers. */
 export function collidableNodes(scene: SceneDoc): GameObjectNode[] {
   return scene.children.filter(canCollide);

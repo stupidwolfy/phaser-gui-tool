@@ -192,6 +192,10 @@ out, `this.physics.world.gravity.set(...)` and `setBounds(...)` per scene. The r
 page enables Arcade in its own game config; a `.ts` or `.js` module cannot, so it says at
 the top what to add to yours.
 
+A body is only half of a floor. Two bodies pass straight through each other until you say
+they collide — see **Collisions** below, which is on each object's own panel as well as on
+the scene's, and which an object with a body and no pairing will tell you about.
+
 ### Making it play
 
 Three things turn a scene into something you can actually play, and all three are settings
@@ -202,11 +206,15 @@ that should stop things — walls, floors. They outline green on the map while y
 export as `layer.setCollision([...])`. Solidity belongs to the *layer*, so one tileset can
 be a wall on the layer you are painting and scenery on the layer behind it.
 
-**Collisions.** Under Collisions in the scene panel, name two things that should meet:
-Solid stops them, Overlap only reports the touch. A tilemap is a valid side, so "the player
-stands on the ground" is one row — and a multi-layer map contributes one collider per
-layer, so walls painted above the floor still stop things. It exports as a real
-`this.physics.add.collider(...)` or `overlap(...)`, written after the objects it names.
+**Collisions.** A body on its own stops nothing — Arcade only separates two things that
+have been told to meet, so a box with a body falls straight through a floor with a body
+until you say the two collide. Say it on either object's own panel, under **Collides with**,
+or scene-wide under Collisions in the scene panel; both are the same list, and an object
+that nothing collides with says so on its panel rather than leaving you to find out in the
+exported game. Solid stops them, Overlap only reports the touch. A tilemap is a valid side,
+so "the player stands on the ground" is one row — and a multi-layer map contributes one
+collider per layer, so walls painted above the floor still stop things. It exports as a
+real `this.physics.add.collider(...)` or `overlap(...)`, written after the objects it names.
 
 **Controls.** Any object with a dynamic body can be given **Player controls** — Platformer
 (walk and jump) or Top-down (walk any way), on the arrow keys or WASD, with a walk speed and

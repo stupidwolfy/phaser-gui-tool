@@ -13,6 +13,7 @@ import {
   cameraOf,
   canHavePhysics,
   collidableNodes,
+  collidersNaming,
   collidersOf,
   containsInstance,
   containsNode,
@@ -506,9 +507,15 @@ function WorldSection() {
  *
  * The pickers offer exactly what `collidersOf` would keep — a top-level node
  * with a body, or a tilemap — so the panel cannot produce a row that vanishes
- * on the next read. Hidden entirely below two such nodes: with one there is no
- * pair to make, and a "+ Collision" button that could only ever produce nothing
- * is worth less than the rows it costs.
+ * on the next read. Below two such nodes there is no pair to make and the
+ * "+ Collision" button would produce nothing, so it says why instead of
+ * offering one; below one there is no question at all and it says nothing.
+ *
+ * This is the scene-wide view of the table. `NodeCollisionsSection` is the same
+ * table on one object's own panel, and both write through the same three
+ * actions — one field, two controls. It is the *other* one that a person
+ * actually finds, because this panel needs an empty selection and giving two
+ * objects bodies never leaves you with one.
  */
 function CollidersSection() {
   const scene = useActiveScene();
@@ -520,7 +527,25 @@ function CollidersSection() {
   const removeCollider = useEditorStore((s) => s.removeCollider);
 
   const candidates = collidableNodes(scene);
-  if (candidates.length < 2) return null;
+  // Nothing at all when nothing in the scene can collide: a project of plain
+  // rectangles has no question here to answer. With exactly one, the heading
+  // and a sentence rather than silence — that is the trap this whole change
+  // exists for, closed from the scene's side: a user who gives the floor a body
+  // and then deselects to look for collisions used to find an empty panel and
+  // conclude the editor had no such thing.
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) {
+    return (
+      <>
+        <div className="panel__section">Collisions</div>
+        <p className="hint">
+          Only one thing here can collide. Give a second object a body — or add
+          a tilemap with solid tiles — and the pair can be made here or on
+          either object's own panel.
+        </p>
+      </>
+    );
+  }
   const rows = collidersOf(scene);
   const options = candidates.map((node) => ({ value: node.id, label: node.name }));
 
@@ -1825,9 +1850,16 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
       />
       <p className="hint">
         {layer.collides.length > 0
-          ? 'Solid tiles are outlined green while you paint. Add a collision in the Scene panel between this map and whatever should stand on it.'
-          : 'Pick the tiles that should stop things — walls, floors. Then add a collision in the Scene panel between this map and whatever should stand on it.'}
+          ? 'Solid tiles are outlined green while you paint. They stop nothing until this map is told what to collide with, below.'
+          : 'Pick the tiles that should stop things — walls, floors. They stop nothing until this map is told what to collide with, below.'}
       </p>
+
+      {/* A tilemap is a valid side of a collision without being in
+          `PHYSICS_TYPES`, so `PhysicsSection` — which is where every other type
+          reaches this — returns null for one and cannot carry it here. The
+          hint above used to send the reader to the Scene panel instead, which
+          is the panel that is off screen for as long as this one is showing. */}
+      <NodeCollisionsSection node={node} />
 
       <div className="panel__section">Appearance</div>
       <NumberField
@@ -2206,11 +2238,165 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
             game you export.
           </p>
 
+          {/* Under the body rather than in a panel of its own, and directly
+              after "Collide with world bounds" and its hint, because the world
+              edges and the collider rows are the only two things an Arcade body
+              ever stops against. Before the controls on purpose too: a
+              platformer's jump is gated on there being something underneath,
+              which is what a row here is for. */}
+          <NodeCollisionsSection node={node} />
+
           {/* Only for a dynamic body, and absent rather than disabled for the
               reason the velocity rows above are: a StaticBody has no velocity
               for a key to change, so this does not exist for that kind of body
               rather than being switched off for it. */}
           {body.kind === 'dynamic' && <ControlsSection node={node} />}
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * What this object is told to collide with, on the object's own panel.
+ *
+ * The whole of a reported bug: a static floor, a dynamic box above it, gravity
+ * on, and in the exported game the box goes straight through. Arcade never
+ * stops two bodies on its own — `physics.add.collider(a, b)` has to be
+ * registered — and this editor could already say so, in `CollidersSection`.
+ * What it could not do was let anyone *find* it. That section lives in
+ * `SceneInspector`, which renders only with an empty selection, so it is off
+ * screen for the whole of the time a person spends giving two objects bodies;
+ * and it hides itself below two collidable nodes, so deselecting after the
+ * first body shows nothing either. Correct, and unreachable.
+ *
+ * So the pair is made here as well, beside the body it is about, and both
+ * controls write `scene.colliders` through the same three actions. **One field,
+ * two controls** — the tile eraser's rule and the emitter marker's. What would
+ * be wrong is a second notion of what collides; two ways to reach the one
+ * notion is the point.
+ *
+ * `others` mirrors `collidersOf`'s own refusals rather than restating a subset
+ * of them, which is what stops this panel producing a row that vanishes on the
+ * next read: not this node, and never a second tilemap when this node is one,
+ * since a layer only ever collides with something that moves.
+ *
+ * The empty state is a sentence rather than nothing, by the rule that already
+ * renders `AlignSection` disabled for one object: a control that says why it
+ * cannot is worth more than an absence. It is a plain hint and not
+ * `hint--error`, which is for a document that is wrong *now* — a missing image.
+ * A body nobody has paired yet is a document that is merely unfinished, which
+ * every project is for its first minute.
+ */
+function NodeCollisionsSection({ node }: { node: GameObjectNode }) {
+  const scene = useActiveScene();
+  const addCollider = useEditorStore((s) => s.addCollider);
+  const updateCollider = useEditorStore((s) => s.updateCollider);
+  const removeCollider = useEditorStore((s) => s.removeCollider);
+
+  // The top-level rule, asked once here rather than at both call sites: a row
+  // may only name a direct child of the scene, which is `collidersOf`'s first
+  // refusal and `physicsOf`'s.
+  const topLevel = scene.children.some((child) => child.id === node.id);
+  if (!topLevel) return null;
+
+  // Derived outside the selector, never inside one: both build a fresh array
+  // every call, so selecting either loops forever (React error #185).
+  const others = collidableNodes(scene).filter(
+    (other) => other.id !== node.id && !(node.type === 'tilemap' && other.type === 'tilemap'),
+  );
+  const rows = collidersNaming(scene, node.id);
+  const options = others.map((other) => ({ value: other.id, label: other.name }));
+  const paired = new Set(rows.map((row) => (row.aId === node.id ? row.bId : row.aId)));
+  const unpaired = others.find((other) => !paired.has(other.id));
+
+  return (
+    <>
+      {/* "Collides with", not "Collisions" and not "Collision": the Scene panel
+          owns the first and a tilemap's solid-tile palette owns the second, and
+          on a tilemap this renders directly under that one. Three headings, one
+          word apart, would read as three features. */}
+      <div className="panel__section">Collides with</div>
+
+      {rows.map((row, index) => {
+        // Which side this node sits on decides which field the picker writes.
+        // Read once, so the value shown and the value written cannot disagree.
+        const onA = row.aId === node.id;
+        return (
+          <div key={row.id}>
+            {/* Numbered, and deliberately not the Scene panel's `With N` /
+                `How N` / `Remove collision N`: the suite matches a label
+                exactly, and the two sections can never render together only
+                because `SceneInspector` needs an empty selection. Distinct
+                names cost nothing and do not depend on that staying true. */}
+            <div className="field-row">
+              <SelectField
+                label={`Collides with ${index + 1}`}
+                value={onA ? row.bId : row.aId}
+                options={options}
+                onChange={(id) => updateCollider(row.id, onA ? { bId: id } : { aId: id })}
+              />
+              <SelectField
+                label={`Collision ${index + 1} is`}
+                value={row.kind}
+                options={[
+                  { value: 'collide', label: 'Solid' },
+                  { value: 'overlap', label: 'Overlap' },
+                ]}
+                onChange={(kind) =>
+                  updateCollider(row.id, {
+                    kind: kind === 'overlap' ? 'overlap' : 'collide',
+                  })
+                }
+              />
+            </div>
+            {/* On its own line rather than beside the pair above: at 390px a
+                third control in that row is ~85px and truncates every object
+                name in the picker to nothing, which is the reason the Scene
+                panel splits its four the same way. No `--foot`, since that
+                exists to bottom-align a button standing next to a field. */}
+            <button
+              className="btn btn--block btn--danger"
+              onClick={() => removeCollider(row.id)}
+              aria-label={`Remove collision with ${index + 1}`}
+              title="Stop these two meeting"
+            >
+              Remove
+            </button>
+          </div>
+        );
+      })}
+
+      {others.length === 0 ? (
+        <p className="hint">
+          Nothing else here can collide yet. Give the floor a body of its own —
+          or add a tilemap with solid tiles — and the pair can be made from this
+          panel.
+        </p>
+      ) : (
+        <>
+          {/* A real candidate rather than a blank row, exactly as the Scene
+              panel's `+ Collision` takes the first two: a row naming nothing is
+              one `collidersOf` drops on the next read, leaving nothing on
+              screen to fill in. The first one *not already paired* with this
+              node, so pressing this twice builds two different pairs rather
+              than the same pair twice — which matters more here than it does on
+              the scene panel, since this is the button people actually find. It
+              falls back to the first when everything is paired, because the
+              alternative is a button that silently does nothing. */}
+          <button
+            className="btn btn--block"
+            onClick={() => addCollider(node.id, (unpaired ?? others[0]).id)}
+          >
+            + Add a collision
+          </button>
+          {rows.length === 0 && (
+            <p className="hint">
+              Nothing collides with this yet, so in the exported game it falls
+              straight through everything — a floor with a body of its own
+              included. Arcade only stops two things that are told to meet.
+            </p>
+          )}
         </>
       )}
     </>

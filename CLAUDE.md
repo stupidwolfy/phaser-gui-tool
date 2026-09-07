@@ -1746,6 +1746,52 @@ fall through it.
   method is `collider`, and "collide" is the word on the row a person reads. One is the
   word and one is the API, and conflating them emits a method that does not exist — which
   is what the first version did.
+- **The row is reachable from either object's own panel, and that is a bug fix rather
+  than a convenience.** The reported failure was a static floor, a dynamic box, gravity on,
+  and the box going straight through in the exported game — with the editor saying nothing
+  anywhere. Arcade never stops two bodies on its own, and `CollidersSection` could always
+  say which pairs meet. What it could not do was let anybody *find* it: it lives in
+  `SceneInspector`, which renders only with an **empty selection**, so it is off screen for
+  the whole of the time a person spends giving two objects bodies — and it hid itself
+  outright below two collidable nodes, so deselecting after the first body showed nothing
+  either. Correct, and unreachable. That combination is worth recording beside the "no
+  branch needed and forgot a branch look identical" family: **a panel that is right and
+  cannot be reached reads to a user exactly like a feature that does not exist.**
+- **`collidersNaming` is a filter over `collidersOf`, never a second read of
+  `scene.colliders`.** The point of one reader is that a row the scene-wide panel has
+  dropped cannot come back to life on an object's panel — `touchZonesOf` is built on
+  `controlsOf` for that reason. `NodeCollisionsSection` writes through the same
+  `addCollider` / `updateCollider` / `removeCollider`, so this is **one field, two
+  controls**: the tile eraser's rule and the emitter marker's. Two notions of what collides
+  is the failure; two ways to reach the one notion is the fix.
+- **`+ Add a collision` takes the first candidate this node is not already paired with**,
+  falling back to the first when everything is paired, so filling a scene in is press,
+  press, press rather than press and then re-pick. It matters more here than on the scene
+  panel — which still takes the first two — because this is the button people actually
+  find. The fallback is deliberate: a button that silently does nothing is the thing this
+  whole change is about.
+- **The node panel's candidate list mirrors `collidersOf`'s refusals rather than a subset
+  of them.** Not this node, and never a second tilemap when this node is one — otherwise
+  the button makes a row that vanishes on the next read, which is precisely what the scene
+  panel's pickers already exist to prevent. A tilemap reaches the section from
+  `TilemapSection` rather than from `PhysicsSection`, because it is a valid side without
+  being in `PHYSICS_TYPES` and `canHavePhysics` therefore answers false for one.
+- **The empty states are sentences, not absences.** One body in the scene says there is
+  nothing yet to pair with; a body with no row says the object will fall through everything
+  in the exported game. `AlignSection`'s rule — a control that says why it cannot beats one
+  that is not there. Both are a plain `.hint` and not `hint--error`: red is for a document
+  that is wrong *now*, which a missing image is, and a body nobody has paired yet is a
+  document that is merely unfinished, which every project is for its first minute.
+- **The physics itself was never at fault, and it was checked rather than assumed.** The
+  exported page was run against the report and three variants the suite does not cover: no
+  row at all (the faller passes the floor and settles on the world bounds, which is the
+  report exactly, and is why the symptom reads as "falls *past* it" rather than "falls
+  forever" — `collideWorldBounds` defaults true); a floor sized by a non-uniform transform
+  scale, where `modifiersFor`'s `.setScale(x, y)` is chained onto the constructor before
+  `physics.add.existing` so the `StaticBody` takes the right `displayWidth`; and an 8px
+  floor at 6000 gravity, which does *not* tunnel. One trap for whoever repeats this: the
+  aspect lock defaults **on**, so setting Scale X alone sets both and a fixture meant to be
+  a wide thin floor is a large disc instead.
 
 **Controls** are `GameObjectNode.controls: NodeControls`, beside `physics` for `physics`'
 reason: not per-type, so not in `props`.
