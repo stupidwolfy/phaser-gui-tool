@@ -650,6 +650,27 @@ export class EditorPage {
     await this.setChoice(`How ${row}`, kind);
   }
 
+  /**
+   * Adds a collision from the selected object's *own* panel.
+   *
+   * `addCollider`'s sibling, and the path a person actually takes. That one
+   * deselects into `SceneInspector`, which is exactly the panel nobody finds:
+   * it needs an empty selection, and giving two objects bodies never leaves you
+   * with one. This one leaves the selection alone, so a test using it asserts
+   * the reachable route rather than the reachable-in-principle one.
+   */
+  async addColliderOnNode(
+    other: string,
+    kind: 'Solid' | 'Overlap' = 'Solid',
+    row = 1,
+  ): Promise<void> {
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByRole('button', { name: '+ Add a collision' }).click();
+    await this.settle();
+    await this.setChoice(`Collides with ${row}`, other);
+    await this.setChoice(`Collision ${row} is`, kind);
+  }
+
   /** A physics checkbox other than the on/off one, by its label. */
   async setPhysicsFlag(label: string, on: boolean): Promise<void> {
     await this.openPanel('inspect');

@@ -226,6 +226,91 @@ test('a collision row names two objects, and a deleted one takes the row with it
   await expect(editor.choice('Collides 1')).toHaveCount(0);
 });
 
+test('a body says nothing collides with it, and the object panel makes the pair', async ({
+  editor,
+}) => {
+  // The reported bug, asserted where it was actually met: a static floor, a
+  // dynamic box, and nothing on screen anywhere saying the box will go through
+  // it. `CollidersSection` could always say so and lives in `SceneInspector`,
+  // which needs an empty selection — so it is off screen for the whole of the
+  // time spent giving two objects bodies, and hidden below two of them anyway.
+  await editor.clearScene();
+  await rectangle(editor, 'Ground');
+  await editor.setPhysics(true);
+  await editor.setChoice('Body', 'Static — never moves');
+
+  // One body in the scene: there is nothing to pair with, and the panel says
+  // that rather than showing an empty space.
+  await editor.openPanel('inspect');
+  await expect(
+    editor.panel('inspect').getByText('Nothing else here can collide yet'),
+  ).toBeVisible();
+  await expect(
+    editor.panel('inspect').getByRole('button', { name: '+ Add a collision' }),
+  ).toHaveCount(0);
+  await editor.deselect();
+
+  await rectangle(editor, 'Player');
+  await editor.setPhysics(true);
+
+  // Two bodies and no row: the warning, and the button that fixes it — both on
+  // the object's own panel, with nothing deselected.
+  await expect(
+    editor.panel('inspect').getByText('Nothing collides with this yet'),
+  ).toBeVisible();
+  await editor.addColliderOnNode('Ground', 'Solid');
+  await expect(
+    editor.panel('inspect').getByText('Nothing collides with this yet'),
+  ).toHaveCount(0);
+  expect(await editor.choice('Collides with 1').inputValue()).not.toBe('');
+
+  // One field, two controls: the row this panel made is the row the Scene
+  // panel lists. A second notion of what collides is what fails here.
+  await editor.deselect();
+  await editor.openPanel('inspect');
+  await expect(editor.choice('Collides 1')).toHaveCount(1);
+  expect(await editor.choice('How 1').inputValue()).toBe('collide');
+
+  // And back the other way: removed from the scene-wide list, the object's own
+  // panel is warning again.
+  await editor.panel('inspect').getByRole('button', { name: 'Remove collision 1' }).click();
+  await editor.settle();
+  await editor.selectInTree('Player');
+  await expect(
+    editor.panel('inspect').getByText('Nothing collides with this yet'),
+  ).toBeVisible();
+});
+
+test('a second press pairs with something else, not with the same thing twice', async ({
+  editor,
+}) => {
+  // The button takes the first candidate this node is *not* already paired
+  // with, so filling in a scene is press, press, press rather than press and
+  // then re-pick. Three bodies is the smallest fixture that can tell the two
+  // apart: with two there is only one answer either way.
+  await editor.clearScene();
+  for (const name of ['Ground', 'Wall', 'Player']) {
+    await rectangle(editor, name);
+    await editor.setPhysics(true);
+    await editor.deselect();
+  }
+
+  await editor.selectInTree('Player');
+  // On mobile the panels are sheets and a closed one is translated off screen
+  // rather than hidden, so it still matches a locator and a click on it lands
+  // nowhere. `selectInTree` leaves the Scene sheet showing.
+  await editor.openPanel('inspect');
+  const add = editor.panel('inspect').getByRole('button', { name: '+ Add a collision' });
+  await add.click();
+  await editor.settle();
+  await add.click();
+  await editor.settle();
+
+  const first = await editor.choice('Collides with 1').inputValue();
+  const second = await editor.choice('Collides with 2').inputValue();
+  expect(first).not.toBe(second);
+});
+
 test('solid tiles are outlined while painting, and stop being when unmarked', async ({
   editor,
 }) => {

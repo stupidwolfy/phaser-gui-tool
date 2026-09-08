@@ -505,6 +505,62 @@ test('the exported page lands on what it was told is solid', async ({
   await run.close();
 });
 
+test('a floor paired from the object panel stops what falls on it', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // The reported bug, end to end and by the route a person actually takes.
+  // The test above proves the same physics through `SceneInspector`; this one
+  // never opens it, because that is the panel nobody finds — it renders only
+  // with an empty selection, so it is off screen for the whole of the time
+  // spent giving the floor and the faller their bodies.
+  //
+  // Gravity is still set there, deliberately: it is a property of the scene and
+  // belongs on the scene's panel. The claim is about the *collider* being
+  // reachable without deselecting, and it is the one that decides whether the
+  // exported game works.
+  await editor.clearScene();
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Floor');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 400);
+  await editor.setField('Width', 400);
+  await editor.setField('Height', 60);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body', 'Static — never moves');
+  await editor.deselect();
+
+  await editor.setGravity(0, 900);
+
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Faller');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 80);
+  await editor.setPhysics(true);
+  await editor.addColliderOnNode('Floor');
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain('this.physics.add.collider(faller, floor);');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('panel-collide'), exported.contents);
+
+  const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+  await run.page.waitForTimeout(1500);
+  const shot = await run.page.locator('canvas').screenshot();
+  const landed = await findColor(run.page, shot, RECT_FILL);
+  const floor = await findColor(run.page, shot, ELLIPSE_FILL);
+
+  expect(landed.count).toBeGreaterThan(100);
+  // It fell, and it is *above* the floor. Without the row it goes through and
+  // comes to rest on the world bounds below — which is the whole of the report,
+  // and which reads as a centroid below the floor's rather than above it.
+  expect(landed.y).toBeGreaterThan(before.y + 20);
+  expect(landed.y).toBeLessThan(floor.y);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
 test('the exported page plays the object it was given controls', async ({
   editor,
   page,
