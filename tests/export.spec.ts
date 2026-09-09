@@ -323,17 +323,19 @@ test('two scenes named the same thing export as two classes with two keys', asyn
   const exported = await editor.exportCode('ts');
 
   const classes = exported.contents.match(/^export class (\w+) extends Phaser\.Scene/gm) ?? [];
-  expect(classes).toHaveLength(2);
+  // Three scenes: the two sharing a name, and the Matter one, which is here to
+  // prove the engine is the scene's rather than the file's.
+  expect(classes).toHaveLength(3);
   // Both halves of a scene name reach the output, and a repeat is fatal in
   // both: two identical class declarations will not parse, and two scenes
   // registered under one key has Phaser keep the first and lose the second.
   // `export-toolchain.spec` is what proves the first actually compiles; this
   // says why the de-duplication is there, and covers the key, which is a
   // string literal no compiler would object to.
-  expect(new Set(classes).size).toBe(2);
+  expect(new Set(classes).size).toBe(3);
   const keys = exported.contents.match(/^ {4}super\(.*\);$/gm) ?? [];
-  expect(keys).toHaveLength(2);
-  expect(new Set(keys).size).toBe(2);
+  expect(keys).toHaveLength(3);
+  expect(new Set(keys).size).toBe(3);
 
   // One row per *image*, not per use — the tables are file-wide, so a second
   // scene drawing the same sheet adds nothing to them. Two, because the fixture

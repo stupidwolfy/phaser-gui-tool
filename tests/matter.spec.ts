@@ -33,7 +33,7 @@ async function setup(editor: EditorPage): Promise<void> {
   await editor.setPhysics(true);
 }
 
-test('a Matter body turns with its object where an Arcade one grows', async ({
+test('at a quarter turn the two engines agree exactly, and that is the point', async ({
   editor,
 }) => {
   await setup(editor);
@@ -41,19 +41,11 @@ test('a Matter body turns with its object where an Arcade one grows', async ({
   await editor.deselect();
   await editor.closePanels();
 
-  // An extent rather than a centroid: what is asserted is how big and which way
-  // round the outline is drawn, and a two-pixel stroke lands on a different
-  // sub-pixel phase on each of its four edges, which moves a centroid for a
-  // reason that is not shape.
   const arcade = await editor.findDrawnBox(BODY);
   expect(arcade.count).toBeGreaterThan(0);
-
-  // A quarter turn is the sharpest case there is. Arcade's answer is the box
-  // that *holds* the turned object, which for a 300x60 bar stood on end is
-  // 60 wide and 300 tall — the same numbers, swapped. So an implementation that
-  // only ever grew a box passes every "it responds to rotation" claim and still
-  // fails the one below, because a turned 300x60 polygon and an upright 60x300
-  // box are the same extents. That is why the second reading is at 45 degrees.
+  // A 300x60 bar stood on end is 60 wide and 300 tall, and the box that holds
+  // it is the same numbers swapped — so Arcade's grown box and Matter's turned
+  // polygon are the *same rectangle*, and there is nothing here to tell apart.
   expect(arcade.width).toBeLessThan(arcade.height);
 
   await editor.setSceneEngine('matter');
@@ -61,13 +53,16 @@ test('a Matter body turns with its object where an Arcade one grows', async ({
   await editor.closePanels();
 
   const matter = await editor.findDrawnBox(BODY);
-  // At a quarter turn the two engines agree on the extents and disagree about
-  // nothing a box can express, so this is only the sanity half.
-  expect(matter.count).toBeGreaterThan(0);
-  expect(matter.width).toBeLessThan(matter.height);
+  expect(Math.abs(matter.width - arcade.width)).toBeLessThan(arcade.width * 0.15);
+  expect(Math.abs(matter.height - arcade.height)).toBeLessThan(arcade.height * 0.15);
+
+  // Recorded rather than left implicit, because it is exactly why the test
+  // below turns 45 degrees instead: at a right angle every reading a canvas can
+  // give is identical under both engines, so a suite that only ever turned
+  // things by 90 degrees would assert nothing at all about the difference.
 });
 
-test('at 45 degrees the two engines draw visibly different bodies', async ({
+test('at 45 degrees the two engines put their outline in different places', async ({
   editor,
 }) => {
   await setup(editor);
@@ -75,24 +70,39 @@ test('at 45 degrees the two engines draw visibly different bodies', async ({
   await editor.deselect();
   await editor.closePanels();
 
-  // Arcade: the axis-aligned box that holds a 300x60 bar turned 45 degrees is
-  // 255 square, so it is *taller* than the bar is thick by a factor of four.
-  const arcade = await editor.findDrawnBox(BODY);
+  // The two engines' bodies share a bounding box *exactly*, and always: the box
+  // Arcade grows to hold a turned object is by definition that object's own
+  // bounding box. So an extent cannot separate them, a centroid cannot (both
+  // are symmetric about the same centre), and a whole-canvas pixel count only
+  // can by luck — at the mobile project's zoom the two ink 371 pixels each, to
+  // the digit. The first version of this test asserted exactly that and passed
+  // on one project while measuring nothing on the other.
+  //
+  // What is different is the *corner*. An upright box has its outline there; a
+  // turned bar inside that box has nothing there at all.
+  const box = await editor.findDrawnBox(BODY);
+  expect(box.count).toBeGreaterThan(0);
+  const corner = {
+    x: box.x + box.width * 0.72,
+    y: box.y,
+    width: box.width * 0.28,
+    height: box.height * 0.28,
+  };
+
+  const arcadeCorner = await editor.countDrawnIn(BODY, corner);
+  expect(arcadeCorner).toBeGreaterThan(0);
 
   await editor.setSceneEngine('matter');
   await editor.deselect();
   await editor.closePanels();
 
-  // Matter: the same 300x60 bar, turned. Its extents are the same 255 square —
-  // a turned rectangle's bounding box is exactly the box Arcade grows to — so
-  // the extents cannot tell them apart at all, and the honest instrument is how
-  // much green there is. A square outline of side s inks about 4s pixels; a
-  // turned 300x60 rectangle inks about 2*(300+60), which is smaller. The count
-  // is what separates a drawn polygon from a drawn box.
-  const matter = await editor.findDrawnBox(BODY);
+  const turned = await editor.findDrawnBox(BODY);
+  const matterCorner = await editor.countDrawnIn(BODY, corner);
 
-  expect(Math.abs(matter.width - arcade.width)).toBeLessThan(arcade.width * 0.12);
-  expect(matter.count).toBeLessThan(arcade.count * 0.9);
+  // The same box, and nothing in the corner of it.
+  expect(Math.abs(turned.width - box.width)).toBeLessThan(box.width * 0.12);
+  expect(Math.abs(turned.height - box.height)).toBeLessThan(box.height * 0.12);
+  expect(matterCorner).toBe(0);
 });
 
 test('the engine, the Matter dials and the rows they hide survive a save', async ({

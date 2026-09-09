@@ -1379,30 +1379,53 @@ function bodyLines(
   // whichever engine reads it, because a scene switched from Arcade to Matter
   // must fall at the speed it already fell at.
   if (engine === 'matter') {
-    const settings = [
-      `isStatic: ${body.kind === 'static'}`,
-      // Matter's velocity is pixels per *step*, and a step is Matter's own
-      // 1000/60 ms base delta rather than a second. `Body.setVelocity` divides
-      // by that base delta, so px/s is px/step times 60.
-      `velocity: { x: ${num(body.velocityX / 60)}, y: ${num(body.velocityY / 60)} }`,
-      // Radians per step, where the document says degrees per second.
-      `angularVelocity: ${num((body.angularVelocity * Math.PI) / 180 / 60)}`,
-      `mass: ${num(body.mass)}`,
-      `restitution: ${num(body.restitution)}`,
-      `friction: ${num(body.friction)}`,
-      `frictionAir: ${num(body.frictionAir)}`,
-      `ignoreGravity: ${!body.allowGravity}`,
-    ];
     // Out of the same identifier set every object draws from, so a scene
     // holding an object the user called "floor body" cannot end up with two
     // bindings of one name — the rule the sound handles and the keyboard
     // fields already follow.
     const binding = toIdentifier(`${node.name} body`, used);
-    return [
+    // The config carries exactly the keys `MatterBodyConfig` *declares*, and
+    // the split is not tidiness. Matter's `Body.set` handles `velocity`,
+    // `angularVelocity` and `mass` at runtime and assigns `ignoreGravity` as a
+    // plain property, so all four work — and none of them is in the type, so
+    // an object literal carrying one fails the exported `.ts` under `--strict`
+    // while the `.js` and the runnable page both pass. That is iteration 24's
+    // `generateFrameNames` trap exactly: a runtime that does the right thing
+    // behind a type that refuses to say so, and the shared `create()` body has
+    // nowhere to put a cast. **Only `export-toolchain.spec.ts` could have found
+    // it.** So the declared keys ride in the literal and the rest are
+    // statements on the body the helper answers with.
+    const lines = [
       `const ${binding} = ${ctx.matterFn}(${ctx.receiver}, ${id}, {`,
-      ...settings.map((line) => `  ${line},`),
+      `  isStatic: ${body.kind === 'static'},`,
+      `  restitution: ${num(body.restitution)},`,
+      `  friction: ${num(body.friction)},`,
+      `  frictionAir: ${num(body.frictionAir)},`,
       '});',
     ];
+    // A Matter static body ignores every one of these, exactly as Phaser's
+    // `StaticBody` has no velocity, bounce, drag, mass or gravity to set — so a
+    // static one gets the literal and nothing else, which is the Arcade
+    // branch's "nothing to chain" one engine over.
+    if (body.kind === 'dynamic') {
+      lines.push(`${ctx.receiver}.matter.body.setMass(${binding}, ${num(body.mass)});`);
+      // Matter's velocity is pixels per *step*, and a step is its own 1000/60 ms
+      // base delta rather than a second — `Body.setVelocity` divides by exactly
+      // that — so px/s is px/step times 60.
+      lines.push(
+        `${ctx.receiver}.matter.body.setVelocity(${binding}, ` +
+          `{ x: ${num(body.velocityX / 60)}, y: ${num(body.velocityY / 60)} });`,
+      );
+      // Radians per step, where the document says degrees per second.
+      lines.push(
+        `${ctx.receiver}.matter.body.setAngularVelocity(${binding}, ` +
+          `${num((body.angularVelocity * Math.PI) / 180 / 60)});`,
+      );
+      // A plain assignment because Matter has no setter for it, and the
+      // property is on `MatterJS.BodyType` so it compiles.
+      lines.push(`${binding}.ignoreGravity = ${!body.allowGravity};`);
+    }
+    return lines;
   }
   // Immediately after the object is given a body and before any of its dials,
   // so the statement that says what shape it is sits beside the one that made
