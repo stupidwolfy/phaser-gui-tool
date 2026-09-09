@@ -562,6 +562,27 @@ export class EditorPage {
   }
 
   /**
+   * The scene's physics engine, which lives beside the gravity in
+   * `SceneInspector` — so this deselects first, exactly as `setGravity` does.
+   *
+   * Matched by the option's leading word rather than its whole label, because
+   * the labels say what each engine is *for* ("Arcade — fast, upright boxes")
+   * and a test should not have to restate a sentence to pick a value.
+   */
+  async setSceneEngine(engine: 'arcade' | 'matter'): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.choice('Physics engine').selectOption(engine);
+    await this.settle();
+  }
+
+  /** A `SelectField`'s current value, as the document stores it. */
+  async selectValue(label: string): Promise<string> {
+    await this.openPanel('inspect');
+    return this.choice(label).inputValue();
+  }
+
+  /**
    * The scene's camera, which lives in `SceneInspector` beside the gravity —
    * so this deselects first, exactly as `setGravity` and the guide helpers do.
    */

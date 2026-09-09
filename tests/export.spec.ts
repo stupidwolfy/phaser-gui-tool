@@ -406,7 +406,15 @@ test('a body exports as add.existing and its setters, and a nested one as nothin
   // scene's.
   expect(exported.contents).toContain('this.physics.world.gravity.set(-20, 480);');
   expect(exported.contents).toContain('this.physics.world.gravity.set(0, 0);');
-  expect(exported.contents.match(/world\.setBounds\(/g) ?? []).toHaveLength(2);
+  // Qualified by engine, because the fixture's third scene runs Matter and puts
+  // up world walls of its own. Two Arcade worlds and one Matter one is the
+  // whole file, and counting them together would pass whichever emitted both.
+  expect(
+    exported.contents.match(/this\.physics\.world\.setBounds\(/g) ?? [],
+  ).toHaveLength(2);
+  expect(
+    exported.contents.match(/this\.matter\.world\.setBounds\(/g) ?? [],
+  ).toHaveLength(1);
 
   // A module cannot set the game config, so it says what the reader has to add.
   expect(exported.contents).toContain("physics: { default: 'arcade' }");
@@ -645,6 +653,124 @@ test('a floor turned on its side stops what falls on the side it is drawn', asyn
   // centroid well below the ledge's rather than above it.
   expect(landed.y).toBeGreaterThan(before.y + 20);
   expect(landed.y).toBeLessThan(ledge.y);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('a project with one world of each engine emits both, and neither leaks', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+
+  // The engine is the *scene's*, and three scenes in one file is what proves
+  // it. Only the Matter one carries a settings object into `super(...)`; the
+  // two Arcade ones keep the bare key string they have always had.
+  expect(exported.contents.match(/physics: \{ matter: \{\} \}/g) ?? []).toHaveLength(1);
+  expect(exported.contents.match(/^\s+super\("/gm) ?? []).toHaveLength(2);
+
+  // Arcade still asks for its game-config key, because a scene cannot set one
+  // it does not own. Matter needs no such line at all — `GetPhysicsPlugins`
+  // reads the scene's own settings — which is why there is no second note.
+  expect(exported.contents).toContain("physics: { default: 'arcade' }");
+
+  // One helper each, and only because a scene of each kind is present.
+  expect(exported.contents.match(/^function matterBody\(/gm) ?? []).toHaveLength(1);
+  expect(exported.contents.match(/^function arcadeBody\(/gm) ?? []).toHaveLength(1);
+
+  // The gravity is one document field in px/s² under either engine, converted
+  // at the emit. 940 is deliberately not a round thousand: a factor-of-1000
+  // slip would read as 940 or as 0.00094 rather than as this.
+  expect(exported.contents).toContain('this.matter.world.setGravity(0, 0.94);');
+
+  // Every Matter dial, emitted whole and in Matter's own units — the emitter
+  // config's rule. 30px/s is 0.5 per step; 45°/s is 0.0131 radians per step.
+  expect(exported.contents).toContain('velocity: { x: 0.5, y: -0.25 }');
+  expect(exported.contents).toContain('angularVelocity: 0.013');
+  expect(exported.contents).toContain('restitution: 0.4');
+  expect(exported.contents).toContain('friction: 0.3');
+  expect(exported.contents).toContain('frictionAir: 0.05');
+  expect(exported.contents).toContain('isStatic: true');
+
+  // And the two things a Matter scene must *not* emit. A collider row is
+  // Arcade's `physics.add.collider`, and the scene that started Matter has no
+  // `this.physics` for it to be called on; the fixture holds a row on purpose
+  // so that dropping it is asserted rather than assumed. The driven node is the
+  // same claim for controls: the built-in behaviour writes to an Arcade body
+  // and gates its jump on `blocked.down`, so `drivenIn` refuses it — which
+  // means this whole file emits exactly one `update()`, the Arcade scene's.
+  // Three, which is exactly what the Arcade scene's seven rows survive down to.
+  // The Matter scene's row would be a fourth, so the count is the assertion.
+  expect(
+    exported.contents.match(/physics\.add\.collider\(/g) ?? [],
+  ).toHaveLength(3);
+  expect(exported.contents.match(/^  update\(\)/gm) ?? []).toHaveLength(1);
+});
+
+test('a Matter floor collides at the angle it is drawn, not at the box round it', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // The claim the whole engine choice exists for, and the only place it can be
+  // made: the editor never simulates, so "the body is really turned" is a
+  // statement about a running game.
+  //
+  // The fixture is shaped so that the two engines give opposite answers. The
+  // ramp is drawn 400x30 and turned 30 degrees; the faller is dropped over its
+  // *upper* end, well inside the axis-aligned box that holds the ramp but well
+  // clear of the turned bar itself at that x. Under Arcade the faller lands on
+  // the invisible box and stops high; under Matter it passes the empty air
+  // where no polygon is and carries on down to the world bounds. Asserting the
+  // *pass* rather than a catch is deliberate — a catch is what a wrong box
+  // gives you too.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Ramp');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 420);
+  await editor.setField('Width', 400);
+  await editor.setField('Height', 30);
+  await editor.setField('Rotation°', 30);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body', 'Static — never moves');
+
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Drop');
+  await editor.setField('X', 300);
+  await editor.setField('Y', 60);
+  await editor.setField('Width', 40);
+  await editor.setField('Height', 40);
+  await editor.setPhysics(true);
+
+  await editor.setGravity(0, 900);
+  await editor.setSceneEngine('matter');
+
+  const exported = await editor.exportCode('html');
+  // No Arcade anywhere in a file whose only scene runs Matter: no game-config
+  // key, no header note, no `physics.add.existing`, and no collider rows.
+  expect(exported.contents).toContain('physics: { matter: {} }');
+  expect(exported.contents).not.toContain("physics: { default: 'arcade' }");
+  expect(exported.contents).not.toContain('physics.add.existing');
+  expect(exported.contents).toContain('this.matter.world.setGravity(0, 0.9);');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('matter'), exported.contents);
+
+  const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL);
+  await run.page.waitForTimeout(1500);
+  const shot = await run.page.locator('canvas').screenshot();
+  const dropped = await findColor(run.page, shot, ELLIPSE_FILL);
+  const ramp = await findColor(run.page, shot, RECT_FILL);
+
+  expect(dropped.count).toBeGreaterThan(50);
+  expect(dropped.y).toBeGreaterThan(before.y + 20);
+  // Past the ramp's own centroid, which is what an axis-aligned body would
+  // never have allowed: the box that holds this ramp reaches up to y≈310 at
+  // this x, and the faller comes to rest on the floor of the world instead.
+  expect(dropped.y).toBeGreaterThan(ramp.y);
   expect(run.errors).toEqual([]);
 
   await run.close();

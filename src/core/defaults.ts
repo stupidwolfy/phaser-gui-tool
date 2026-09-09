@@ -256,6 +256,13 @@ export function defaultPhysicsBody(kind: PhysicsBody['kind'] = 'dynamic'): Physi
     immovable: false,
     allowGravity: true,
     collideWorldBounds: true,
+    // Matter's own defaults, so a body created here reads as an untouched
+    // Matter body in a Matter scene and as an untouched Arcade one in an
+    // Arcade scene. Neither set is ever absent, which is what lets a scene's
+    // engine be switched and switched back without losing a dial.
+    restitution: 0,
+    frictionAir: 0.01,
+    friction: 0.1,
   };
 }
 

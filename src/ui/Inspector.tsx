@@ -473,6 +473,22 @@ function WorldSection() {
   return (
     <>
       <div className="panel__section">Physics world</div>
+      {/* First, above the gravity, because it decides what every field under it
+          means — and because it is the one setting here that changes what the
+          canvas draws. Labelled "Physics engine" rather than "Engine": the
+          suite matches a label exactly, and a bare "Engine" says nothing on a
+          panel that also carries a camera and a world. */}
+      <SelectField
+        label="Physics engine"
+        value={gravity.engine}
+        options={[
+          { value: 'arcade', label: 'Arcade — fast, upright boxes' },
+          { value: 'matter', label: 'Matter — shapes that turn' },
+        ]}
+        onChange={(engine) =>
+          set({ engine: engine === 'matter' ? 'matter' : 'arcade' })
+        }
+      />
       <div className="field-row">
         <NumberField
           label="Gravity X"
@@ -486,9 +502,11 @@ function WorldSection() {
         />
       </div>
       <p className="hint">
-        Positive Y falls downward, as everywhere else here. The world's bounds
-        are the scene's own width and height, so an object set to collide with
-        them stops at the frame you can see.
+        Positive Y falls downward, as everywhere else here — in pixels per
+        second squared under either engine, since the export converts to
+        Matter's own units for you. The world's bounds are the scene's own width
+        and height, so an object set to collide with them stops at the frame you
+        can see.
       </p>
     </>
   );
@@ -525,6 +543,23 @@ function CollidersSection() {
   const addCollider = useEditorStore((s) => s.addCollider);
   const updateCollider = useEditorStore((s) => s.updateCollider);
   const removeCollider = useEditorStore((s) => s.removeCollider);
+
+  // A Matter world collides everything with everything, so there is no pair to
+  // pick — `collidersOf` already answers empty here, and this says why rather
+  // than leaving a heading with nothing under it. `AlignSection`'s rule: a
+  // control that says why it cannot beats one that is not there.
+  if (scenePhysicsOf(scene).engine === 'matter') {
+    return (
+      <>
+        <div className="panel__section">Collisions</div>
+        <p className="hint">
+          This scene runs Matter, which collides every body with every other one
+          on its own. There is nothing to pair up. Any rows made under Arcade
+          are kept and come back if the scene is switched back.
+        </p>
+      </>
+    );
+  }
 
   const candidates = collidableNodes(scene);
   // Nothing at all when nothing in the scene can collide: a project of plain
@@ -2109,6 +2144,10 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
   // a direct child of the scene.
   const topLevel = scene.children.some((child) => child.id === node.id);
   const body = physicsOf(node, topLevel);
+  // Which set of dials this body actually has. Both sets are on the node and
+  // neither is ever deleted, so this hides rather than discards — switching the
+  // scene's engine and switching it back leaves every number where it was.
+  const { engine } = scenePhysicsOf(scene);
 
   if (!topLevel) {
     return (
@@ -2164,36 +2203,77 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
                   onChange={(velocityY) => setNodePhysics(node.id, { velocityY })}
                 />
               </div>
-              <div className="field-row">
-                <NumberField
-                  label="Bounce X"
-                  value={body.bounceX}
-                  step={0.05}
-                  min={0}
-                  onChange={(bounceX) => setNodePhysics(node.id, { bounceX })}
-                />
-                <NumberField
-                  label="Bounce Y"
-                  value={body.bounceY}
-                  step={0.05}
-                  min={0}
-                  onChange={(bounceY) => setNodePhysics(node.id, { bounceY })}
-                />
-              </div>
-              <div className="field-row">
-                <NumberField
-                  label="Drag X"
-                  value={body.dragX}
-                  min={0}
-                  onChange={(dragX) => setNodePhysics(node.id, { dragX })}
-                />
-                <NumberField
-                  label="Drag Y"
-                  value={body.dragY}
-                  min={0}
-                  onChange={(dragY) => setNodePhysics(node.id, { dragY })}
-                />
-              </div>
+              {/* Two sets of dials for one body, and which one is shown is the
+                  scene's engine rather than a preference. An Arcade body
+                  bounces and drags per axis because it is an axis-aligned box;
+                  a Matter body is a polygon that turns, so it has one
+                  restitution and one friction for the whole of it, and a
+                  surface friction Arcade has no notion of. Showing both sets at
+                  once would put four fields on screen that the exported game
+                  reads nowhere. */}
+              {engine === 'arcade' ? (
+                <>
+                  <div className="field-row">
+                    <NumberField
+                      label="Bounce X"
+                      value={body.bounceX}
+                      step={0.05}
+                      min={0}
+                      onChange={(bounceX) => setNodePhysics(node.id, { bounceX })}
+                    />
+                    <NumberField
+                      label="Bounce Y"
+                      value={body.bounceY}
+                      step={0.05}
+                      min={0}
+                      onChange={(bounceY) => setNodePhysics(node.id, { bounceY })}
+                    />
+                  </div>
+                  <div className="field-row">
+                    <NumberField
+                      label="Drag X"
+                      value={body.dragX}
+                      min={0}
+                      onChange={(dragX) => setNodePhysics(node.id, { dragX })}
+                    />
+                    <NumberField
+                      label="Drag Y"
+                      value={body.dragY}
+                      min={0}
+                      onChange={(dragY) => setNodePhysics(node.id, { dragY })}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="field-row">
+                    <NumberField
+                      label="Bounciness"
+                      value={body.restitution}
+                      step={0.05}
+                      min={0}
+                      max={1}
+                      onChange={(restitution) => setNodePhysics(node.id, { restitution })}
+                    />
+                    <NumberField
+                      label="Air friction"
+                      value={body.frictionAir}
+                      step={0.01}
+                      min={0}
+                      max={1}
+                      onChange={(frictionAir) => setNodePhysics(node.id, { frictionAir })}
+                    />
+                  </div>
+                  <NumberField
+                    label="Surface friction"
+                    value={body.friction}
+                    step={0.05}
+                    min={0}
+                    max={1}
+                    onChange={(friction) => setNodePhysics(node.id, { friction })}
+                  />
+                </>
+              )}
               <div className="field-row">
                 <NumberField
                   label="Spin°/s"
@@ -2210,11 +2290,17 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
                   onChange={(mass) => setNodePhysics(node.id, { mass })}
                 />
               </div>
-              <CheckboxField
-                label="Immovable"
-                value={body.immovable}
-                onChange={(immovable) => setNodePhysics(node.id, { immovable })}
-              />
+              {/* Matter has no such flag: a body there either takes part in the
+                  simulation or is static, and "dynamic but unpushable" is not a
+                  state it can be in. Absent rather than disabled, by the rule
+                  the static body's own missing fields already follow. */}
+              {engine === 'arcade' && (
+                <CheckboxField
+                  label="Immovable"
+                  value={body.immovable}
+                  onChange={(immovable) => setNodePhysics(node.id, { immovable })}
+                />
+              )}
               <CheckboxField
                 label="Affected by gravity"
                 value={body.allowGravity}
@@ -2231,11 +2317,11 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
             }
           />
           <p className="hint">
-            The green outline on the canvas is the body. It stays square to the
-            screen however the object is turned, because an Arcade body does not
-            rotate with what it belongs to. Nothing moves in the editor — the
-            document is what you are editing, so the simulation is left to the
-            game you export.
+            {engine === 'arcade'
+              ? 'The green outline on the canvas is the body. It stays square to the screen however the object is turned, because an Arcade body does not rotate with what it belongs to — it grows to hold the turned object instead. Switch the scene to Matter if the collision shape has to follow the shape.'
+              : 'The green outline on the canvas is the body, and it turns with the object because a Matter body is a real polygon. Matter also collides every body with every other one, so there are no pairs to list.'}{' '}
+            Nothing moves in the editor — the document is what you are editing,
+            so the simulation is left to the game you export.
           </p>
 
           {/* Under the body rather than in a panel of its own, and directly
@@ -2299,6 +2385,23 @@ function NodeCollisionsSection({ node }: { node: GameObjectNode }) {
   // refusal and `physicsOf`'s.
   const topLevel = scene.children.some((child) => child.id === node.id);
   if (!topLevel) return null;
+
+  // A Matter world collides everything with everything, so there is no pair to
+  // pick — `collidersOf` already answers empty here, and this says why rather
+  // than leaving a heading with nothing under it. `AlignSection`'s rule: a
+  // control that says why it cannot beats one that is not there.
+  if (scenePhysicsOf(scene).engine === 'matter') {
+    return (
+      <>
+        <div className="panel__section">Collides with</div>
+        <p className="hint">
+          This scene runs Matter, which collides every body with every other one
+          on its own. There is nothing to pair up. Any rows made under Arcade
+          are kept and come back if the scene is switched back.
+        </p>
+      </>
+    );
+  }
 
   // Derived outside the selector, never inside one: both build a fresh array
   // every call, so selecting either loops forever (React error #185).
