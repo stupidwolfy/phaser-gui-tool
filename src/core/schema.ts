@@ -1453,6 +1453,51 @@ export function canHavePhysics(type: NodeType): boolean {
 }
 
 /**
+ * How big a body is on an object turned `rotation` degrees.
+ *
+ * An Arcade body is a rectangle whose sides are the world's, and nothing in
+ * Phaser turns one: `Body.updateBounds` reads the object's scale and never its
+ * angle. So a body cannot be the shape of a rotated object — the closest thing
+ * that exists is the box that *contains* it, which is what this returns, and
+ * which is what both the canvas and the export now use.
+ *
+ * That is a change of answer rather than a change of rule. Until iteration 26
+ * the body kept the object's unrotated width and height, so a 300x20 platform
+ * stood on end collided as a 300x20 floor — a shape with almost no overlap with
+ * the thing on screen, and the one failure a user cannot see until the game is
+ * in their hand. The editor drew that box faithfully, which made a correct
+ * drawing of a wrong body: `drawBodies`' job is to say what the export builds,
+ * and the fix belongs on both sides of it at once.
+ *
+ * The width is `|w·cos| + |h·sin|` and the height its mirror — the standard
+ * bound of a rotated rectangle, in the object's own drawn size, so a scale is
+ * already in the numbers handed in. Absolute throughout, because a negative
+ * scale flips an object without giving it a negative-width body and Phaser
+ * normalises the same way.
+ *
+ * `bodyIsTurned` is the gate rather than `rotation !== 0`: at a half turn the
+ * box is the box, so a project that flips something 180 degrees exports byte
+ * for byte what it always did.
+ */
+export function bodyBoxOf(
+  width: number,
+  height: number,
+  rotation: number,
+): { width: number; height: number } {
+  const w = Math.abs(width);
+  const h = Math.abs(height);
+  const radians = ((Number.isFinite(rotation) ? rotation : 0) * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(radians));
+  const sin = Math.abs(Math.sin(radians));
+  return { width: w * cos + h * sin, height: w * sin + h * cos };
+}
+
+/** Whether `bodyBoxOf` would answer with anything but the box it was handed. */
+export function bodyIsTurned(rotation: number): boolean {
+  return Number.isFinite(rotation) && rotation % 180 !== 0;
+}
+
+/**
  * What the player drives an object with.
  *
  * The first thing in this schema that is about what happens while the game is

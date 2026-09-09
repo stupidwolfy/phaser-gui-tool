@@ -1568,11 +1568,41 @@ exported as real Arcade Physics, and neither is ever run here.
   for the same reason: a node dragged into a group and back out is the same node, and
   throwing its settings away on the way in would be a deletion nothing asked for. The
   inspector says so in as many words.
-- **A body is axis-aligned and does not turn with its object.** That is Phaser's, not a
-  simplification here, and it is the one thing about physics the canvas can tell a user that
-  the docs will not — so `drawBodies` builds the box from `displayWidth`/`displayHeight`
-  centred on the node's own position rather than from `worldBoundsOf`, which is the rotated
-  AABB and a different, larger box.
+- **A body is axis-aligned and does not turn with its object. It is sized to *hold* the
+  turned object instead, and that was iteration 16's one real bug.** The first half is
+  Phaser's, not a simplification here: `Body.updateBounds` reads the object's scale and
+  never its angle, and nothing in Arcade turns a body. What iteration 16 concluded from
+  that was wrong — it kept the object's *unrotated* width and height, so a 300x20 platform
+  stood on end collided as a 300x20 horizontal floor, a shape with almost no overlap with
+  the thing on screen, and the editor drew that box faithfully. A correct drawing of a
+  wrong body. The closest shape Arcade *can* express is the box that contains the turned
+  object, so that is what both sides now use: `bodyBoxOf(width, height, rotation)` in
+  `schema.ts` is the one builder, `drawBodies` is one consumer and the exported fit helper
+  is the other — `textStyleOf`'s two-consumer rule, on the one thing here nobody can see
+  until the game is in their hand. It is still not `worldBoundsOf`: that is the box the
+  *renderer* measured, and a body's is centred on the node's own position, which is where
+  Phaser puts one from `displayOrigin`.
+- **The fit is a module-level helper reading the object, never numbers the exporter
+  printed, and there are two reasons and a trap in it.** A `text` node's size is measured
+  against the font at runtime and the document does not know it, so a box computed at
+  export time would be right for every type but one; and reading `object.angle` rather than
+  printing the document's rotation cannot fall out of step with the `.setAngle` the
+  constructor chain above it emitted. The trap is that **`StaticBody.setSize` takes canvas
+  pixels while `Body.setSize` takes *source* pixels**, which Phaser then multiplies by the
+  object's own scale — one call for both is wrong by the scale on one of them, and wrong
+  only on an object that is not at 1x, which is invisible on every fixture that happens to
+  sit there. Both recentre, because `setSize` defaults `center` to true and every type in
+  `PHYSICS_TYPES` has a centred origin.
+- **`syncBounds` is the loop Phaser already ships for this, and it is refused.** It
+  re-reads `getBounds()` every step, which does follow an object spinning under
+  `angularVelocity` — but it never touches `offset`, so the body grows from its top-left
+  corner and ends up off-centre by half of what it gained. A body that spins is therefore
+  fitted to the angle the document states rather than the one it reaches, which is exactly
+  what the canvas draws.
+- **The gate is `bodyIsTurned`, which is `rotation % 180 !== 0` rather than `!== 0`.** At a
+  half turn the box is the box, so a project that flips something 180 degrees — and every
+  project whose bodies are upright — exports byte for byte what it always did: the rule the
+  asset table, the tilemap helper and the prefab factories all follow.
 - **The outline sits *above* the selection outline, at depth 1000.5.** For an unrotated
   object the two are the same rectangle, so one of them is going to be invisible — and it
   should be the selection, which is already said by both handles, by the move bar and by the
@@ -2750,7 +2780,8 @@ tests/
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
   fonts.spec.ts             a font imported, drawn, round-tripped, removed and exported
-  physics.spec.ts           a body drawn, never simulated, and refused inside a group
+  physics.spec.ts           a body drawn, never simulated, sized to hold what it is
+                            turned with, and refused inside a group
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
   audio.spec.ts             a sound imported, registered, saved, reopened and exported

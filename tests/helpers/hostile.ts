@@ -332,7 +332,13 @@ export function hostileProject(): Project {
             name: breakout,
             type: 'rectangle',
             visible: true,
-            transform: { x: 480, y: 270, rotation: 0, scaleX: 1, scaleY: 1 },
+            // Turned, and turned to something that is neither a right angle
+            // nor a half turn, because a dynamic body is the only kind whose
+            // fit call has to divide the box by the object's own scale — and
+            // this is the only place that division ever meets
+            // `Phaser.Physics.Arcade.Body` under `tsc --strict`. The tile
+            // sprite's static body covers the other branch, at 7 degrees.
+            transform: { x: 480, y: 270, rotation: 33.5, scaleX: 1, scaleY: 1 },
             props: { width: 200, height: 120, fill: '#4f8cff', alpha: 1 },
             // A dynamic body with a non-default value in every field. Not here
             // for escaping — a body carries no free user text — but because

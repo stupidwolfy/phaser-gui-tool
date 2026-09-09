@@ -16,6 +16,7 @@ import {
   frameGridOf,
   resolveFrame,
   isDefaultCamera,
+  bodyIsTurned,
   physicsOf,
   scenePhysicsOf,
   sliceInsetsOf,
@@ -1033,16 +1034,20 @@ function buildTilemapHelper(fn: string, language: SceneLanguage, indent: string)
  * reason a group's children may not have one. So unlike `usedIn`, this has no
  * prefab half to get wrong.
  */
-function physicsUsedIn(scene: SceneDoc): { any: boolean; dynamic: boolean } {
+function physicsUsedIn(
+  scene: SceneDoc,
+): { any: boolean; dynamic: boolean; turned: boolean } {
   let any = false;
   let dynamic = false;
+  let turned = false;
   for (const node of scene.children) {
     const body = physicsOf(node, true);
     if (!body) continue;
     any = true;
     if (body.kind === 'dynamic') dynamic = true;
+    if (bodyIsTurned(node.transform.rotation)) turned = true;
   }
-  return { any, dynamic };
+  return { any, dynamic, turned };
 }
 
 /**
@@ -1084,6 +1089,80 @@ function buildBodyHelper(fn: string, language: SceneLanguage, indent: string): s
   ];
   // Per physical line, as `buildTilemapHelper` and `buildFactories` both are:
   // the typed signature is one entry that spans none, but the rule is the same.
+  return lines.join('\n').replace(/^(?!$)/gm, indent);
+}
+
+/**
+ * The helper that gives a turned object a body the shape of what it draws.
+ *
+ * Arcade never turns a body: `Body.updateBounds` reads the object's scale and
+ * never its angle, so a 300x20 platform stood on end keeps a 300x20 horizontal
+ * body unless something says otherwise. The closest shape Arcade can express is
+ * the box that *contains* the turned object, which is what `bodyBoxOf` draws on
+ * the canvas and what this sets, so the two cannot disagree.
+ *
+ * It reads the object rather than being handed numbers, and that is the whole
+ * reason it is a helper at all: a `text` node's size is measured against the
+ * font at runtime and the document does not know it, so an angle the exporter
+ * computed the box from would be right for every type but one. Reading
+ * `object.angle` here rather than printing the document's rotation is the same
+ * argument one step further — it cannot fall out of step with the `.setAngle`
+ * the constructor chain above it emitted.
+ *
+ * The two branches are not tidiness, and this is the trap in the whole feature:
+ * `StaticBody.setSize` takes **canvas** pixels while `Body.setSize` takes
+ * **source** pixels, which Phaser then multiplies by the object's own scale. A
+ * single call would be right for one kind of body and wrong by the scale for
+ * the other, on a scaled object only — which is invisible on every fixture that
+ * happens to sit at 1x. Both recentre, because `setSize` defaults `center` to
+ * true and every type that can carry a body has a centred origin.
+ *
+ * `syncBounds` is the loop Phaser already ships for this and is refused: it
+ * re-reads `getBounds()` every step, which does follow a spinning object, but
+ * it never touches `offset` — so the body grows from its top-left corner and
+ * sits off-centre by half of what it gained. A body that spins under
+ * `angularVelocity` is therefore fitted to the angle the document states and
+ * not to the one it reaches, which is the same thing the canvas draws.
+ */
+function buildFitHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  // The union rather than `GameObject`, because `angle`, `displayWidth` and
+  // `scaleX` are on the components rather than on the base class — and rather
+  // than a `type` alias, which would be a *statement* the runnable page's
+  // shared body has nowhere to put. It is exactly `PHYSICS_TYPES`, with the two
+  // shapes under the one class they both extend.
+  const signature = typed
+    ? `function ${fn}(\n` +
+      '  object:\n' +
+      '    | Phaser.GameObjects.Shape\n' +
+      '    | Phaser.GameObjects.Sprite\n' +
+      '    | Phaser.GameObjects.Text\n' +
+      '    | Phaser.GameObjects.NineSlice\n' +
+      '    | Phaser.GameObjects.TileSprite,\n' +
+      '): void {'
+    : `function ${fn}(object) {`;
+  const lines = [
+    signature,
+    '  const radians = Phaser.Math.DegToRad(object.angle);',
+    '  const cos = Math.abs(Math.cos(radians));',
+    '  const sin = Math.abs(Math.sin(radians));',
+    // Absolute because a negative scale flips an object without giving it a
+    // negative-width body, which is how Phaser normalises it too.
+    '  const width = Math.abs(object.displayWidth);',
+    '  const height = Math.abs(object.displayHeight);',
+    '  const boxWidth = width * cos + height * sin;',
+    '  const boxHeight = width * sin + height * cos;',
+    '  const body = object.body;',
+    '  if (body instanceof Phaser.Physics.Arcade.StaticBody) {',
+    '    body.setSize(boxWidth, boxHeight);',
+    '  } else if (body instanceof Phaser.Physics.Arcade.Body) {',
+    '    body.setSize(',
+    '      boxWidth / (Math.abs(object.scaleX) || 1),',
+    '      boxHeight / (Math.abs(object.scaleY) || 1),',
+    '    );',
+    '  }',
+    '}',
+  ];
   return lines.join('\n').replace(/^(?!$)/gm, indent);
 }
 
@@ -1184,12 +1263,23 @@ function touchButtonLine(button: TouchButton): string {
  * of Phaser's defaults are in force. The chained form is one statement, so the
  * whole body still reads as a single thing.
  */
-function bodyLines(id: string, body: PhysicsBody, ctx: EmitContext): string[] {
+function bodyLines(
+  id: string,
+  node: GameObjectNode,
+  body: PhysicsBody,
+  ctx: EmitContext,
+): string[] {
+  // Immediately after the object is given a body and before any of its dials,
+  // so the statement that says what shape it is sits beside the one that made
+  // it. Nothing at all for an upright object — or one turned a half turn, whose
+  // box is its box — so a project that predates this exports byte for byte what
+  // it always did.
+  const fit = bodyIsTurned(node.transform.rotation) ? [`${ctx.fitFn}(${id});`] : [];
   if (body.kind === 'static') {
     // Nothing to chain: a StaticBody has no velocity, bounce, drag, mass or
     // gravity, and an immovable flag on a body that never moves would be a line
     // restating its own type.
-    return [`${ctx.receiver}.physics.add.existing(${id}, true);`];
+    return [`${ctx.receiver}.physics.add.existing(${id}, true);`, ...fit];
   }
   const setters = [
     `.setVelocity(${num(body.velocityX)}, ${num(body.velocityY)})`,
@@ -1203,6 +1293,7 @@ function bodyLines(id: string, body: PhysicsBody, ctx: EmitContext): string[] {
   ];
   return [
     `${ctx.receiver}.physics.add.existing(${id});`,
+    ...fit,
     `${ctx.bodyFn}(${id})\n      ${setters.join('\n      ')};`,
   ];
 }
@@ -1229,6 +1320,11 @@ interface EmitContext {
    * the same identifier set and for the same reason as `tilemapFn`.
    */
   touchFn: string;
+  /**
+   * What the body-fitting helper is called in this module, allocated from the
+   * same identifier set and for the same reason as `tilemapFn`.
+   */
+  fitFn: string;
   /**
    * The sound table, file-wide like `assets` and read by `buildSoundLines`
    * alone. No `receiver` question attaches to it: the only place a sound is
@@ -1588,7 +1684,7 @@ function emitNode(
   // the same fact — an Arcade body reads its owner's `x`/`y` as world
   // coordinates, and a child of a Container has neither.
   const body = physicsOf(node, !nested);
-  if (body) lines.push(...bodyLines(id, body, ctx));
+  if (body) lines.push(...bodyLines(id, node, body, ctx));
 
   // A tilemap's further layers, each one its own object beside the first.
   //
@@ -1716,6 +1812,7 @@ function buildFactories(
       ctx.tilemapFn,
       ctx.bodyFn,
       ctx.touchFn,
+      ctx.fitFn,
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
@@ -1944,6 +2041,7 @@ function buildUpdateBody(
     ctx.tilemapFn,
     ctx.bodyFn,
     ctx.touchFn,
+    ctx.fitFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
 
@@ -2051,6 +2149,7 @@ function buildCreateBody(
     ctx.tilemapFn,
     ctx.bodyFn,
     ctx.touchFn,
+    ctx.fitFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
   const lines: string[] = [
@@ -2383,7 +2482,7 @@ interface Emission {
    * accessor. File-wide, because the helper and the game config are file-wide
    * even though the world lines are per scene.
    */
-  physics: { any: boolean; dynamic: boolean };
+  physics: { any: boolean; dynamic: boolean; turned: boolean };
   /**
    * Whether any scene asks for on-screen buttons, and therefore whether the
    * module carries the helper at all — the rule the asset table, the tilemap
@@ -2405,6 +2504,10 @@ function prepare(project: Project): Emission {
   const bodyFn = toIdentifier('arcade body', moduleNames);
   // And immediately after that, by that same rule a fourth time.
   const touchFn = toIdentifier('create touch controls', moduleNames);
+  // And a fifth. Allocated after the other four rather than beside `bodyFn`,
+  // which is where it belongs by subject: drawing earlier would move the suffix
+  // a clash gives one of them, and all four of those are asserted by name.
+  const fitFn = toIdentifier('fit body to angle', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
@@ -2425,6 +2528,7 @@ function prepare(project: Project): Emission {
       tilemapFn,
       bodyFn,
       touchFn,
+      fitFn,
       fonts,
       receiver: 'this',
     },
@@ -2432,6 +2536,7 @@ function prepare(project: Project): Emission {
     physics: {
       any: worlds.some((world) => world.any),
       dynamic: worlds.some((world) => world.dynamic),
+      turned: worlds.some((world) => world.turned),
     },
     touch: project.scenes.some((scene) => touchZonesOf(scene).length > 0),
   };
@@ -2561,6 +2666,11 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   const bodies = physics.dynamic
     ? `\n${buildBodyHelper(ctx.bodyFn, language, '')}\n`
     : '';
+  // Same rule again: nothing turned, no helper, so a project whose bodies are
+  // all upright exports byte for byte what it always did.
+  const fitted = physics.turned
+    ? `\n${buildFitHelper(ctx.fitFn, language, '')}\n`
+    : '';
   // Same rule again: no on-screen buttons, no helper, so every project that
   // predates them exports byte for byte what it always did.
   const buttons = touch ? `\n${buildTouchHelper(ctx.touchFn, language, '')}\n` : '';
@@ -2570,7 +2680,7 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
 
   return `${header(project)}${physicsNote(physics.any)}
 import Phaser from 'phaser';
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${buttons}${factories}
+${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${buttons}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -2613,6 +2723,9 @@ export function generateRunnableHtml(project: Project): string {
   const bodies = physics.dynamic
     ? `${buildBodyHelper(ctx.bodyFn, 'js', '      ')}\n\n`
     : '';
+  const fitted = physics.turned
+    ? `${buildFitHelper(ctx.fitFn, 'js', '      ')}\n\n`
+    : '';
   const buttons = touch ? `${buildTouchHelper(ctx.touchFn, 'js', '      ')}\n\n` : '';
   const classes = scenes
     .map((entry) =>
@@ -2645,7 +2758,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${buttons}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${buttons}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

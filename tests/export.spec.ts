@@ -415,6 +415,38 @@ test('a body exports as add.existing and its setters, and a nested one as nothin
   // drew from it, so the object the fixture calls "arcade body" binds something
   // else rather than shadowing the function the line beside it calls.
   expect(exported.contents).toContain('const arcadeBody2 = this.add.rectangle(');
+
+  // Two of the four bodies are on turned objects, and each gets the one call
+  // that gives it the shape of what it draws. Arcade never turns a body, so
+  // without this a platform stood on end collides as the horizontal floor it
+  // was drawn as before it was turned — which is what the editor's outline says
+  // too, since `bodyBoxOf` is the one builder for both.
+  expect(exported.contents.match(/^function fitBodyToAngle\(/gm) ?? []).toHaveLength(1);
+  expect(exported.contents.match(/fitBodyToAngle\(\w+\);/g) ?? []).toHaveLength(2);
+
+  // Both branches of it, because `StaticBody.setSize` takes canvas pixels while
+  // `Body.setSize` takes source pixels that Phaser multiplies by the object's
+  // scale — one call for both would be wrong by the scale on one of them, and
+  // wrong only on an object that is not at 1x.
+  expect(exported.contents).toContain('body.setSize(boxWidth, boxHeight);');
+  expect(exported.contents).toContain('boxWidth / (Math.abs(object.scaleX) || 1),');
+});
+
+test('a project whose bodies are all upright exports no fitting at all', async ({
+  editor,
+}) => {
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setPhysics(true);
+
+  const exported = await editor.exportCode('ts');
+
+  // The rule the asset table, the tilemap helper and the prefab factories all
+  // follow: a project that predates a feature exports byte for byte what it
+  // always did. A half turn is in that set too — the box of a box turned 180
+  // degrees is the box — but an upright one is the case every project has.
+  expect(exported.contents).toContain('physics.add.existing(');
+  expect(exported.contents).not.toContain('fitBodyToAngle');
 });
 
 test('the exported page runs the physics it was given', async ({ editor, page }, testInfo) => {
@@ -556,6 +588,63 @@ test('a floor paired from the object panel stops what falls on it', async ({
   // and which reads as a centroid below the floor's rather than above it.
   expect(landed.y).toBeGreaterThan(before.y + 20);
   expect(landed.y).toBeLessThan(floor.y);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('a floor turned on its side stops what falls on the side it is drawn', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // The reported bug, and the only assertion anywhere that the fitted body is
+  // real rather than well-typed. Arcade never turns a body, so a floor drawn
+  // 40 wide and 400 tall and then turned a quarter turn used to keep a 40-wide
+  // vertical body: the picture is a wide floor and the collision is a narrow
+  // post, and everything that misses the post falls straight through what it
+  // can plainly see.
+  //
+  // The fixture is shaped around exactly that gap. The faller is dropped 140
+  // units to the side of centre — over the floor as drawn, and clear of the
+  // body as it was built before the fit.
+  await editor.clearScene();
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Ledge');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 400);
+  await editor.setField('Width', 40);
+  await editor.setField('Height', 400);
+  await editor.setField('Rotation°', 90);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body', 'Static — never moves');
+  await editor.deselect();
+
+  await editor.setGravity(0, 900);
+
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Faller');
+  await editor.setField('X', 620);
+  await editor.setField('Y', 80);
+  await editor.setPhysics(true);
+  await editor.addColliderOnNode('Ledge');
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain('fitBodyToAngle(ledge);');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('turned-floor'), exported.contents);
+
+  const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+  await run.page.waitForTimeout(1500);
+  const shot = await run.page.locator('canvas').screenshot();
+  const landed = await findColor(run.page, shot, RECT_FILL);
+  const ledge = await findColor(run.page, shot, ELLIPSE_FILL);
+
+  expect(landed.count).toBeGreaterThan(100);
+  // It fell, and it came to rest *above* the ledge. Without the fit it passes
+  // beside the unturned body and settles on the world bounds, which reads as a
+  // centroid well below the ledge's rather than above it.
+  expect(landed.y).toBeGreaterThan(before.y + 20);
+  expect(landed.y).toBeLessThan(ledge.y);
   expect(run.errors).toEqual([]);
 
   await run.close();

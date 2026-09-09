@@ -18,6 +18,7 @@ import {
   findNode,
   findParent,
   EMPTY_TILE,
+  bodyBoxOf,
   frameGridOf,
   guidesOf,
   resolveFrame,
@@ -2713,12 +2714,16 @@ export class EditorScene extends Phaser.Scene {
    * Outlines every object in the scene that carries a physics body.
    *
    * The box is deliberately *not* the selection outline's box. An Arcade body
-   * is axis-aligned and does not turn with its object, so a rotated sprite's
-   * body is a straight rectangle of the object's unrotated display size, and
-   * drawing it any other way would show the user a shape their exported game
-   * does not have. Centred on the object's position because all four types that
-   * can carry a body have a centred origin, which is also how Phaser places the
-   * body from `displayOrigin`.
+   * is axis-aligned and nothing in Phaser turns one, so a rotated object's body
+   * is always a straight rectangle — but it is the rectangle that *contains*
+   * the turned object rather than one of the object's own unrotated size, which
+   * is what `bodyBoxOf` answers and what the export's `setSize` now builds.
+   * Drawing it any other way would show the user a shape their exported game
+   * does not have, which is precisely what this drew before iteration 26: a
+   * 300x20 platform stood on end kept a 300x20 horizontal body, on the canvas
+   * and in the game alike. Centred on the object's position because every type
+   * that can carry a body has a centred origin, which is also how Phaser places
+   * the body from `displayOrigin`.
    *
    * A static body gets a cross through it as well as an outline. That is one
    * colour and two extra lines rather than a second palette entry, and it says
@@ -2752,10 +2757,19 @@ export class EditorScene extends Phaser.Scene {
       const object = this.displayObjects.get(node.id);
       if (!object) continue;
 
-      // Absolute because a negative scale flips an object without giving it a
-      // negative-width body; Phaser normalises the same way.
-      const w = Math.abs(object.displayWidth);
-      const h = Math.abs(object.displayHeight);
+      // The box Arcade actually takes for an object at this angle, which is
+      // the object's own box only while it is upright. `bodyBoxOf` is the one
+      // builder for it and the exported fit helper is its other consumer, so
+      // the outline and the game cannot disagree about the shape — the
+      // `textStyleOf` rule, on the one thing here nobody can see until the
+      // game is in their hand.
+      const box = bodyBoxOf(
+        object.displayWidth,
+        object.displayHeight,
+        node.transform.rotation,
+      );
+      const w = box.width;
+      const h = box.height;
       if (!(w > 0) || !(h > 0)) continue;
 
       const x = node.transform.x - w / 2;
