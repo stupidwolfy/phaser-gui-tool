@@ -690,13 +690,28 @@ test('a project with one world of each engine emits both, and neither leaks', as
   expect(exported.contents).toContain('this.matter.world.setGravity(0, 0.94);');
 
   // Every Matter dial, emitted whole and in Matter's own units — the emitter
-  // config's rule. 30px/s is 0.5 per step; 45°/s is 0.0131 radians per step.
-  expect(exported.contents).toContain('velocity: { x: 0.5, y: -0.25 }');
-  expect(exported.contents).toContain('angularVelocity: 0.013');
+  // config's rule. 30px/s is 0.5 per step, a step being Matter's 1000/60 ms
+  // base delta; 45°/s is 0.0131 radians per step.
+  //
+  // Split across the literal and the statements below it, and that split is the
+  // assertion: `MatterBodyConfig` declares `isStatic`, `restitution`, `friction`
+  // and `frictionAir` and *not* `velocity`, `angularVelocity`, `mass` or
+  // `ignoreGravity`, though `Body.set` handles all four at runtime. Putting one
+  // of the latter in the literal compiles nowhere but runs everywhere, so only
+  // `export-toolchain.spec` fails on it — which is why the shape is pinned here
+  // as well as compiled there.
+  expect(exported.contents).toContain('isStatic: true');
   expect(exported.contents).toContain('restitution: 0.4');
   expect(exported.contents).toContain('friction: 0.3');
   expect(exported.contents).toContain('frictionAir: 0.05');
-  expect(exported.contents).toContain('isStatic: true');
+  expect(exported.contents).toMatch(/matter\.body\.setVelocity\(\w+, \{ x: 0\.5, y: -0\.25 \}\)/);
+  expect(exported.contents).toMatch(/matter\.body\.setAngularVelocity\(\w+, 0\.013\d*\)/);
+  expect(exported.contents).toMatch(/matter\.body\.setMass\(\w+, 3\)/);
+  expect(exported.contents).toMatch(/\w+\.ignoreGravity = false;/);
+
+  // And the static body gets the literal and nothing after it, which is the
+  // Arcade branch's "a StaticBody has nothing to chain" one engine over.
+  expect(exported.contents.match(/matter\.body\.setMass\(/g) ?? []).toHaveLength(1);
 
   // And the two things a Matter scene must *not* emit. A collider row is
   // Arcade's `physics.add.collider`, and the scene that started Matter has no
