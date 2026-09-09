@@ -20,6 +20,39 @@ const NESTED_FILL = '#22d3ee';
 /** The fill of the rectangle inside the hostile project's prefab. */
 const PREFAB_FILL = '#7ee787';
 
+/**
+ * Polls a reading until it satisfies a claim, and answers with the last one.
+ *
+ * The instrument for anything a *simulation* has to reach, and the reason is
+ * this file's oldest recorded trap wearing a new face: what a running game is
+ * doing at one wall-clock instant is a race with the frame rate. A physics page
+ * under two Playwright workers and two browsers steps at a different effective
+ * rate from one running alone, so a fixed `waitForTimeout` and a single
+ * screenshot asserts where the ball *happened to be*, not where it ends up. The
+ * ramp test below went green twice standalone and red twice in a full run, on a
+ * different assertion each time, which is the shape of a wrong instrument
+ * rather than a flaky feature.
+ *
+ * Polling turns it back into the claim the suite is allowed to make — "it
+ * reaches this state", a statement about time passing — and it costs nothing on
+ * a correct implementation, which reaches it on the first or second read. A
+ * wrong one never reaches it and fails on the timeout with the last reading in
+ * the message.
+ */
+async function reaches<T>(
+  read: () => Promise<T>,
+  claim: (value: T) => boolean,
+  timeout = 8000,
+): Promise<T> {
+  const started = Date.now();
+  let last = await read();
+  while (!claim(last) && Date.now() - started < timeout) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    last = await read();
+  }
+  return last;
+}
+
 interface Run {
   page: Page;
   errors: string[];
@@ -798,11 +831,16 @@ test('a Matter platformer jumps off what it is standing on, by thumb', async ({
 
   await run.page.mouse.move(target.x, target.y);
   await run.page.mouse.down();
-  // Read while it is still rising rather than after it lands again: a jump is
-  // the one control whose effect undoes itself, so a shot taken late says
-  // nothing. 700px/s upward against 900px/s² is roughly 0.78s to the apex.
-  await run.page.waitForTimeout(300);
-  const rising = await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL);
+  // Polled rather than snapshotted, and the button stays held throughout. A
+  // jump is the one control whose effect undoes itself, so a single shot has to
+  // be timed against a simulation whose rate depends on the machine — while a
+  // held button jumps again on every landing, so "it got this high at some
+  // point" is a claim that only a game which never jumps can fail.
+  const rising = await reaches(
+    async () =>
+      findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL),
+    (at) => at.count > 50 && at.y < resting.y - 40,
+  );
   await run.page.mouse.up();
 
   expect(rising.count).toBeGreaterThan(50);
@@ -869,8 +907,6 @@ test('a Matter floor collides at the angle it is drawn, not at the box round it'
   const run = await runExportedPage(page.context(), testInfo.outputPath('matter'), exported.contents);
 
   const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL);
-  await run.page.waitForTimeout(1500);
-  const dropped = await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL);
 
   // The page scales the 960x540 scene into its canvas, so a scene coordinate is
   // a proportion of the canvas box — the same conversion the button tests make.
@@ -879,19 +915,30 @@ test('a Matter floor collides at the angle it is drawn, not at the box round it'
   const scale = box.width / 960;
   const heldByABox = box.y + 287 * scale;
 
+  // Both halves at once, polled: the ball has to get *below* where a bounding
+  // box would have held it and *downhill* of where it started, and it reaches
+  // both within a stride of each other. Waiting a fixed time and reading once
+  // asserts where it happened to be on the machine the test ran on.
+  const dropped = await reaches(
+    async () =>
+      findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL),
+    (at) =>
+      at.count > 50 &&
+      at.y > heldByABox + 40 * scale &&
+      at.x > before.x + 20 * scale,
+  );
+
   expect(dropped.count).toBeGreaterThan(50);
   expect(dropped.y).toBeGreaterThan(before.y + 20);
-  // Well past where the bounding box would have stopped it. Sliding down the
-  // slope or off its end only makes this larger, so the claim survives however
-  // far the ball gets in a second and a half.
+  // Below where the bounding box would have stopped it, which says the body is
+  // a polygon rather than a box.
   expect(dropped.y).toBeGreaterThan(heldByABox + 40 * scale);
-
-  // And it slid *downhill*, which is the half that says the polygon is turned
-  // rather than merely a polygon. A body left upright — the shape the helper
-  // builds before it applies the angle — is a flat 400x30 ledge that catches
-  // the ball at almost the same height and then holds it dead still, so the
-  // reading above cannot tell the two apart and this one can. The bar runs from
-  // its upper-left end to its lower-right, so downhill is to the right.
+  // And downhill, which is the half that says the polygon is *turned* rather
+  // than merely a polygon. A body left upright — the shape the helper builds
+  // before it applies the angle — is a flat 400x30 ledge that catches the ball
+  // at almost the same height and then holds it dead still, so the reading
+  // above cannot tell the two apart and this one can. The bar runs from its
+  // upper-left end to its lower-right, so downhill is to the right.
   expect(dropped.x).toBeGreaterThan(before.x + 20 * scale);
   expect(run.errors).toEqual([]);
 
