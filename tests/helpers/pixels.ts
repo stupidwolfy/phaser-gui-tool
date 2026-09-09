@@ -97,6 +97,71 @@ export interface ColorBox {
 }
 
 /**
+ * How many pixels of one colour lie inside one rectangle of the screenshot.
+ *
+ * The instrument for a claim about *where* a colour is rather than how much of
+ * it there is or how far it spreads — which is what separates two outlines that
+ * share a bounding box. An Arcade body and a Matter body of the same turned
+ * object have exactly the same extents, always: the box Arcade grows to *is*
+ * the turned polygon's bounding box. So neither `findColor`'s centroid (both
+ * are symmetric about the same centre) nor `findColorBox`'s extent (identical
+ * by construction) can tell them apart, and a whole-canvas pixel count only
+ * can by luck — at the mobile project's zoom the two happen to ink the same
+ * number of pixels to the digit.
+ *
+ * What is genuinely different is the corner: an upright box has its outline
+ * there, and a turned polygon inside that box has nothing there at all.
+ *
+ * The region is in screenshot pixels, so a caller working from `findDrawnBox`'s
+ * page coordinates has to take the shot's own origin off first — which is what
+ * `EditorPage.countDrawnIn` is for.
+ */
+export async function countColorIn(
+  page: Page,
+  png: Buffer,
+  hex: string,
+  region: { x: number; y: number; width: number; height: number },
+  tolerance = 24,
+): Promise<number> {
+  const [r, g, b] = rgb(hex);
+  return page.evaluate(
+    async ({ base64, target, tolerance, region }) => {
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('no 2d context to decode the screenshot with');
+      context.drawImage(bitmap, 0, 0);
+      const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height);
+
+      const x0 = Math.max(0, Math.floor(region.x));
+      const y0 = Math.max(0, Math.floor(region.y));
+      const x1 = Math.min(width, Math.ceil(region.x + region.width));
+      const y1 = Math.min(height, Math.ceil(region.y + region.height));
+
+      let count = 0;
+      for (let y = y0; y < y1; y += 1) {
+        for (let x = x0; x < x1; x += 1) {
+          const i = (y * width + x) * 4;
+          if (
+            Math.abs(data[i] - target[0]) <= tolerance &&
+            Math.abs(data[i + 1] - target[1]) <= tolerance &&
+            Math.abs(data[i + 2] - target[2]) <= tolerance &&
+            data[i + 3] > 200
+          ) {
+            count += 1;
+          }
+        }
+      }
+      return count;
+    },
+    { base64: png.toString('base64'), target: [r, g, b], tolerance, region },
+  );
+}
+
+/**
  * The extent of every pixel matching `hex`, rather than its centroid.
  *
  * For a *filled* shape the two say the same thing and the centroid is the

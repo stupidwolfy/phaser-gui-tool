@@ -12,17 +12,19 @@ import {
   cameraOf,
   cameraViewOf,
   containsNode,
-  controlsOf,
+  drivenIn,
   findAnimation,
   findAsset,
   findNode,
   findParent,
   EMPTY_TILE,
+  bodyShapeOf,
   frameGridOf,
   guidesOf,
   resolveFrame,
   isDefaultCamera,
   physicsOf,
+  scenePhysicsOf,
   prefabChildrenOf,
   sliceInsetsOf,
   textStyleOf,
@@ -2713,12 +2715,16 @@ export class EditorScene extends Phaser.Scene {
    * Outlines every object in the scene that carries a physics body.
    *
    * The box is deliberately *not* the selection outline's box. An Arcade body
-   * is axis-aligned and does not turn with its object, so a rotated sprite's
-   * body is a straight rectangle of the object's unrotated display size, and
-   * drawing it any other way would show the user a shape their exported game
-   * does not have. Centred on the object's position because all four types that
-   * can carry a body have a centred origin, which is also how Phaser places the
-   * body from `displayOrigin`.
+   * is axis-aligned and nothing in Phaser turns one, so a rotated object's body
+   * is always a straight rectangle — but it is the rectangle that *contains*
+   * the turned object rather than one of the object's own unrotated size, which
+   * is what `bodyBoxOf` answers and what the export's `setSize` now builds.
+   * Drawing it any other way would show the user a shape their exported game
+   * does not have, which is precisely what this drew before iteration 26: a
+   * 300x20 platform stood on end kept a 300x20 horizontal body, on the canvas
+   * and in the game alike. Centred on the object's position because every type
+   * that can carry a body has a centred origin, which is also how Phaser places
+   * the body from `displayOrigin`.
    *
    * A static body gets a cross through it as well as an outline. That is one
    * colour and two extra lines rather than a second palette entry, and it says
@@ -2739,6 +2745,14 @@ export class EditorScene extends Phaser.Scene {
   private drawBodies(): void {
     this.bodyGraphics.clear();
     const scene = activeScene(useEditorStore.getState().project);
+    // Read once for the whole scene, because the engine is the scene's: a body
+    // is drawn the way the world it lives in would simulate it, and there is no
+    // per-node answer to look up.
+    const { engine } = scenePhysicsOf(scene);
+    // One read for the scene, and the same reader the exporter and the touch
+    // zones use: a Matter scene drives nothing, so no arrows are drawn for a
+    // node whose exported game would not read its keys.
+    const driven = new Set(drivenIn(scene).map((child) => child.id));
 
     const width = BODY_WIDTH / this.cameras.main.zoom;
     let styled = false;
@@ -2752,23 +2766,50 @@ export class EditorScene extends Phaser.Scene {
       const object = this.displayObjects.get(node.id);
       if (!object) continue;
 
-      // Absolute because a negative scale flips an object without giving it a
-      // negative-width body; Phaser normalises the same way.
-      const w = Math.abs(object.displayWidth);
-      const h = Math.abs(object.displayHeight);
+      // The shape the scene's engine actually gives this object, which is the
+      // whole of what choosing Matter buys: upright and grown for Arcade,
+      // turned for Matter. `bodyShapeOf` is the one builder for it and the
+      // exported helpers are its other consumers, so the outline and the game
+      // cannot disagree about the shape — the `textStyleOf` rule, on the one
+      // thing here nobody can see until the game is in their hand.
+      const box = bodyShapeOf(
+        engine,
+        object.displayWidth,
+        object.displayHeight,
+        node.transform.rotation,
+      );
+      const w = box.width;
+      const h = box.height;
       if (!(w > 0) || !(h > 0)) continue;
 
-      const x = node.transform.x - w / 2;
-      const y = node.transform.y - h / 2;
+      // Four corners rather than a `strokeRect`, because a Matter body's answer
+      // is a turned rectangle and `strokeRect` can only draw an upright one.
+      // The Arcade branch answers `rotation: 0`, where the sin is 0 and the cos
+      // is 1 and this reduces to exactly the box `strokeRect` drew before —
+      // which is what lets one path serve both rather than a branch per mark.
+      const radians = (box.rotation * Math.PI) / 180;
+      const cos = Math.cos(radians);
+      const sin = Math.sin(radians);
+      const cx = node.transform.x;
+      const cy = node.transform.y;
+      // `Vector2` rather than a plain pair because that is what `strokePoints`
+      // is typed to take, and the exported `.ts` is not the only thing here
+      // compiled under `strict`.
+      const at = (dx: number, dy: number) =>
+        new Phaser.Math.Vector2(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos);
+      const tl = at(-w / 2, -h / 2);
+      const tr = at(w / 2, -h / 2);
+      const br = at(w / 2, h / 2);
+      const bl = at(-w / 2, h / 2);
 
       if (!styled) {
         this.bodyGraphics.lineStyle(width, BODY_COLOR, 1);
         styled = true;
       }
-      this.bodyGraphics.strokeRect(x, y, w, h);
+      this.bodyGraphics.strokePoints([tl, tr, br, bl], true, true);
       if (body.kind === 'static') {
-        this.bodyGraphics.lineBetween(x, y, x + w, y + h);
-        this.bodyGraphics.lineBetween(x + w, y, x, y + h);
+        this.bodyGraphics.lineBetween(tl.x, tl.y, br.x, br.y);
+        this.bodyGraphics.lineBetween(tr.x, tr.y, bl.x, bl.y);
       }
       // A driven object gets a pair of arrows pointing the way its keys push
       // it: one colour and more marks, exactly as a static body is told apart
@@ -2781,10 +2822,12 @@ export class EditorScene extends Phaser.Scene {
       // outlined arrow is both hard to see under a thumb and — because a
       // diagonal is antialiased along its whole length — nearly invisible to a
       // colour assertion. A filled triangle is solid in its middle.
-      if (controlsOf(node, true)) {
+      // Deliberately *not* turned with the box above. A velocity read off the
+      // keys pushes an object along the world's axes whichever engine is
+      // simulating it, so arrows that followed the object's own angle would say
+      // something the exported `update()` does not do.
+      if (driven.has(node.id)) {
         const arm = Math.min(w, h) / 5;
-        const cx = node.transform.x;
-        const cy = node.transform.y;
         this.bodyGraphics.fillStyle(BODY_COLOR, 1);
         this.bodyGraphics.fillTriangle(cx - arm * 2, cy, cx - arm, cy - arm, cx - arm, cy + arm);
         this.bodyGraphics.fillTriangle(cx + arm * 2, cy, cx + arm, cy - arm, cx + arm, cy + arm);

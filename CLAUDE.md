@@ -60,7 +60,10 @@ imported from a packer's JSON, and with it a `frame` that is a name rather than 
 Iteration 25 (shipped) made a level out of more than one pass: a tilemap node holds an
 ordered list of layers over one shared tileset and one shared grid, each with its own
 tiles, its own solid frames and its own visibility — the first iteration to close a hole
-by *nesting* an existing prop rather than adding a type or a table.
+by *nesting* an existing prop rather than adding a type or a table. Iteration 26 (shipped)
+gave a scene its choice of engine: an Arcade body grown to hold the object it is turned
+with, or a Matter body that is a real polygon and turns with it — the first iteration to
+put a second implementation behind an existing feature rather than adding to it.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -1568,11 +1571,41 @@ exported as real Arcade Physics, and neither is ever run here.
   for the same reason: a node dragged into a group and back out is the same node, and
   throwing its settings away on the way in would be a deletion nothing asked for. The
   inspector says so in as many words.
-- **A body is axis-aligned and does not turn with its object.** That is Phaser's, not a
-  simplification here, and it is the one thing about physics the canvas can tell a user that
-  the docs will not — so `drawBodies` builds the box from `displayWidth`/`displayHeight`
-  centred on the node's own position rather than from `worldBoundsOf`, which is the rotated
-  AABB and a different, larger box.
+- **A body is axis-aligned and does not turn with its object. It is sized to *hold* the
+  turned object instead, and that was iteration 16's one real bug.** The first half is
+  Phaser's, not a simplification here: `Body.updateBounds` reads the object's scale and
+  never its angle, and nothing in Arcade turns a body. What iteration 16 concluded from
+  that was wrong — it kept the object's *unrotated* width and height, so a 300x20 platform
+  stood on end collided as a 300x20 horizontal floor, a shape with almost no overlap with
+  the thing on screen, and the editor drew that box faithfully. A correct drawing of a
+  wrong body. The closest shape Arcade *can* express is the box that contains the turned
+  object, so that is what both sides now use: `bodyBoxOf(width, height, rotation)` in
+  `schema.ts` is the one builder, `drawBodies` is one consumer and the exported fit helper
+  is the other — `textStyleOf`'s two-consumer rule, on the one thing here nobody can see
+  until the game is in their hand. It is still not `worldBoundsOf`: that is the box the
+  *renderer* measured, and a body's is centred on the node's own position, which is where
+  Phaser puts one from `displayOrigin`.
+- **The fit is a module-level helper reading the object, never numbers the exporter
+  printed, and there are two reasons and a trap in it.** A `text` node's size is measured
+  against the font at runtime and the document does not know it, so a box computed at
+  export time would be right for every type but one; and reading `object.angle` rather than
+  printing the document's rotation cannot fall out of step with the `.setAngle` the
+  constructor chain above it emitted. The trap is that **`StaticBody.setSize` takes canvas
+  pixels while `Body.setSize` takes *source* pixels**, which Phaser then multiplies by the
+  object's own scale — one call for both is wrong by the scale on one of them, and wrong
+  only on an object that is not at 1x, which is invisible on every fixture that happens to
+  sit there. Both recentre, because `setSize` defaults `center` to true and every type in
+  `PHYSICS_TYPES` has a centred origin.
+- **`syncBounds` is the loop Phaser already ships for this, and it is refused.** It
+  re-reads `getBounds()` every step, which does follow an object spinning under
+  `angularVelocity` — but it never touches `offset`, so the body grows from its top-left
+  corner and ends up off-centre by half of what it gained. A body that spins is therefore
+  fitted to the angle the document states rather than the one it reaches, which is exactly
+  what the canvas draws.
+- **The gate is `bodyIsTurned`, which is `rotation % 180 !== 0` rather than `!== 0`.** At a
+  half turn the box is the box, so a project that flips something 180 degrees — and every
+  project whose bodies are upright — exports byte for byte what it always did: the rule the
+  asset table, the tilemap helper and the prefab factories all follow.
 - **The outline sits *above* the selection outline, at depth 1000.5.** For an unrotated
   object the two are the same rectangle, so one of them is going to be invisible — and it
   should be the selection, which is already said by both handles, by the move bar and by the
@@ -1644,6 +1677,103 @@ exported as real Arcade Physics, and neither is ever run here.
   never fires for this feature.** Every step of it is silent: the renderer, the exporter, the
   inspector and `PHYSICS_TYPES` alike. `physics.spec.ts` and `export.spec.ts` are what stand
   in for the compiler.
+
+## Matter physics
+
+A scene chooses its engine. Arcade is the default and everything above describes it; a
+scene switched to Matter gets bodies that are **real polygons and turn with their
+objects**, drawn turned on the canvas and exported as real `matter.add.gameObject`. It
+closes iteration 16's fourth deliberate hole, and it closed for one reason: the shape.
+
+- **The engine is the *scene's*, and both other granularities are refused for their own
+  reasons.** Per node is impossible — gravity, the world bounds and which pairs collide are
+  all properties of a *world*, so two engines in one scene is two worlds and every one of
+  those settings would have to be said twice. Per project is merely worse: Phaser resolves
+  physics per scene already (`GetPhysicsPlugins` reads `sys.settings.physics`), so a
+  project-level choice would be this editor imposing a limit Phaser does not have. A
+  three-scene hostile project with one world of each kind is what asserts it.
+- **`scenePhysicsOf` gained one field and stayed the only reader**, in the `guidesOf` /
+  `physicsOf` / `cameraOf` / `soundsOf` / `tileMapOf` family. Absent means Arcade, so every
+  project that predates this exports byte for byte what it always did — the rule the asset
+  table, the tilemap helper and the prefab factories all follow.
+- **`bodyShapeOf` is the one builder for what a body's rectangle actually is**, and the
+  renderer and the exported helpers are its consumers. Arcade answers with the box that
+  *holds* the turned object at `rotation: 0`; Matter answers with the object's own box at
+  the object's own angle. That the Arcade branch answers a rotation of zero however far the
+  object has been turned is not a quirk — it is the difference the canvas exists to show.
+- **The two engines' dials both live on the node, and neither is ever deleted.**
+  `PhysicsBody` gained `restitution`, `frictionAir` and `friction` beside the eight Arcade
+  fields. The inspector *hides* the set that is not in force rather than the store dropping
+  it, so trying the other engine and switching back loses nothing — `physicsOf`'s treatment
+  of a body on a node dragged into a group and out again, one level up. The same goes for
+  the collider rows, which `collidersOf` drops under Matter and the document keeps.
+- **One gravity field, in px/s², converted at the emit.** Matter applies
+  `mass * gravity.y * gravity.scale` as a force and integrates over a squared delta in
+  *milliseconds*, so at the default scale of 0.001 a `y` of 1 is 1000 px/s² — which makes
+  the conversion a division by a thousand and nothing else. That is why there is one
+  gravity and not two: a scene switched from Arcade to Matter falls at exactly the rate it
+  already fell at. Velocity (px/s ÷ 60, Matter's base delta being 1000/60 ms) and angular
+  velocity (deg/s → radians per step) are converted the same way and for the same reason.
+- **A Matter scene declares Matter in its own `super(...)`, and that is the discovery that
+  made this one iteration rather than two.** `GetPhysicsPlugins` reads the scene's settings
+  alongside the game config's `defaultPhysicsSystem`, so `super({ key, physics: { matter:
+  {} } })` starts Matter for that scene alone. Two payoffs: a mixed project works at all,
+  which one game-config key could not express; and unlike Arcade there is **no header note
+  and no game-config key**, because a module dropped into someone else's game needs nothing
+  added to a config it does not own. Arcade keeps the key and the note it has always had —
+  changing them would break the byte-for-byte property, and a working thing is not worth
+  spending it on.
+- **Three facts about `MatterGameObject` are wrong if guessed, which is "Phaser 4, not 3"
+  for the fourth time.** *The shape is passed explicitly*: with no `shape` config the body
+  is `Bodies.rectangle(x, y, this.width, this.height)` — the object's **unscaled** size, so
+  a floor at `setScale(3)` gets a body a third of the width it is drawn. *The angle is read
+  before the attach and applied after it*: Matter's Transform component redefines `angle`
+  with a getter returning `body.angle`, so the instant the body is attached the object's
+  rotation **is** the body's, and the body was built upright — without the `setAngle`, a
+  floor turned 30 degrees in the editor snaps upright in the exported game. *And the
+  narrowing runs backwards from `arcadeBody`'s*: a Matter body is a plain object with no
+  class to test, so what the helper rules out is the two Arcade classes and null, which is
+  exactly what leaves `MatterJS.BodyType` — a narrowing TypeScript accepts, in syntax the
+  runnable page's shared plain JavaScript can also carry.
+- **The dials ride in one config object rather than a setter chain.** `Body.set` handles
+  `isStatic`, `mass`, `velocity` and `angularVelocity` and assigns the rest as plain
+  properties, so the whole body is one literal — emitted whole, defaults included, which is
+  the emitter config's rule and the Arcade chain's for their reason: these numbers interact,
+  and a reader tuning the bounciness wants the friction beside it.
+- **`collideWorldBounds` becomes the world's walls, because Matter has no per-body
+  version.** The walls go up when *anything* in the scene asks to be stopped by them, which
+  is the closest thing Matter can say to what the checkbox says. Worth knowing before
+  someone reads the emit and thinks a body was missed.
+- **`drivenIn` is the third scene-level reader, and a Matter scene drives nothing.** The
+  built-in behaviour *is* a velocity written onto an Arcade body every frame, and a
+  platformer's jump is gated on `blocked.down` — Arcade's own flag for "there is something
+  under me this step". Matter has no such flag: saying what is underneath a polygon that
+  turns means reading collision normals, which is a behaviour model rather than a field.
+  Answered in one reader for `collidersOf`'s reason, so the exporter, the canvas arrows and
+  `touchZonesOf` fall silent together. Emitting the keyboard block anyway would be worse
+  than useless — `update()` would hand a Matter object to `arcadeBody`, which throws by
+  design.
+- **The canvas still never simulates, under either engine**, and nothing here is on the ▶
+  toggle. `hasMotionIn` is untouched and records its fourth refusal for its first reason: a
+  physics step does not merely animate an object, it rewrites the numbers the document is
+  made of.
+- **`SCHEMA_VERSION` did not bump, and this is the guides case for the sixth time.** The
+  engine is a field on `scene.physics` and the three dials are fields on `node.physics`, and
+  both ride in on `scenes` — the one part of a file `parseProject` passes through verbatim.
+  A v12 build has a `createDisplayObject` case for every type in the file, reads none of the
+  four, draws the Arcade outline it has always drawn, and carries them all back out on a
+  re-save. **Still contingent on `parseProject` not reconstructing scenes field by field.**
+  `matter.spec.ts` asserts the 12 in the saved artefact so a future bump is deliberate.
+- **The suite's instrument is an extent for *which way round* and a pixel count for *what
+  shape*.** At a quarter turn the two engines agree exactly — the box that holds a 300x60
+  bar stood on end is 60x300, which is the turned bar's own extents — so an extent alone
+  cannot tell a polygon from a box and the fixture turns 45 degrees instead. There the
+  extents agree *again* (a turned rectangle's bounding box is precisely the box Arcade
+  grows to), and the honest reading is how much green there is: a 255-square outline inks
+  about 4×255 pixels where a turned 300×60 rectangle inks about 2×360. **Only
+  `export.spec.ts` can make the positive claim**, because the editor refuses to run any of
+  it — and it asserts a *pass* rather than a catch, dropping the faller over the empty air
+  inside the ramp's bounding box, because a catch is what a wrong box gives you too.
 
 ## Behaviour
 
@@ -2750,7 +2880,10 @@ tests/
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
   fonts.spec.ts             a font imported, drawn, round-tripped, removed and exported
-  physics.spec.ts           a body drawn, never simulated, and refused inside a group
+  physics.spec.ts           a body drawn, never simulated, sized to hold what it is
+                            turned with, and refused inside a group
+  matter.spec.ts            a scene switched to Matter: a body that turns, dials that
+                            replace Arcade's, and both sets kept through the switch
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
@@ -3181,10 +3314,15 @@ For a `text` node it is worse than awkward: text measures against the font at ru
 the document does not know its size, so the editor's outline and the exported call could
 compute different circles, in the one place where being wrong is invisible until something
 fails to collide. It is a pure loosening later — one prop and three emitted arguments.
-**No Matter physics**, which is a second engine with a second body model rather than more
-of this one. And **no body on a node inside a group or a prefab**, which is *not* deferred
-work: an axis-aligned body cannot express a rotated parent's frame at all, so it is a limit
-of Arcade's body model rather than of this editor.
+**No Matter physics** was the fourth, and it is the one iteration 26 closed — see Matter
+above, and note that the reason it closed is not that the argument was wrong. It was
+right: Matter *is* a second engine with a second body model. What changed is that the one
+thing it buys turned out to be the one thing Arcade genuinely cannot do at all, which is a
+collision shape that turns with its object. And **no body on a node inside a group or a
+prefab**, which is *not* deferred work: an axis-aligned body cannot express a rotated
+parent's frame at all, so it is a limit of Arcade's body model rather than of this editor
+— and Matter inherits it here for a different reason, since a Container child's `x`/`y`
+are its parent's coordinates whatever is simulating them.
 
 Particles shipped in iteration 15 with four deliberate holes. **No emit or death zones** —
 a zone is a geometry object, i.e. a second sub-format inside the document with its own

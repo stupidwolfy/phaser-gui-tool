@@ -29,6 +29,9 @@ const NO_MOTION = {
   immovable: false,
   allowGravity: true,
   collideWorldBounds: false,
+  restitution: 0,
+  frictionAir: 0.01,
+  friction: 0.1,
 };
 
 export function hostileProject(): Project {
@@ -266,7 +269,7 @@ export function hostileProject(): Project {
         ],
         // Set here and deliberately absent from the second scene, so both
         // branches of `scenePhysicsOf` reach the exporter in one file.
-        physics: { gravityX: -20, gravityY: 480 },
+        physics: { gravityX: -20, gravityY: 480, engine: 'arcade' as const },
         // Likewise for `cameraOf`, and with a non-default value in every field
         // for the reason the body below has one: the toolchain specs compile
         // the emitted `.ts` under `tsc --strict` against the real Phaser types,
@@ -332,7 +335,13 @@ export function hostileProject(): Project {
             name: breakout,
             type: 'rectangle',
             visible: true,
-            transform: { x: 480, y: 270, rotation: 0, scaleX: 1, scaleY: 1 },
+            // Turned, and turned to something that is neither a right angle
+            // nor a half turn, because a dynamic body is the only kind whose
+            // fit call has to divide the box by the object's own scale — and
+            // this is the only place that division ever meets
+            // `Phaser.Physics.Arcade.Body` under `tsc --strict`. The tile
+            // sprite's static body covers the other branch, at 7 degrees.
+            transform: { x: 480, y: 270, rotation: 33.5, scaleX: 1, scaleY: 1 },
             props: { width: 200, height: 120, fill: '#4f8cff', alpha: 1 },
             // A dynamic body with a non-default value in every field. Not here
             // for escaping — a body carries no free user text — but because
@@ -355,6 +364,14 @@ export function hostileProject(): Project {
               immovable: false,
               allowGravity: false,
               collideWorldBounds: true,
+              // Non-default in all three Matter dials as well, for the reason
+              // the eight Arcade ones are: this node is the only place either
+              // engine's setter chain meets its real Phaser types under
+              // `tsc --strict`, and the fixture's Matter scene draws its own
+              // body from these same three.
+              restitution: 0.6,
+              frictionAir: 0.02,
+              friction: 0.25,
             },
             // Driven, with a non-default value in every field, for the body's
             // reason: the emitted `update()` is the only place `CursorKeys`,
@@ -1061,6 +1078,88 @@ export function hostileProject(): Project {
             // `scenePhysicsOf`'s default branch reaches the exporter in the
             // same file as the scene above, which sets one.
             physics: { kind: 'static' as const, ...NO_MOTION },
+            children: [],
+          },
+        ],
+      },
+      {
+        id: 'scene-3',
+        // The Matter scene, and the only one. Three scenes in one file is what
+        // proves the engine is the *scene's*: a project with one world of each
+        // kind emits an Arcade game-config key, a Matter `super(...)` settings
+        // object and both helpers, and nothing about either leaks into the
+        // other's class. A single-engine fixture could not state that.
+        name: `Turning ${breakout} Scene`,
+        width: 960,
+        height: 540,
+        backgroundColor: '#101820',
+        // Gravity in px/s² exactly as the Arcade scene states it, because that
+        // is the claim: one field, converted at the emit. A round thousand
+        // would hide a factor-of-1000 slip, so it is deliberately not one.
+        physics: { gravityX: 0, gravityY: 940, engine: 'matter' as const },
+        // Rows that `collidersOf` must drop rather than emit: Matter collides
+        // everything already, and `physics.add.collider` is Arcade's — a scene
+        // that started Matter has no `this.physics` for it to be called on, so
+        // emitting one throws inside `create()` before anything is drawn. Kept
+        // in the document so switching the engine back brings them with it.
+        colliders: [
+          { id: 'mc-1', aId: 'm-floor', bId: 'm-faller', kind: 'collide' as const },
+        ],
+        children: [
+          {
+            id: 'm-floor',
+            name: `${breakout} ramp`,
+            type: 'rectangle',
+            visible: true,
+            // Turned, and turned to something that is neither a right angle nor
+            // a half turn: this is the one node in the fixture whose body is a
+            // real turned polygon rather than a box, which is the whole of what
+            // this engine is here for.
+            transform: { x: 480, y: 400, rotation: 24, scaleX: 3, scaleY: 1 },
+            props: { width: 200, height: 24, fill: '#4f8cff', alpha: 1 },
+            // Static, so `isStatic: true` reaches both toolchains — and scaled
+            // 3x, which is the only thing that catches the helper sizing its
+            // shape from `width` rather than `displayWidth`.
+            physics: { kind: 'static' as const, ...NO_MOTION },
+            children: [],
+          },
+          {
+            id: 'm-faller',
+            name: `${breakout} matter faller`,
+            type: 'ellipse',
+            visible: true,
+            transform: { x: 480, y: 100, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { width: 60, height: 60, fill: '#ffb84f', alpha: 1 },
+            physics: {
+              kind: 'dynamic' as const,
+              ...NO_MOTION,
+              // Non-default in every dial Matter reads, for the Arcade body's
+              // reason: this is the only place the emitted config literal's
+              // shape meets `Phaser.Types.Physics.Matter.MatterBodyConfig`
+              // under `tsc --strict`, which is where a key renamed between
+              // Phaser versions would fail and nowhere else.
+              velocityX: 30,
+              velocityY: -15,
+              angularVelocity: 45,
+              mass: 3,
+              restitution: 0.4,
+              friction: 0.3,
+              frictionAir: 0.05,
+              allowGravity: true,
+              collideWorldBounds: true,
+            },
+            // Driven, and this one must emit *nothing*: the built-in behaviour
+            // writes velocities onto an Arcade body and gates a jump on
+            // `blocked.down`, neither of which Matter has. `drivenIn` drops it,
+            // so no keyboard block, no `update()` and no `this.<field>` for
+            // this scene — asserted rather than assumed.
+            controls: {
+              scheme: 'arrows' as const,
+              mode: 'platformer' as const,
+              speed: 200,
+              jump: 400,
+              touch: true,
+            },
             children: [],
           },
         ],

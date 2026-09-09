@@ -6,6 +6,7 @@ import {
   atlasOf,
   collidersOf,
   controlsOf,
+  drivenIn,
   findAnimation,
   findAsset,
   findAudio,
@@ -16,6 +17,8 @@ import {
   frameGridOf,
   resolveFrame,
   isDefaultCamera,
+  bodyIsTurned,
+  type PhysicsEngine,
   physicsOf,
   scenePhysicsOf,
   sliceInsetsOf,
@@ -1033,16 +1036,42 @@ function buildTilemapHelper(fn: string, language: SceneLanguage, indent: string)
  * reason a group's children may not have one. So unlike `usedIn`, this has no
  * prefab half to get wrong.
  */
-function physicsUsedIn(scene: SceneDoc): { any: boolean; dynamic: boolean } {
+function physicsUsedIn(scene: SceneDoc): PhysicsUse {
+  const { engine } = scenePhysicsOf(scene);
   let any = false;
   let dynamic = false;
+  let turned = false;
   for (const node of scene.children) {
     const body = physicsOf(node, true);
     if (!body) continue;
     any = true;
     if (body.kind === 'dynamic') dynamic = true;
+    if (bodyIsTurned(node.transform.rotation)) turned = true;
   }
-  return { any, dynamic };
+  // `dynamic` and `turned` gate the two *Arcade* helpers, so a Matter scene
+  // must not turn either on: `arcadeBody` throws on a Matter object by design,
+  // and fitting a body to the box that holds a turned object is the very
+  // approximation Matter exists to stop making.
+  const arcade = any && engine === 'arcade';
+  return {
+    any,
+    arcade,
+    matter: any && engine === 'matter',
+    dynamic: arcade && dynamic,
+    turned: arcade && turned,
+  };
+}
+
+/** What one scene needs from the module's physics helpers and game config. */
+interface PhysicsUse {
+  /** A body of any kind, under either engine. */
+  any: boolean;
+  /** A body in an Arcade scene, which is what needs the game config's key. */
+  arcade: boolean;
+  /** A body in a Matter scene, which declares itself in its own `super()`. */
+  matter: boolean;
+  dynamic: boolean;
+  turned: boolean;
 }
 
 /**
@@ -1084,6 +1113,155 @@ function buildBodyHelper(fn: string, language: SceneLanguage, indent: string): s
   ];
   // Per physical line, as `buildTilemapHelper` and `buildFactories` both are:
   // the typed signature is one entry that spans none, but the rule is the same.
+  return lines.join('\n').replace(/^(?!$)/gm, indent);
+}
+
+/**
+ * The helper that gives a turned object a body the shape of what it draws.
+ *
+ * Arcade never turns a body: `Body.updateBounds` reads the object's scale and
+ * never its angle, so a 300x20 platform stood on end keeps a 300x20 horizontal
+ * body unless something says otherwise. The closest shape Arcade can express is
+ * the box that *contains* the turned object, which is what `bodyBoxOf` draws on
+ * the canvas and what this sets, so the two cannot disagree.
+ *
+ * It reads the object rather than being handed numbers, and that is the whole
+ * reason it is a helper at all: a `text` node's size is measured against the
+ * font at runtime and the document does not know it, so an angle the exporter
+ * computed the box from would be right for every type but one. Reading
+ * `object.angle` here rather than printing the document's rotation is the same
+ * argument one step further — it cannot fall out of step with the `.setAngle`
+ * the constructor chain above it emitted.
+ *
+ * The two branches are not tidiness, and this is the trap in the whole feature:
+ * `StaticBody.setSize` takes **canvas** pixels while `Body.setSize` takes
+ * **source** pixels, which Phaser then multiplies by the object's own scale. A
+ * single call would be right for one kind of body and wrong by the scale for
+ * the other, on a scaled object only — which is invisible on every fixture that
+ * happens to sit at 1x. Both recentre, because `setSize` defaults `center` to
+ * true and every type that can carry a body has a centred origin.
+ *
+ * `syncBounds` is the loop Phaser already ships for this and is refused: it
+ * re-reads `getBounds()` every step, which does follow a spinning object, but
+ * it never touches `offset` — so the body grows from its top-left corner and
+ * sits off-centre by half of what it gained. A body that spins under
+ * `angularVelocity` is therefore fitted to the angle the document states and
+ * not to the one it reaches, which is the same thing the canvas draws.
+ */
+function buildFitHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  // The union rather than `GameObject`, because `angle`, `displayWidth` and
+  // `scaleX` are on the components rather than on the base class — and rather
+  // than a `type` alias, which would be a *statement* the runnable page's
+  // shared body has nowhere to put. It is exactly `PHYSICS_TYPES`, with the two
+  // shapes under the one class they both extend.
+  const signature = typed
+    ? `function ${fn}(\n` +
+      '  object:\n' +
+      '    | Phaser.GameObjects.Shape\n' +
+      '    | Phaser.GameObjects.Sprite\n' +
+      '    | Phaser.GameObjects.Text\n' +
+      '    | Phaser.GameObjects.NineSlice\n' +
+      '    | Phaser.GameObjects.TileSprite,\n' +
+      '): void {'
+    : `function ${fn}(object) {`;
+  const lines = [
+    signature,
+    '  const radians = Phaser.Math.DegToRad(object.angle);',
+    '  const cos = Math.abs(Math.cos(radians));',
+    '  const sin = Math.abs(Math.sin(radians));',
+    // Absolute because a negative scale flips an object without giving it a
+    // negative-width body, which is how Phaser normalises it too.
+    '  const width = Math.abs(object.displayWidth);',
+    '  const height = Math.abs(object.displayHeight);',
+    '  const boxWidth = width * cos + height * sin;',
+    '  const boxHeight = width * sin + height * cos;',
+    '  const body = object.body;',
+    '  if (body instanceof Phaser.Physics.Arcade.StaticBody) {',
+    '    body.setSize(boxWidth, boxHeight);',
+    '  } else if (body instanceof Phaser.Physics.Arcade.Body) {',
+    '    body.setSize(',
+    '      boxWidth / (Math.abs(object.scaleX) || 1),',
+    '      boxHeight / (Math.abs(object.scaleY) || 1),',
+    '    );',
+    '  }',
+    '}',
+  ];
+  return lines.join('\n').replace(/^(?!$)/gm, indent);
+}
+
+/**
+ * The helper that gives one object a Matter body the shape of what it draws.
+ *
+ * This is the whole of what choosing Matter buys, and it is three facts about
+ * Phaser's loader that are wrong if guessed — which is what "read the source
+ * rather than remembering Phaser 3" has been saying all along.
+ *
+ * **The shape is passed explicitly.** With no `shape` config `MatterGameObject`
+ * builds `Bodies.rectangle(x, y, this.width, this.height)` — the object's
+ * *unscaled* size, so a floor at `setScale(3)` would get a body a third of the
+ * width it is drawn. Handing it `displayWidth`/`displayHeight` is what makes
+ * the body the size of the picture.
+ *
+ * **The angle has to be read before the attach and applied after it.** Matter's
+ * Transform component redefines `angle` on the object with a getter that
+ * returns `body.angle`, so the moment the body is attached the object's
+ * rotation *is* the body's — and the body is built upright. Without the
+ * `setAngle` below, a floor turned 30 degrees in the editor snaps upright in
+ * the exported game. It reads `object.angle` rather than a number this file
+ * printed, so it cannot fall out of step with the `.setAngle` the constructor
+ * chain above it emitted — `fitBodyToAngle`'s rule, one engine over.
+ *
+ * **The narrowing goes the other way from `arcadeBody`'s.** A Matter body is a
+ * plain object rather than a class, so there is no `instanceof` to test for.
+ * What there is instead is `instanceof` for the two Arcade classes, and ruling
+ * both of those out plus null is exactly what leaves `MatterJS.BodyType` — a
+ * narrowing TypeScript accepts, in syntax the runnable page's shared plain
+ * JavaScript can also carry.
+ *
+ * It answers with the body rather than the object because that is what the
+ * dials are set on, and because the object's own type never gains the Matter
+ * components as far as the compiler is concerned.
+ */
+function buildMatterHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  // The same union `fitBodyToAngle` takes, and for its reason: `angle` and
+  // `displayWidth` are on the components rather than on `GameObject`.
+  const signature = typed
+    ? `function ${fn}(\n` +
+      '  scene: Phaser.Scene,\n' +
+      '  object:\n' +
+      '    | Phaser.GameObjects.Shape\n' +
+      '    | Phaser.GameObjects.Sprite\n' +
+      '    | Phaser.GameObjects.Text\n' +
+      '    | Phaser.GameObjects.NineSlice\n' +
+      '    | Phaser.GameObjects.TileSprite,\n' +
+      '  config: Phaser.Types.Physics.Matter.MatterBodyConfig,\n' +
+      '): MatterJS.BodyType {'
+    : `function ${fn}(scene, object, config) {`;
+  const lines = [
+    signature,
+    '  const radians = Phaser.Math.DegToRad(object.angle);',
+    '  scene.matter.add.gameObject(object, {',
+    '    ...config,',
+    '    shape: {',
+    "      type: 'rectangle',",
+    '      width: Math.abs(object.displayWidth),',
+    '      height: Math.abs(object.displayHeight),',
+    '    },',
+    '  });',
+    '  const body = object.body;',
+    '  if (',
+    '    !body ||',
+    '    body instanceof Phaser.Physics.Arcade.Body ||',
+    '    body instanceof Phaser.Physics.Arcade.StaticBody',
+    '  ) {',
+    "    throw new Error('No Matter body on: ' + object.name);",
+    '  }',
+    '  scene.matter.body.setAngle(body, radians);',
+    '  return body;',
+    '}',
+  ];
   return lines.join('\n').replace(/^(?!$)/gm, indent);
 }
 
@@ -1184,12 +1362,82 @@ function touchButtonLine(button: TouchButton): string {
  * of Phaser's defaults are in force. The chained form is one statement, so the
  * whole body still reads as a single thing.
  */
-function bodyLines(id: string, body: PhysicsBody, ctx: EmitContext): string[] {
+function bodyLines(
+  id: string,
+  node: GameObjectNode,
+  body: PhysicsBody,
+  engine: PhysicsEngine,
+  ctx: EmitContext,
+  used: Set<string>,
+): string[] {
+  // A Matter body is one call and one config object, emitted whole and
+  // defaults included — the emitter config's rule and the Arcade chain's, for
+  // their reason: these dials interact, so a reader tuning the bounciness
+  // wants the friction beside it rather than having to remember which of
+  // Matter's defaults are in force. Every unit is converted here rather than
+  // stored twice: the document holds pixels per second and degrees per second
+  // whichever engine reads it, because a scene switched from Arcade to Matter
+  // must fall at the speed it already fell at.
+  if (engine === 'matter') {
+    // Out of the same identifier set every object draws from, so a scene
+    // holding an object the user called "floor body" cannot end up with two
+    // bindings of one name — the rule the sound handles and the keyboard
+    // fields already follow.
+    const binding = toIdentifier(`${node.name} body`, used);
+    // The config carries exactly the keys `MatterBodyConfig` *declares*, and
+    // the split is not tidiness. Matter's `Body.set` handles `velocity`,
+    // `angularVelocity` and `mass` at runtime and assigns `ignoreGravity` as a
+    // plain property, so all four work — and none of them is in the type, so
+    // an object literal carrying one fails the exported `.ts` under `--strict`
+    // while the `.js` and the runnable page both pass. That is iteration 24's
+    // `generateFrameNames` trap exactly: a runtime that does the right thing
+    // behind a type that refuses to say so, and the shared `create()` body has
+    // nowhere to put a cast. **Only `export-toolchain.spec.ts` could have found
+    // it.** So the declared keys ride in the literal and the rest are
+    // statements on the body the helper answers with.
+    const lines = [
+      `const ${binding} = ${ctx.matterFn}(${ctx.receiver}, ${id}, {`,
+      `  isStatic: ${body.kind === 'static'},`,
+      `  restitution: ${num(body.restitution)},`,
+      `  friction: ${num(body.friction)},`,
+      `  frictionAir: ${num(body.frictionAir)},`,
+      '});',
+    ];
+    // A Matter static body ignores every one of these, exactly as Phaser's
+    // `StaticBody` has no velocity, bounce, drag, mass or gravity to set — so a
+    // static one gets the literal and nothing else, which is the Arcade
+    // branch's "nothing to chain" one engine over.
+    if (body.kind === 'dynamic') {
+      lines.push(`${ctx.receiver}.matter.body.setMass(${binding}, ${num(body.mass)});`);
+      // Matter's velocity is pixels per *step*, and a step is its own 1000/60 ms
+      // base delta rather than a second — `Body.setVelocity` divides by exactly
+      // that — so px/s is px/step times 60.
+      lines.push(
+        `${ctx.receiver}.matter.body.setVelocity(${binding}, ` +
+          `{ x: ${num(body.velocityX / 60)}, y: ${num(body.velocityY / 60)} });`,
+      );
+      // Radians per step, where the document says degrees per second.
+      lines.push(
+        `${ctx.receiver}.matter.body.setAngularVelocity(${binding}, ` +
+          `${num((body.angularVelocity * Math.PI) / 180 / 60)});`,
+      );
+      // A plain assignment because Matter has no setter for it, and the
+      // property is on `MatterJS.BodyType` so it compiles.
+      lines.push(`${binding}.ignoreGravity = ${!body.allowGravity};`);
+    }
+    return lines;
+  }
+  // Immediately after the object is given a body and before any of its dials,
+  // so the statement that says what shape it is sits beside the one that made
+  // it. Nothing at all for an upright object — or one turned a half turn, whose
+  // box is its box — so a project that predates this exports byte for byte what
+  // it always did.
+  const fit = bodyIsTurned(node.transform.rotation) ? [`${ctx.fitFn}(${id});`] : [];
   if (body.kind === 'static') {
     // Nothing to chain: a StaticBody has no velocity, bounce, drag, mass or
     // gravity, and an immovable flag on a body that never moves would be a line
     // restating its own type.
-    return [`${ctx.receiver}.physics.add.existing(${id}, true);`];
+    return [`${ctx.receiver}.physics.add.existing(${id}, true);`, ...fit];
   }
   const setters = [
     `.setVelocity(${num(body.velocityX)}, ${num(body.velocityY)})`,
@@ -1203,6 +1451,7 @@ function bodyLines(id: string, body: PhysicsBody, ctx: EmitContext): string[] {
   ];
   return [
     `${ctx.receiver}.physics.add.existing(${id});`,
+    ...fit,
     `${ctx.bodyFn}(${id})\n      ${setters.join('\n      ')};`,
   ];
 }
@@ -1229,6 +1478,23 @@ interface EmitContext {
    * the same identifier set and for the same reason as `tilemapFn`.
    */
   touchFn: string;
+  /**
+   * What the body-fitting helper is called in this module, allocated from the
+   * same identifier set and for the same reason as `tilemapFn`.
+   */
+  fitFn: string;
+  /**
+   * What the Matter body helper is called in this module, allocated from the
+   * same identifier set and for the same reason as `tilemapFn`.
+   */
+  matterFn: string;
+  /**
+   * Which engine the scene being emitted runs. On the context rather than
+   * threaded through `emitNode` because a prefab factory's bodies are refused
+   * for a different reason entirely (they are container children), so nothing
+   * downstream ever needs a second answer.
+   */
+  engine: PhysicsEngine;
   /**
    * The sound table, file-wide like `assets` and read by `buildSoundLines`
    * alone. No `receiver` question attaches to it: the only place a sound is
@@ -1588,7 +1854,7 @@ function emitNode(
   // the same fact — an Arcade body reads its owner's `x`/`y` as world
   // coordinates, and a child of a Container has neither.
   const body = physicsOf(node, !nested);
-  if (body) lines.push(...bodyLines(id, body, ctx));
+  if (body) lines.push(...bodyLines(id, node, body, ctx.engine, ctx, used));
 
   // A tilemap's further layers, each one its own object beside the first.
   //
@@ -1716,6 +1982,9 @@ function buildFactories(
       ctx.tilemapFn,
       ctx.bodyFn,
       ctx.touchFn,
+      ctx.fitFn,
+    ctx.matterFn,
+      ctx.matterFn,
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
@@ -1944,6 +2213,8 @@ function buildUpdateBody(
     ctx.tilemapFn,
     ctx.bodyFn,
     ctx.touchFn,
+    ctx.fitFn,
+    ctx.matterFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
 
@@ -2039,9 +2310,14 @@ interface CreateBody {
 function buildCreateBody(
   project: Project,
   scene: SceneDoc,
-  ctx: EmitContext,
+  outer: EmitContext,
   plays: ReadonlySet<string>,
 ): CreateBody {
+  // The one place the engine can be answered, because it belongs to a scene and
+  // the context handed in is file-wide. Every emit below reads it from here, so
+  // a two-scene project with one world of each kind emits each scene the way
+  // its own world runs.
+  const ctx: EmitContext = { ...outer, engine: scenePhysicsOf(scene).engine };
   const { animations } = ctx;
   // Seeded with the factory names as well as `this`: the instance calls are in
   // this scope, so an object named "create coin" bound here would shadow the
@@ -2051,6 +2327,8 @@ function buildCreateBody(
     ctx.tilemapFn,
     ctx.bodyFn,
     ctx.touchFn,
+    ctx.fitFn,
+    ctx.matterFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
   const lines: string[] = [
@@ -2094,7 +2372,7 @@ function buildCreateBody(
   // bearing in the other, and emitting it in both is what makes
   // `collideWorldBounds` mean the same thing in each.
   const world = physicsUsedIn(scene);
-  if (world.any) {
+  if (world.arcade) {
     const gravity = scenePhysicsOf(scene);
     lines.push('');
     lines.push(
@@ -2103,6 +2381,38 @@ function buildCreateBody(
     lines.push(
       `this.physics.world.setBounds(0, 0, ${num(scene.width)}, ${num(scene.height)});`,
     );
+  }
+  // Matter's world says the same two things in its own units and its own order.
+  //
+  // The gravity is converted rather than stored twice. Matter applies
+  // `mass * gravity.y * gravity.scale` as a force and integrates over a squared
+  // delta in *milliseconds*, so with the default scale of 0.001 an acceleration
+  // of `y` works out at `y * 1000` pixels per second squared — which is why the
+  // document's px/s² is divided by a thousand here and nowhere else. A scene
+  // switched from Arcade to Matter therefore falls at exactly the rate it fell
+  // at before, which is the whole reason there is one gravity field and not
+  // two.
+  //
+  // The bounds are walls Matter builds around the world, and unlike Arcade they
+  // are not per body: `collideWorldBounds` is a property of an Arcade body and
+  // Matter has only the world's own edges. So the walls go up when *anything*
+  // in the scene asks to be stopped by them, which is the closest thing Matter
+  // can say to what the checkbox says.
+  if (world.matter) {
+    const gravity = scenePhysicsOf(scene);
+    const bounded = scene.children.some(
+      (node) => physicsOf(node, true)?.collideWorldBounds === true,
+    );
+    lines.push('');
+    lines.push(
+      `this.matter.world.setGravity(${num(gravity.gravityX / 1000)}, ` +
+        `${num(gravity.gravityY / 1000)});`,
+    );
+    if (bounded) {
+      lines.push(
+        `this.matter.world.setBounds(0, 0, ${num(scene.width)}, ${num(scene.height)});`,
+      );
+    }
   }
 
   // Before the objects, because an object's `.play(...)` names one: animations
@@ -2131,7 +2441,7 @@ function buildCreateBody(
   // an object a user called "cursors" cannot take the name the `update()` below
   // is reaching for. The local `const` comes out of `create()`'s own set at the
   // same moment and for the same reason.
-  const drivenNodes = scene.children.filter((node) => controlsOf(node, true) !== null);
+  const drivenNodes = drivenIn(scene);
   const schemes = new Set<NodeControls['scheme']>();
   for (const node of drivenNodes) {
     schemes.add((controlsOf(node, true) as NodeControls).scheme);
@@ -2383,7 +2693,7 @@ interface Emission {
    * accessor. File-wide, because the helper and the game config are file-wide
    * even though the world lines are per scene.
    */
-  physics: { any: boolean; dynamic: boolean };
+  physics: PhysicsUse;
   /**
    * Whether any scene asks for on-screen buttons, and therefore whether the
    * module carries the helper at all — the rule the asset table, the tilemap
@@ -2405,6 +2715,12 @@ function prepare(project: Project): Emission {
   const bodyFn = toIdentifier('arcade body', moduleNames);
   // And immediately after that, by that same rule a fourth time.
   const touchFn = toIdentifier('create touch controls', moduleNames);
+  // And a fifth. Allocated after the other four rather than beside `bodyFn`,
+  // which is where it belongs by subject: drawing earlier would move the suffix
+  // a clash gives one of them, and all four of those are asserted by name.
+  const fitFn = toIdentifier('fit body to angle', moduleNames);
+  // And a sixth, by that same rule.
+  const matterFn = toIdentifier('matter body', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
@@ -2425,13 +2741,22 @@ function prepare(project: Project): Emission {
       tilemapFn,
       bodyFn,
       touchFn,
+      fitFn,
+      matterFn,
       fonts,
       receiver: 'this',
+      // A placeholder the per-scene context overwrites. The engine is a
+      // property of one scene and this object is file-wide, so `buildCreateBody`
+      // is the only place that can answer it — every scene there takes its own.
+      engine: 'arcade',
     },
     boot: scenes.find((entry) => entry.scene.id === current.id) ?? scenes[0],
     physics: {
       any: worlds.some((world) => world.any),
+      arcade: worlds.some((world) => world.arcade),
+      matter: worlds.some((world) => world.matter),
       dynamic: worlds.some((world) => world.dynamic),
+      turned: worlds.some((world) => world.turned),
     },
     touch: project.scenes.some((scene) => touchZonesOf(scene).length > 0),
   };
@@ -2494,9 +2819,22 @@ function buildSceneClass(
           .join('\n')}\n\n`
       : '';
 
+  // A Matter scene asks for Matter in its own settings rather than in the game
+  // config, and that is not a shortcut — it is the only place a scene *can* say
+  // it, since `GetPhysicsPlugins` reads `sys.settings.physics` alongside the
+  // game's `defaultPhysicsSystem`. Two payoffs: a two-scene project can run one
+  // world of each kind, which a single game-config key could not express; and
+  // unlike Arcade this module needs nothing added to a game config it does not
+  // own, so there is no header note to write. Arcade keeps the key and the note
+  // it has always had — its emit is unchanged to the character, which is what
+  // keeps every project that predates this exporting byte for byte what it did.
+  const settings = physicsUsedIn(entry.scene).matter
+    ? `{ key: ${str(entry.key)}, physics: { matter: {} } }`
+    : str(entry.key);
+
   return `${exported ? 'export ' : ''}class ${entry.className} extends Phaser.Scene {
 ${declarations}  constructor() {
-    super(${str(entry.key)});
+    super(${settings});
   }
 
 ${preload}  create()${returnType} {
@@ -2561,6 +2899,15 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   const bodies = physics.dynamic
     ? `\n${buildBodyHelper(ctx.bodyFn, language, '')}\n`
     : '';
+  // Same rule again: nothing turned, no helper, so a project whose bodies are
+  // all upright exports byte for byte what it always did.
+  const fitted = physics.turned
+    ? `\n${buildFitHelper(ctx.fitFn, language, '')}\n`
+    : '';
+  // Same rule again: no Matter scene, no helper.
+  const matter = physics.matter
+    ? `\n${buildMatterHelper(ctx.matterFn, language, '')}\n`
+    : '';
   // Same rule again: no on-screen buttons, no helper, so every project that
   // predates them exports byte for byte what it always did.
   const buttons = touch ? `\n${buildTouchHelper(ctx.touchFn, language, '')}\n` : '';
@@ -2568,9 +2915,9 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
     .map((entry) => buildSceneClass(project, entry, ctx, language, true))
     .join('\n\n');
 
-  return `${header(project)}${physicsNote(physics.any)}
+  return `${header(project)}${physicsNote(physics.arcade)}
 import Phaser from 'phaser';
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${buttons}${factories}
+${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${buttons}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -2613,6 +2960,12 @@ export function generateRunnableHtml(project: Project): string {
   const bodies = physics.dynamic
     ? `${buildBodyHelper(ctx.bodyFn, 'js', '      ')}\n\n`
     : '';
+  const fitted = physics.turned
+    ? `${buildFitHelper(ctx.fitFn, 'js', '      ')}\n\n`
+    : '';
+  const matter = physics.matter
+    ? `${buildMatterHelper(ctx.matterFn, 'js', '      ')}\n\n`
+    : '';
   const buttons = touch ? `${buildTouchHelper(ctx.touchFn, 'js', '      ')}\n\n` : '';
   const classes = scenes
     .map((entry) =>
@@ -2645,14 +2998,14 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${buttons}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${buttons}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,
         width: ${num(boot.scene.width)},
         height: ${num(boot.scene.height)},
         backgroundColor: ${str(boot.scene.backgroundColor)},
-${arcadeConfig(physics.any)}        scale: {
+${arcadeConfig(physics.arcade)}        scale: {
           mode: Phaser.Scale.FIT,
           autoCenter: Phaser.Scale.CENTER_BOTH,
         },

@@ -1395,6 +1395,24 @@ export interface PhysicsBody {
   /** False exempts this body from the scene's world gravity. */
   allowGravity: boolean;
   collideWorldBounds: boolean;
+  /**
+   * Matter's bounciness, 0 to 1. Arcade's `bounceX`/`bounceY` are two numbers
+   * because an Arcade body bounces per axis; a Matter body has one restitution
+   * for the whole polygon, which is what having a real shape costs and buys.
+   *
+   * The three fields below are Matter's and are read only by a Matter scene,
+   * exactly as the eight above are Arcade's and are read only by an Arcade one.
+   * Both sets live on the node together and neither is ever deleted, so
+   * switching a scene's engine and switching it back loses nothing — the
+   * treatment `physicsOf` already gives a body on a node dragged into a group
+   * and out again, and the reason the inspector *hides* the set that is not in
+   * force rather than the store dropping it.
+   */
+  restitution: number;
+  /** Matter's per-step drag through the air, 0 to 1. Phaser's default is 0.01. */
+  frictionAir: number;
+  /** Matter's surface friction against what it slides on, 0 to 1. */
+  friction: number;
 }
 
 /**
@@ -1429,6 +1447,8 @@ export function physicsOf(
   if (typeof raw !== 'object' || raw === null) return null;
   const numberOr = (value: unknown, fallback: number) =>
     typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  const ratio = (value: unknown, fallback: number) =>
+    Math.min(1, Math.max(0, numberOr(value, fallback)));
   return {
     kind: raw.kind === 'static' ? 'static' : 'dynamic',
     velocityX: numberOr(raw.velocityX, 0),
@@ -1444,12 +1464,101 @@ export function physicsOf(
     immovable: raw.immovable === true,
     allowGravity: raw.allowGravity !== false,
     collideWorldBounds: raw.collideWorldBounds === true,
+    // Matter's own defaults, under Matter's own names, so a body that predates
+    // the engine choice reads exactly as an untouched Matter body would — the
+    // rule that keeps every one of the eight Arcade fields at Phaser's default
+    // too. Clamped rather than dropped: all three are ratios Matter multiplies
+    // by, and a negative or a runaway one is a simulation that flies apart with
+    // nothing on screen saying why.
+    restitution: ratio(raw.restitution, 0),
+    frictionAir: ratio(raw.frictionAir, 0.01),
+    friction: ratio(raw.friction, 0.1),
   };
 }
 
 /** Whether the inspector may offer a body for this node type at all. */
 export function canHavePhysics(type: NodeType): boolean {
   return PHYSICS_TYPES.has(type);
+}
+
+/**
+ * How big a body is on an object turned `rotation` degrees.
+ *
+ * An Arcade body is a rectangle whose sides are the world's, and nothing in
+ * Phaser turns one: `Body.updateBounds` reads the object's scale and never its
+ * angle. So a body cannot be the shape of a rotated object — the closest thing
+ * that exists is the box that *contains* it, which is what this returns, and
+ * which is what both the canvas and the export now use.
+ *
+ * That is a change of answer rather than a change of rule. Until iteration 26
+ * the body kept the object's unrotated width and height, so a 300x20 platform
+ * stood on end collided as a 300x20 floor — a shape with almost no overlap with
+ * the thing on screen, and the one failure a user cannot see until the game is
+ * in their hand. The editor drew that box faithfully, which made a correct
+ * drawing of a wrong body: `drawBodies`' job is to say what the export builds,
+ * and the fix belongs on both sides of it at once.
+ *
+ * The width is `|w·cos| + |h·sin|` and the height its mirror — the standard
+ * bound of a rotated rectangle, in the object's own drawn size, so a scale is
+ * already in the numbers handed in. Absolute throughout, because a negative
+ * scale flips an object without giving it a negative-width body and Phaser
+ * normalises the same way.
+ *
+ * `bodyIsTurned` is the gate rather than `rotation !== 0`: at a half turn the
+ * box is the box, so a project that flips something 180 degrees exports byte
+ * for byte what it always did.
+ */
+export function bodyBoxOf(
+  width: number,
+  height: number,
+  rotation: number,
+): { width: number; height: number } {
+  const w = Math.abs(width);
+  const h = Math.abs(height);
+  const radians = ((Number.isFinite(rotation) ? rotation : 0) * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(radians));
+  const sin = Math.abs(Math.sin(radians));
+  return { width: w * cos + h * sin, height: w * sin + h * cos };
+}
+
+/** Whether `bodyBoxOf` would answer with anything but the box it was handed. */
+export function bodyIsTurned(rotation: number): boolean {
+  return Number.isFinite(rotation) && rotation % 180 !== 0;
+}
+
+/**
+ * The rectangle a body actually occupies, and at what angle — the one place the
+ * two engines' answers to that question are given.
+ *
+ * This is the whole of what choosing Matter buys, so it is worth stating as one
+ * function rather than as a branch at each drawing site. Arcade's answer is the
+ * box that *holds* the turned object, upright, because nothing in Arcade turns
+ * a body. Matter's is the object's own box, turned — a real polygon, which is
+ * what a person means when they say the collision shape should follow the
+ * shape.
+ *
+ * `rotation` in the answer is the angle to *draw* the box at, not the node's:
+ * for Arcade it is always zero however far the object has been turned, and the
+ * difference between those two zeros is exactly the thing the canvas is trying
+ * to show. `drawBodies` is one consumer and the exported Matter helper is the
+ * other, so the outline and the game cannot disagree — `textStyleOf`'s
+ * two-consumer rule, on the one thing here nobody can see until the game is in
+ * their hand.
+ *
+ * A fresh object per call, so `useEditorStore((s) => bodyShapeOf(...))` is
+ * React error #185 — the `tileMapOf` trap. Derive it outside the selector.
+ */
+export function bodyShapeOf(
+  engine: PhysicsEngine,
+  width: number,
+  height: number,
+  rotation: number,
+): { width: number; height: number; rotation: number } {
+  if (engine === 'matter') {
+    const turn = Number.isFinite(rotation) ? rotation : 0;
+    return { width: Math.abs(width), height: Math.abs(height), rotation: turn };
+  }
+  return { ...bodyBoxOf(width, height, rotation), rotation: 0 };
 }
 
 /**
@@ -1709,7 +1818,38 @@ export interface ScenePhysics {
   /** Pixels/sec^2. Positive y is downward, as everywhere else here. */
   gravityX: number;
   gravityY: number;
+  /**
+   * Which engine simulates this scene's bodies.
+   *
+   * Per scene rather than per project or per node, and each of those two is
+   * refused for its own reason. Per *node* is impossible: gravity, the world
+   * bounds and which pairs collide are all properties of a world, so two
+   * engines in one scene is two worlds and every one of those settings would
+   * need saying twice. Per *project* is merely worse: Phaser resolves physics
+   * per scene already — `GetPhysicsPlugins` reads the scene's own settings —
+   * so a project-level choice would be this editor imposing a limit Phaser
+   * does not have.
+   *
+   * The whole reason it exists is the collision *shape*. An Arcade body is a
+   * rectangle whose sides are the world's and nothing turns one, so a platform
+   * stood on end can only ever be approximated by the box that holds it. A
+   * Matter body is a real polygon that turns with the object. That is the one
+   * thing this choice buys, and it is why the engine picker sits beside the
+   * gravity rather than in some general settings panel.
+   */
+  engine: PhysicsEngine;
 }
+
+/**
+ * Which physics engine a scene runs.
+ *
+ * Arcade is the default and always will be: it is what every project made
+ * before this existed used, it is the cheaper simulation, and an axis-aligned
+ * box is the right body for most of what people build. Matter is the answer to
+ * one question — *does the collision shape have to turn with the object* — and
+ * a scene should only pay for it when the answer is yes.
+ */
+export type PhysicsEngine = 'arcade' | 'matter';
 
 /**
  * The scene's gravity, defaulted and validated in one place — `guidesOf`'s
@@ -1719,8 +1859,19 @@ export function scenePhysicsOf(scene: SceneDoc): ScenePhysics {
   const raw = scene.physics;
   const numberOr = (value: unknown, fallback: number) =>
     typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-  if (typeof raw !== 'object' || raw === null) return { gravityX: 0, gravityY: 0 };
-  return { gravityX: numberOr(raw.gravityX, 0), gravityY: numberOr(raw.gravityY, 0) };
+  // Arcade whenever the file does not say otherwise, which is every project
+  // made before iteration 26 and every scene nobody has switched — the rule the
+  // asset table, the tilemap helper and the prefab factories all follow, so
+  // those export byte for byte what they always did.
+  const engine: PhysicsEngine = raw?.engine === 'matter' ? 'matter' : 'arcade';
+  if (typeof raw !== 'object' || raw === null) {
+    return { gravityX: 0, gravityY: 0, engine: 'arcade' };
+  }
+  return {
+    gravityX: numberOr(raw.gravityX, 0),
+    gravityY: numberOr(raw.gravityY, 0),
+    engine,
+  };
 }
 
 /**
@@ -1843,6 +1994,18 @@ function canCollide(node: GameObjectNode): boolean {
  */
 export function collidersOf(scene: SceneDoc): SceneCollider[] {
   if (!Array.isArray(scene.colliders)) return [];
+  // A Matter world collides every body with every other one by default, so a
+  // row there is not merely unnecessary — `physics.add.collider` is Arcade's
+  // and `this.physics` does not exist in a scene that started Matter, so
+  // emitting one would throw in `create()` before anything was drawn. Answered
+  // here rather than at the three call sites, so the exporter, the scene panel
+  // and the object panel all fall silent together: the whole point of one
+  // reader is that a row this drops cannot come back to life somewhere else.
+  //
+  // The rows themselves are kept in the document, exactly as a body's Arcade
+  // dials are kept in a Matter scene, so switching the engine back brings every
+  // pair back with it.
+  if (scenePhysicsOf(scene).engine === 'matter') return [];
 
   const byId = new Map<string, GameObjectNode>();
   for (const child of scene.children) {
@@ -1924,6 +2087,31 @@ const TOUCH_MIN_RADIUS = 24;
 const TOUCH_RADIUS_RATIO = 0.075;
 
 /**
+ * The nodes this scene's keys and buttons actually drive.
+ *
+ * `controlsOf`'s two refusals — top level, and a dynamic body — plus a third
+ * that only a scene can answer: **the built-in behaviour is Arcade's.** Its
+ * whole implementation is a velocity written onto an Arcade body every frame,
+ * and a platformer's jump is gated on `body.blocked.down`, which is Arcade's
+ * own flag for "there is something under me this step". Matter has no such
+ * flag — being able to say what is underneath a polygon that turns means
+ * reading collision normals, which is a behaviour model rather than a field.
+ *
+ * So a Matter scene drives nothing, and it is answered *here* rather than at
+ * the three call sites for `collidersOf`'s reason: the exporter, the renderer's
+ * arrow marks and `touchZonesOf` all fall silent together. Emitting the
+ * keyboard block for a Matter scene would be worse than useless — `update()`
+ * would hand a Matter object to `arcadeBody`, which throws by design.
+ *
+ * The `controls` stay on the node, exactly as a body's Arcade dials and a
+ * scene's collider rows do, so switching the engine back brings them with it.
+ */
+export function drivenIn(scene: SceneDoc): GameObjectNode[] {
+  if (scenePhysicsOf(scene).engine === 'matter') return [];
+  return scene.children.filter((child) => controlsOf(child, true) !== null);
+}
+
+/**
  * Where the exported game draws its on-screen buttons, or `[]` for a scene that
  * asks for none.
  *
@@ -1957,7 +2145,7 @@ export function touchZonesOf(scene: SceneDoc): TouchButton[] {
   let pad = false;
   let vertical = false;
   let jump = false;
-  for (const child of scene.children) {
+  for (const child of drivenIn(scene)) {
     const controls = controlsOf(child, true);
     if (controls === null || !controls.touch) continue;
     pad = true;

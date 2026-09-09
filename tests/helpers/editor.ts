@@ -1,5 +1,11 @@
 import { expect, type CDPSession, type Dialog, type Locator, type Page } from '@playwright/test';
-import { findColor, findColorBox, type ColorBlob, type ColorBox } from './pixels';
+import {
+  countColorIn,
+  findColor,
+  findColorBox,
+  type ColorBlob,
+  type ColorBox,
+} from './pixels';
 
 /** The default scene, from `src/core/defaults.ts`. */
 export const SCENE = { width: 960, height: 540 };
@@ -562,6 +568,27 @@ export class EditorPage {
   }
 
   /**
+   * The scene's physics engine, which lives beside the gravity in
+   * `SceneInspector` — so this deselects first, exactly as `setGravity` does.
+   *
+   * Matched by the option's leading word rather than its whole label, because
+   * the labels say what each engine is *for* ("Arcade — fast, upright boxes")
+   * and a test should not have to restate a sentence to pick a value.
+   */
+  async setSceneEngine(engine: 'arcade' | 'matter'): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.choice('Physics engine').selectOption(engine);
+    await this.settle();
+  }
+
+  /** A `SelectField`'s current value, as the document stores it. */
+  async selectValue(label: string): Promise<string> {
+    await this.openPanel('inspect');
+    return this.choice(label).inputValue();
+  }
+
+  /**
    * The scene's camera, which lives in `SceneInspector` beside the gravity —
    * so this deselects first, exactly as `setGravity` and the guide helpers do.
    */
@@ -958,6 +985,26 @@ export class EditorPage {
    * one: see `findColorBox`. Both edges have to be on screen for it to mean
    * anything.
    */
+  /**
+   * How much of a colour is drawn inside one rectangle of *page* coordinates —
+   * the reading `findDrawn` and `findDrawnBox` cannot make, for two shapes that
+   * share a centre and a bounding box. See `countColorIn`.
+   */
+  async countDrawnIn(
+    hex: string,
+    region: { x: number; y: number; width: number; height: number },
+    tolerance?: number,
+  ): Promise<number> {
+    const { png, origin } = await this.shot();
+    return countColorIn(
+      this.page,
+      png,
+      hex,
+      { ...region, x: region.x - origin.x, y: region.y - origin.y },
+      tolerance,
+    );
+  }
+
   async findDrawnBox(hex: string, tolerance?: number): Promise<ColorBox> {
     const { png, origin } = await this.shot();
     const box = await findColorBox(this.page, png, hex, tolerance);

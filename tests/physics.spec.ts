@@ -91,6 +91,43 @@ test('a body draws a box over its object, and nothing ever moves it', async ({
   expect(await editor.numberValue('Y')).toBe(AT.y);
 });
 
+test('a body grows to the box that holds the object it is turned with', async ({
+  editor,
+}) => {
+  await setup(editor);
+  await editor.setPhysics(true);
+  await editor.deselect();
+  await editor.closePanels();
+
+  // An extent rather than a centroid, because the claim is about how *big* the
+  // outline is drawn — and a two-pixel stroke lands on a different sub-pixel
+  // phase on each of its four edges, which moves a centroid for a reason that
+  // is not size. The camera never moves between the two readings, so the two
+  // extents are in the same units.
+  const upright = await editor.findDrawnBox(BODY);
+  expect(upright.count).toBeGreaterThan(0);
+
+  await editor.selectInTree('Rectangle');
+  await editor.setField('Rotation°', 45);
+  await editor.deselect();
+  await editor.closePanels();
+
+  const turned = await editor.findDrawnBox(BODY);
+
+  // A 240x160 box turned 45 degrees is bounded by a 283x283 one, so the width
+  // grows by about a sixth and the height by three quarters. Before iteration
+  // 26 both readings were the same box: Arcade never turns a body, and the
+  // editor drew — and the export built — the object's *unrotated* size, which
+  // for a long thin platform stood on end is a shape with almost no overlap
+  // with the thing on screen.
+  expect(turned.width).toBeGreaterThan(upright.width * 1.1);
+  expect(turned.height).toBeGreaterThan(upright.height * 1.5);
+
+  // And it is still the same box on both axes, which is what says it is a
+  // bound of the turned rectangle rather than merely a bigger rectangle.
+  expect(Math.abs(turned.width - turned.height)).toBeLessThan(turned.width * 0.1);
+});
+
 test('a static body is marked apart from a dynamic one', async ({ editor }) => {
   await setup(editor);
   await editor.setPhysics(true);
@@ -190,7 +227,14 @@ test('a body and the scene gravity survive a save and an open, at schema 12', as
   // audio, then the two stretchable types, then fonts bumped it; physics still
   // did not.
   expect(project.schemaVersion).toBe(12);
-  expect(project.scenes[0].physics).toEqual({ gravityX: 0, gravityY: 600 });
+  // The engine rides here beside the gravity, and an Arcade scene says so
+  // explicitly once anything has written the field — which is what makes
+  // "absent means Arcade" a rule about *older files* rather than about this one.
+  expect(project.scenes[0].physics).toEqual({
+    gravityX: 0,
+    gravityY: 600,
+    engine: 'arcade',
+  });
   expect(project.scenes[0].children[0].physics).toMatchObject({
     kind: 'dynamic',
     bounceY: 0.75,
