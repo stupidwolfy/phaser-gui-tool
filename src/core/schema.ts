@@ -2089,25 +2089,25 @@ const TOUCH_RADIUS_RATIO = 0.075;
 /**
  * The nodes this scene's keys and buttons actually drive.
  *
- * `controlsOf`'s two refusals — top level, and a dynamic body — plus a third
- * that only a scene can answer: **the built-in behaviour is Arcade's.** Its
- * whole implementation is a velocity written onto an Arcade body every frame,
- * and a platformer's jump is gated on `body.blocked.down`, which is Arcade's
- * own flag for "there is something under me this step". Matter has no such
- * flag — being able to say what is underneath a polygon that turns means
- * reading collision normals, which is a behaviour model rather than a field.
+ * `controlsOf`'s two refusals — top level, and a dynamic body — and nothing
+ * else. It is a scene-level reader rather than a filter written out three
+ * times, for `collidersOf`'s reason: the exporter, the renderer's arrow marks
+ * and `touchZonesOf` all have to agree about which objects are driven, and one
+ * of them disagreeing is a pad drawn over a game that does not read it.
  *
- * So a Matter scene drives nothing, and it is answered *here* rather than at
- * the three call sites for `collidersOf`'s reason: the exporter, the renderer's
- * arrow marks and `touchZonesOf` all fall silent together. Emitting the
- * keyboard block for a Matter scene would be worse than useless — `update()`
- * would hand a Matter object to `arcadeBody`, which throws by design.
- *
- * The `controls` stay on the node, exactly as a body's Arcade dials and a
- * scene's collider rows do, so switching the engine back brings them with it.
+ * **It used to refuse a Matter scene, and that was a bug rather than a limit.**
+ * The reasoning was sound as far as it went — the behaviour is a velocity
+ * written onto a body every frame, and a platformer's jump was gated on
+ * `blocked.down`, which is Arcade's own flag and which Matter does not have —
+ * but the conclusion did not follow. What it produced was a Controls panel that
+ * still offered "Player controls" and "On-screen buttons" in a Matter scene,
+ * accepted both, and then drew nothing and exported nothing, with no sentence
+ * anywhere saying why. That is the failure this file already names twice: a
+ * feature that is silently absent reads exactly like one that is broken.
+ * Matter's answer to "what is under me" is a collision normal rather than a
+ * flag, which is a helper and not a behaviour model — see Matter physics.
  */
 export function drivenIn(scene: SceneDoc): GameObjectNode[] {
-  if (scenePhysicsOf(scene).engine === 'matter') return [];
   return scene.children.filter((child) => controlsOf(child, true) !== null);
 }
 

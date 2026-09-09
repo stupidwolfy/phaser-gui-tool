@@ -19,6 +19,9 @@ import { SCENE, type EditorPage } from './helpers/editor';
 /** `BODY_COLOR` in EditorScene. Nothing else on this canvas is pure green. */
 const BODY = '#00ff00';
 
+/** `TOUCH_COLOR` in EditorScene, as `behaviour.spec.ts` names it. */
+const TOUCH = '#ff5c33';
+
 const AT = { x: SCENE.width / 2, y: SCENE.height / 2 };
 /** Long and thin, so turning it moves the extents a great deal on both axes. */
 const SIZE = { width: 300, height: 60 };
@@ -185,4 +188,40 @@ test('a Matter scene says the collider rows are unnecessary rather than hiding t
   await expect(
     editor.panel('inspect').getByText('collides every body with every other'),
   ).toBeVisible();
+});
+
+test('a driven object keeps its arrows and its buttons under Matter', async ({
+  editor,
+}) => {
+  // The reported bug. Switching the engine used to empty `drivenIn`, which
+  // takes the canvas arrows and the on-screen rings with it *and* the whole
+  // emitted `update()` — while the Controls panel went on offering both
+  // checkboxes and accepting them. A feature that is silently absent reads
+  // exactly like one that is broken, which is the failure this suite already
+  // has two names for.
+  await setup(editor);
+  await editor.setControls(true);
+  await editor.setTouchControls(true);
+
+  await editor.deselect();
+  await editor.closePanels();
+  const arcadeRings = await editor.findDrawn(TOUCH);
+  expect(arcadeRings.count).toBeGreaterThan(0);
+
+  await editor.setSceneEngine('matter');
+  await editor.deselect();
+  await editor.closePanels();
+
+  const matterRings = await editor.findDrawn(TOUCH);
+  // The same pad, in the same place: the layout is derived from the scene
+  // rectangle, which the engine has nothing to do with.
+  expect(matterRings.count).toBeGreaterThan(arcadeRings.count * 0.8);
+  expect(Math.abs(matterRings.x - arcadeRings.x)).toBeLessThan(4);
+  expect(Math.abs(matterRings.y - arcadeRings.y)).toBeLessThan(4);
+
+  // And the panel still offers both, which is what makes the drawing above the
+  // honest answer rather than a coincidence.
+  await editor.selectInTree('Rectangle');
+  await expect(editor.checkbox('Player controls')).toBeChecked();
+  await expect(editor.checkbox('On-screen buttons')).toBeChecked();
 });

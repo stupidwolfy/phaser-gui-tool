@@ -713,19 +713,105 @@ test('a project with one world of each engine emits both, and neither leaks', as
   // Arcade branch's "a StaticBody has nothing to chain" one engine over.
   expect(exported.contents.match(/matter\.body\.setMass\(/g) ?? []).toHaveLength(1);
 
-  // And the two things a Matter scene must *not* emit. A collider row is
-  // Arcade's `physics.add.collider`, and the scene that started Matter has no
-  // `this.physics` for it to be called on; the fixture holds a row on purpose
-  // so that dropping it is asserted rather than assumed. The driven node is the
-  // same claim for controls: the built-in behaviour writes to an Arcade body
-  // and gates its jump on `blocked.down`, so `drivenIn` refuses it — which
-  // means this whole file emits exactly one `update()`, the Arcade scene's.
-  // Three, which is exactly what the Arcade scene's seven rows survive down to.
-  // The Matter scene's row would be a fourth, so the count is the assertion.
+  // The one thing a Matter scene must *not* emit: a collider row is Arcade's
+  // `physics.add.collider`, and the scene that started Matter has no
+  // `this.physics` for it to be called on, so a row there would throw inside
+  // `create()` before anything was drawn. The fixture holds one on purpose so
+  // that dropping it is asserted rather than assumed. Three is exactly what the
+  // Arcade scene's seven rows survive down to; the Matter scene's would be a
+  // fourth, so the count is the assertion.
   expect(
     exported.contents.match(/physics\.add\.collider\(/g) ?? [],
   ).toHaveLength(3);
-  expect(exported.contents.match(/^  update\(\)/gm) ?? []).toHaveLength(1);
+
+  // And controls, which each scene drives its own way. Two `update()` methods,
+  // one per scene with something driven, and they share no code at all: Arcade
+  // writes `setVelocityX` onto its body and reads `blocked.down`, Matter sets
+  // both axes at once in its own per-step units and reads the grounded tracker.
+  // A `setVelocityX` inside the Matter scene would compile and throw.
+  expect(exported.contents.match(/^  update\(\)/gm) ?? []).toHaveLength(2);
+  expect(exported.contents.match(/^function matterGround\(/gm) ?? []).toHaveLength(1);
+  expect(exported.contents).toMatch(/this\.matter\.body\.setVelocity\(\w+, \{ x: \w+, y: \w+ \}\)/);
+  expect(exported.contents).toContain('blocked.down');
+});
+
+test('a Matter platformer jumps off what it is standing on, by thumb', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // The bug this closes, end to end: switching a scene to Matter used to leave
+  // the Controls panel still offering "Player controls" and "On-screen buttons",
+  // accept both, and then draw nothing and export nothing — a feature that is
+  // silently absent, which reads exactly like one that is broken.
+  //
+  // It is also the only place the grounded tracker can be checked at all. The
+  // sign of Matter's collision normal is the whole of that helper, and it is
+  // the opposite of the obvious guess: `Collision.collides` points the normal
+  // from bodyB towards bodyA. Get it backwards and the jump works against a
+  // ceiling and nowhere else — which compiles, runs, emits identical text, and
+  // fails only here.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Ground');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 480);
+  await editor.setField('Width', 900);
+  await editor.setField('Height', 40);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body', 'Static — never moves');
+  await editor.deselect();
+
+  await editor.setGravity(0, 900);
+  await editor.setSceneEngine('matter');
+
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Hopper');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 380);
+  await editor.setField('Width', 60);
+  await editor.setField('Height', 60);
+  await editor.setPhysics(true);
+  await editor.setControls(true);
+  await editor.setField('Jump speed', 700);
+  await editor.setTouchControls(true);
+
+  const exported = await editor.exportCode('html');
+  // The buttons are emitted at all, which is the reported half of the bug.
+  expect(exported.contents).toContain('createTouchControls(this, [');
+  expect(exported.contents).toContain('matterGround(this,');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('matter-jump'), exported.contents);
+
+  // Long enough to have fallen the 70 units onto the floor and settled, so what
+  // the press below acts on is an object that is genuinely standing on
+  // something rather than one still in the air.
+  await run.page.waitForTimeout(900);
+  const resting = await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL);
+
+  // The jump button, which is the mirror of the pad: on a 960x540 scene the
+  // radius is 40.5 and the margin is one radius, so it sits a radius in from
+  // the right edge and level with the pad's centre.
+  const box = await run.page.locator('canvas').boundingBox();
+  if (!box) throw new Error('the exported page has no canvas');
+  const scale = box.width / 960;
+  const target = { x: box.x + (960 - 81) * scale, y: box.y + 378 * scale };
+
+  await run.page.mouse.move(target.x, target.y);
+  await run.page.mouse.down();
+  // Read while it is still rising rather than after it lands again: a jump is
+  // the one control whose effect undoes itself, so a shot taken late says
+  // nothing. 700px/s upward against 900px/s² is roughly 0.78s to the apex.
+  await run.page.waitForTimeout(300);
+  const rising = await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL);
+  await run.page.mouse.up();
+
+  expect(rising.count).toBeGreaterThan(50);
+  // Up the screen is a *smaller* y. Without the tracker, or with the normal's
+  // sign inverted, the press does nothing and this is zero.
+  expect(rising.y).toBeLessThan(resting.y - 40);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
 });
 
 test('a Matter floor collides at the angle it is drawn, not at the box round it', async ({

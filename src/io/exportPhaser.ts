@@ -1053,12 +1053,20 @@ function physicsUsedIn(scene: SceneDoc): PhysicsUse {
   // and fitting a body to the box that holds a turned object is the very
   // approximation Matter exists to stop making.
   const arcade = any && engine === 'arcade';
+  const matter = any && engine === 'matter';
   return {
     any,
     arcade,
-    matter: any && engine === 'matter',
+    matter,
     dynamic: arcade && dynamic,
     turned: arcade && turned,
+    // A jump is the only thing that has to know what is underneath, so a
+    // top-down Matter scene emits no tracker and no listener.
+    grounded:
+      matter &&
+      drivenIn(scene).some(
+        (node) => controlsOf(node, true)?.mode === 'platformer',
+      ),
   };
 }
 
@@ -1072,6 +1080,9 @@ interface PhysicsUse {
   matter: boolean;
   dynamic: boolean;
   turned: boolean;
+  /** A Matter scene with something that jumps, which is the only thing that
+   * needs the grounded tracker. */
+  grounded: boolean;
 }
 
 /**
@@ -1223,7 +1234,12 @@ function buildFitHelper(fn: string, language: SceneLanguage, indent: string): st
  * dials are set on, and because the object's own type never gains the Matter
  * components as far as the compiler is concerned.
  */
-function buildMatterHelper(fn: string, language: SceneLanguage, indent: string): string {
+function buildMatterHelper(
+  fn: string,
+  accessor: string,
+  language: SceneLanguage,
+  indent: string,
+): string {
   const typed = language === 'ts';
   // The same union `fitBodyToAngle` takes, and for its reason: `angle` and
   // `displayWidth` are on the components rather than on `GameObject`.
@@ -1250,6 +1266,36 @@ function buildMatterHelper(fn: string, language: SceneLanguage, indent: string):
     '      height: Math.abs(object.displayHeight),',
     '    },',
     '  });',
+    `  const body = ${accessor}(object);`,
+    '  scene.matter.body.setAngle(body, radians);',
+    '  return body;',
+    '}',
+  ];
+  return lines.join('\n').replace(/^(?!$)/gm, indent);
+}
+
+/**
+ * `arcadeBody` one engine over, and the narrowing runs backwards.
+ *
+ * A Matter body is a plain object rather than a class, so there is no
+ * `instanceof` to test *for*. What there is instead is `instanceof` for the two
+ * Arcade classes, and ruling both of those out plus null is exactly what leaves
+ * `MatterJS.BodyType` — a narrowing TypeScript accepts, in syntax the runnable
+ * page's shared plain JavaScript can also carry.
+ *
+ * Split out of `matterBody` rather than written twice, because `update()` needs
+ * it as well: `create()` binds `this.<field>` to the *object*, exactly as the
+ * Arcade path does, so the driven block reaches the body through this on every
+ * frame. Keeping `create()`'s epilogue identical under both engines is what
+ * makes that worth a second function.
+ */
+function buildMatterAccessor(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(object: Phaser.GameObjects.GameObject): MatterJS.BodyType {`
+    : `function ${fn}(object) {`;
+  const lines = [
+    signature,
     '  const body = object.body;',
     '  if (',
     '    !body ||',
@@ -1258,8 +1304,70 @@ function buildMatterHelper(fn: string, language: SceneLanguage, indent: string):
     '  ) {',
     "    throw new Error('No Matter body on: ' + object.name);",
     '  }',
-    '  scene.matter.body.setAngle(body, radians);',
     '  return body;',
+    '}',
+  ];
+  return lines.join('\n').replace(/^(?!$)/gm, indent);
+}
+
+/**
+ * What a Matter platformer jumps off, which Arcade hands over as a flag.
+ *
+ * Arcade's `body.blocked.down` is "there is something under me this step", set
+ * by a world of axis-aligned boxes where "under" needs no defining. Matter has
+ * no such flag and could not have one: a polygon that turns is touched at an
+ * angle, and the only thing that says *where* is the collision normal.
+ *
+ * Two facts about that normal are wrong if guessed, and both were checked
+ * against Matter's own `Collision.collides` rather than remembered. It is
+ * computed so that its dot product with `bodyB.position - bodyA.position` is
+ * negative — which means it points **from bodyB towards bodyA**, the opposite
+ * of what the comment beside it in Matter's source suggests. So the other body
+ * is underneath when the normal aims *up* out of ours: negated when we are
+ * bodyA, taken as-is when we are bodyB. Get that backwards and the jump works
+ * only against a ceiling, which no export assertion short of pressing the
+ * button would catch.
+ *
+ * It records a *time* rather than a boolean because `collisionactive` fires on
+ * the physics step while `update()` runs on the frame, and the two are not one
+ * to one. A flag set on the step and cleared on the frame flickers; a timestamp
+ * compared against a short window does not, and it costs one number.
+ *
+ * The 0.5 is a direction test, not a tuning knob: a normal more than 60 degrees
+ * off vertical is a wall being leaned on rather than a floor being stood on.
+ */
+function buildGroundHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(\n` +
+      '  scene: Phaser.Scene,\n' +
+      '  body: MatterJS.BodyType,\n' +
+      '): { at: number } {'
+    : `function ${fn}(scene, body) {`;
+  // Only the callback's parameter differs between the two languages, because
+  // `World.on` is typed with a bare `Function` and an unannotated parameter is
+  // an implicit `any` under `--strict`. This is a module-level helper rather
+  // than part of the shared `create()` body, so it is allowed to differ.
+  const listener = typed
+    ? "  scene.matter.world.on('collisionactive', " +
+      '(event: Phaser.Physics.Matter.Events.CollisionActiveEvent) => {'
+    : "  scene.matter.world.on('collisionactive', (event) => {";
+  const lines = [
+    signature,
+    '  const state = { at: -Infinity };',
+    listener,
+    '    for (let i = 0; i < event.pairs.length; i += 1) {',
+    '      const pair = event.pairs[i];',
+    '      const isA = pair.bodyA === body;',
+    '      if (!isA && pair.bodyB !== body) continue;',
+    '      const under = isA ? -pair.collision.normal.y : pair.collision.normal.y;',
+    '      if (under > 0.5) {',
+    '        state.at = scene.time.now;',
+    '        return;',
+    '      }',
+    '    }',
+    '  });',
+    '  return state;',
     '}',
   ];
   return lines.join('\n').replace(/^(?!$)/gm, indent);
@@ -1488,6 +1596,10 @@ interface EmitContext {
    * same identifier set and for the same reason as `tilemapFn`.
    */
   matterFn: string;
+  /** The Matter body accessor, `arcadeBody`'s sibling one engine over. */
+  matterBodyFn: string;
+  /** The grounded tracker a Matter platformer's jump reads. */
+  groundFn: string;
   /**
    * Which engine the scene being emitted runs. On the context rather than
    * threaded through `emitNode` because a prefab factory's bodies are refused
@@ -1984,7 +2096,13 @@ function buildFactories(
       ctx.touchFn,
       ctx.fitFn,
     ctx.matterFn,
+    ctx.matterBodyFn,
+    ctx.groundFn,
       ctx.matterFn,
+    ctx.matterBodyFn,
+    ctx.groundFn,
+      ctx.matterBodyFn,
+      ctx.groundFn,
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
@@ -2129,6 +2247,12 @@ interface DrivenObject {
   /** The `const` `create()` bound it to. */
   binding: string;
   controls: NodeControls;
+  /**
+   * The `this.<field>` holding this object's grounded tracker, for a Matter
+   * platformer and nothing else. Arcade reads `blocked.down` off the body and
+   * needs no such thing.
+   */
+  ground?: string;
 }
 
 /**
@@ -2215,6 +2339,8 @@ function buildUpdateBody(
     ctx.touchFn,
     ctx.fitFn,
     ctx.matterFn,
+    ctx.matterBodyFn,
+    ctx.groundFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
 
@@ -2236,10 +2362,14 @@ function buildUpdateBody(
     : '';
   if (touch) lines.push(`const ${touch} = this.${touchField};`);
 
-  for (const { field, controls } of driven) {
+  for (const entry of driven) {
+    const { field, controls } = entry;
     const keys = keyLocal.get(controls.scheme) as string;
     const object = toIdentifier(field, used);
     const body = toIdentifier(`${field} body`, used);
+    const vx = toIdentifier(`${field} vx`, used);
+    const vy = toIdentifier(`${field} vy`, used);
+    const ground = toIdentifier(`${field} ground`, used);
     const speed = num(controls.speed);
     // An object with no buttons emits exactly what it emitted before this
     // existed, byte for byte — the rule the asset table, the tilemap helper and
@@ -2267,26 +2397,70 @@ function buildUpdateBody(
     // a second driven object below must still be updated when the first one is
     // somehow missing.
     lines.push(`if (${guard}) {`);
-    lines.push(`  const ${body} = ${ctx.bodyFn}(${object});`);
-    lines.push(`  ${body}.setVelocityX(0);`);
-    lines.push(`  if (${held('left', 'left')}) ${body}.setVelocityX(-${speed});`);
-    lines.push(`  else if (${held('right', 'right')}) ${body}.setVelocityX(${speed});`);
-    if (controls.mode === 'topDown') {
-      lines.push(`  ${body}.setVelocityY(0);`);
-      lines.push(`  if (${held('up', 'up')}) ${body}.setVelocityY(-${speed});`);
-      lines.push(`  else if (${held('down', 'down')}) ${body}.setVelocityY(${speed});`);
+    if (ctx.engine === 'matter') {
+      // Matter measures velocity in pixels per *step* rather than per second,
+      // so the document's speed is divided by the 60 steps `Body.setVelocity`
+      // works in — the same conversion the body's own dials take, for the same
+      // reason: the document says one thing in one unit whichever engine reads
+      // it.
+      const step = (value: number) => num(value / 60);
+      lines.push(`  const ${body} = ${ctx.matterBodyFn}(${object});`);
+      if (controls.mode === 'topDown') {
+        lines.push(`  let ${vx} = 0;`);
+        lines.push(`  let ${vy} = 0;`);
+        lines.push(`  if (${held('left', 'left')}) ${vx} = -${step(controls.speed)};`);
+        lines.push(`  else if (${held('right', 'right')}) ${vx} = ${step(controls.speed)};`);
+        lines.push(`  if (${held('up', 'up')}) ${vy} = -${step(controls.speed)};`);
+        lines.push(`  else if (${held('down', 'down')}) ${vy} = ${step(controls.speed)};`);
+        lines.push(
+          `  this.matter.body.setVelocity(${body}, { x: ${vx}, y: ${vy} });`,
+        );
+      } else {
+        // The vertical velocity is read back rather than zeroed, because
+        // `Body.setVelocity` sets both axes where Arcade's `setVelocityX` sets
+        // one — writing a zero here would hold the object in mid-air and make
+        // gravity look broken.
+        lines.push(`  let ${vx} = 0;`);
+        lines.push(`  let ${vy} = ${body}.velocity.y;`);
+        lines.push(`  if (${held('left', 'left')}) ${vx} = -${step(controls.speed)};`);
+        lines.push(`  else if (${held('right', 'right')}) ${vx} = ${step(controls.speed)};`);
+        const pressed = held('up', 'jump');
+        const jumped = touch && controls.touch ? `(${pressed})` : pressed;
+        // Arcade's `blocked.down` is a flag Matter has not got, so this is the
+        // tracker's window: `collisionactive` fires on the physics step and
+        // this runs on the frame, and the two are not one to one.
+        lines.push(`  const ${ground} = this.${entry.ground as string};`);
+        lines.push(
+          `  if (${jumped} && ${ground} && this.time.now - ${ground}.at < 120) {`,
+        );
+        lines.push(`    ${vy} = -${step(controls.jump)};`);
+        lines.push('  }');
+        lines.push(
+          `  this.matter.body.setVelocity(${body}, { x: ${vx}, y: ${vy} });`,
+        );
+      }
     } else {
-      // The pad's up is not a platformer's jump: the jump has a button of its
-      // own on the other side of the canvas, which is what lets a thumb hold a
-      // direction and jump at the same time.
-      // Parenthesised only when there is something to parenthesise, so an
-      // object with no buttons still emits this line character for character.
-      const pressed = held('up', 'jump');
-      const jumped = touch && controls.touch ? `(${pressed})` : pressed;
-      lines.push(
-        `  if (${jumped} && ${body}.blocked.down) ` +
-          `${body}.setVelocityY(-${num(controls.jump)});`,
-      );
+      lines.push(`  const ${body} = ${ctx.bodyFn}(${object});`);
+      lines.push(`  ${body}.setVelocityX(0);`);
+      lines.push(`  if (${held('left', 'left')}) ${body}.setVelocityX(-${speed});`);
+      lines.push(`  else if (${held('right', 'right')}) ${body}.setVelocityX(${speed});`);
+      if (controls.mode === 'topDown') {
+        lines.push(`  ${body}.setVelocityY(0);`);
+        lines.push(`  if (${held('up', 'up')}) ${body}.setVelocityY(-${speed});`);
+        lines.push(`  else if (${held('down', 'down')}) ${body}.setVelocityY(${speed});`);
+      } else {
+        // The pad's up is not a platformer's jump: the jump has a button of its
+        // own on the other side of the canvas, which is what lets a thumb hold a
+        // direction and jump at the same time.
+        // Parenthesised only when there is something to parenthesise, so an
+        // object with no buttons still emits this line character for character.
+        const pressed = held('up', 'jump');
+        const jumped = touch && controls.touch ? `(${pressed})` : pressed;
+        lines.push(
+          `  if (${jumped} && ${body}.blocked.down) ` +
+            `${body}.setVelocityY(-${num(controls.jump)});`,
+        );
+      }
     }
     lines.push('}');
   }
@@ -2329,6 +2503,8 @@ function buildCreateBody(
     ctx.touchFn,
     ctx.fitFn,
     ctx.matterFn,
+    ctx.matterBodyFn,
+    ctx.groundFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
   const lines: string[] = [
@@ -2548,15 +2724,34 @@ function buildCreateBody(
   for (const node of drivenNodes) {
     const binding = bindings.get(node.id)?.[0];
     if (binding === undefined) continue;
+    const controls = controlsOf(node, true) as NodeControls;
+    const field = toIdentifier(node.name, fieldNames);
     driven.push({
-      field: toIdentifier(node.name, fieldNames),
+      field,
       binding,
-      controls: controlsOf(node, true) as NodeControls,
+      controls,
+      // Only a Matter platformer: Arcade reads `blocked.down` off its own body
+      // every frame and has nothing to keep.
+      ground:
+        ctx.engine === 'matter' && controls.mode === 'platformer'
+          ? toIdentifier(`${node.name} ground`, fieldNames)
+          : undefined,
     });
   }
   if (driven.length > 0) {
     if (lines.at(-1) !== '') lines.push('');
-    for (const { field, binding } of driven) lines.push(`this.${field} = ${binding};`);
+    for (const { field, binding, ground } of driven) {
+      lines.push(`this.${field} = ${binding};`);
+      // The listener is registered once, here, rather than opened and closed
+      // around each jump — `create()` is the one moment in a scene's life this
+      // exporter already has, and a `world.on` per frame would stack up a
+      // listener per frame.
+      if (ground) {
+        lines.push(
+          `this.${ground} = ${ctx.groundFn}(this, ${ctx.matterBodyFn}(${binding}));`,
+        );
+      }
+    }
   }
 
   while (lines.at(-1) === '') lines.pop();
@@ -2569,8 +2764,12 @@ function buildCreateBody(
   if (fields.wasd) {
     declared.push({ name: fields.wasd, type: 'Phaser.Types.Input.Keyboard.CursorKeys' });
   }
-  for (const { field } of driven) {
+  for (const { field, ground } of driven) {
     declared.push({ name: field, type: 'Phaser.GameObjects.GameObject' });
+    // The tracker's own shape, written out rather than named: it is three
+    // words, and a `type` alias would be a *statement* the runnable page's
+    // shared body has nowhere to put.
+    if (ground) declared.push({ name: ground, type: '{ at: number }' });
   }
 
   return {
@@ -2719,8 +2918,10 @@ function prepare(project: Project): Emission {
   // which is where it belongs by subject: drawing earlier would move the suffix
   // a clash gives one of them, and all four of those are asserted by name.
   const fitFn = toIdentifier('fit body to angle', moduleNames);
-  // And a sixth, by that same rule.
+  // And a sixth, a seventh and an eighth, by that same rule.
   const matterFn = toIdentifier('matter body', moduleNames);
+  const matterBodyFn = toIdentifier('matter body of', moduleNames);
+  const groundFn = toIdentifier('matter ground', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
@@ -2743,6 +2944,8 @@ function prepare(project: Project): Emission {
       touchFn,
       fitFn,
       matterFn,
+      matterBodyFn,
+      groundFn,
       fonts,
       receiver: 'this',
       // A placeholder the per-scene context overwrites. The engine is a
@@ -2757,6 +2960,7 @@ function prepare(project: Project): Emission {
       matter: worlds.some((world) => world.matter),
       dynamic: worlds.some((world) => world.dynamic),
       turned: worlds.some((world) => world.turned),
+      grounded: worlds.some((world) => world.grounded),
     },
     touch: project.scenes.some((scene) => touchZonesOf(scene).length > 0),
   };
@@ -2906,7 +3110,13 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
     : '';
   // Same rule again: no Matter scene, no helper.
   const matter = physics.matter
-    ? `\n${buildMatterHelper(ctx.matterFn, language, '')}\n`
+    ? `\n${buildMatterAccessor(ctx.matterBodyFn, language, '')}\n` +
+      `\n${buildMatterHelper(ctx.matterFn, ctx.matterBodyFn, language, '')}\n`
+    : '';
+  // Only a Matter scene with something that jumps, so a top-down project and
+  // every Arcade one emit no tracker at all.
+  const ground = physics.grounded
+    ? `\n${buildGroundHelper(ctx.groundFn, language, '')}\n`
     : '';
   // Same rule again: no on-screen buttons, no helper, so every project that
   // predates them exports byte for byte what it always did.
@@ -2917,7 +3127,7 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
 
   return `${header(project)}${physicsNote(physics.arcade)}
 import Phaser from 'phaser';
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${buttons}${factories}
+${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -2964,7 +3174,11 @@ export function generateRunnableHtml(project: Project): string {
     ? `${buildFitHelper(ctx.fitFn, 'js', '      ')}\n\n`
     : '';
   const matter = physics.matter
-    ? `${buildMatterHelper(ctx.matterFn, 'js', '      ')}\n\n`
+    ? `${buildMatterAccessor(ctx.matterBodyFn, 'js', '      ')}\n\n` +
+      `${buildMatterHelper(ctx.matterFn, ctx.matterBodyFn, 'js', '      ')}\n\n`
+    : '';
+  const ground = physics.grounded
+    ? `${buildGroundHelper(ctx.groundFn, 'js', '      ')}\n\n`
     : '';
   const buttons = touch ? `${buildTouchHelper(ctx.touchFn, 'js', '      ')}\n\n` : '';
   const classes = scenes
@@ -2998,7 +3212,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${buttons}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,
