@@ -642,6 +642,47 @@ export class EditorPage {
   }
 
   /**
+   * Switches the selected object's tween on or off.
+   *
+   * Offered for every object at every depth, unlike a body — a tween writes the
+   * object's own local properties, so there is no top-level rule and therefore
+   * no `tweenOffered` sibling to `controlsOffered`.
+   */
+  async setTween(on: boolean): Promise<void> {
+    await this.openPanel('inspect');
+    const box = this.checkbox('Tween this object');
+    if (on) await box.check();
+    else await box.uncheck();
+    await this.settle();
+  }
+
+  /** Reads back whether the selected object has a tween. */
+  async hasTween(): Promise<boolean> {
+    await this.openPanel('inspect');
+    return this.checkbox('Tween this object').isChecked();
+  }
+
+  /**
+   * Points one of the tween's six properties at a value, or clears it.
+   *
+   * Two controls per property — a checkbox that switches the target on and a
+   * number field beside it — so this presses the first and then types into the
+   * second, which is the order a person uses and the only order in which the
+   * field exists.
+   */
+  async setTweenTarget(property: string, value: number | null): Promise<void> {
+    await this.openPanel('inspect');
+    const box = this.checkbox(`Tween ${property}`);
+    if (value === null) {
+      await box.uncheck();
+      await this.settle();
+      return;
+    }
+    if (!(await box.isChecked())) await box.check();
+    await this.setField(`Tween ${property} to`, value);
+  }
+
+  /**
    * Marks one of the tileset's frames solid, or lets it go back to scenery.
    *
    * The Collision grid, never the Brush one: both are in the tilemap's own

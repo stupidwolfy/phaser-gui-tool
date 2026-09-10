@@ -30,6 +30,9 @@ import {
   siblingsOf,
   tileLayerOf,
   tileMapOf,
+  tweenOf,
+  TWEEN_EASES,
+  type TweenProperty,
   type TileMap,
   type GameObjectNode,
   type NineSliceProps,
@@ -2114,6 +2117,8 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
       {node.type === 'text' && <TextSection node={node} />}
 
       <PhysicsSection node={node} />
+
+      <TweenSection node={node} />
     </div>
   );
 }
@@ -2597,6 +2602,158 @@ function ControlsSection({ node }: { node: GameObjectNode }) {
               there is one set per scene, so everything driven in this scene
               reads the same buttons. A top-down object puts up and down on the
               pad; a platformer puts a jump button on the right.
+            </p>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * The node's tween: where its own numbers end up, and how they get there.
+ *
+ * Below `PhysicsSection` and for its reason — opt-in, most objects never get
+ * one, and a dozen rows between the object's name and the fill colour it is
+ * actually being edited for costs a 390px screen a scroll on every object in
+ * the project.
+ *
+ * Beside that section rather than inside it, and with **no refusal branch at
+ * all**, which is the thing to notice next to a neighbour whose refusals are
+ * half its body. A tween works on a container, an instance, a tilemap and a
+ * node nested three groups deep, because it writes the object's own local
+ * properties — where a body and a drive-scheme both read world coordinates and
+ * are therefore top-level only. There is nothing here to say no to.
+ */
+function TweenSection({ node }: { node: GameObjectNode }) {
+  const setNodeTween = useEditorStore((s) => s.setNodeTween);
+  const setTweenTarget = useEditorStore((s) => s.setTweenTarget);
+  const tween = tweenOf(node);
+
+  // What a property is called in the panel, and what switching it on should
+  // seed it with. One table, so the label and the seed cannot drift apart — and
+  // every label carries "Tween", because X, Y, Rotation°, Scale X, Scale Y and
+  // Alpha are all rows a little further up this same panel and the suite
+  // matches a label exactly. The "Animation name, not Name" rule, sixth time.
+  const rows: { property: TweenProperty; label: string; step?: number; from: number }[] = [
+    { property: 'x', label: 'Tween X to', from: node.transform.x },
+    { property: 'y', label: 'Tween Y to', from: node.transform.y },
+    { property: 'rotation', label: 'Tween rotation° to', from: node.transform.rotation },
+    { property: 'scaleX', label: 'Tween scale X to', step: 0.1, from: node.transform.scaleX },
+    { property: 'scaleY', label: 'Tween scale Y to', step: 0.1, from: node.transform.scaleY },
+    { property: 'alpha', label: 'Tween alpha to', step: 0.1, from: node.props.alpha },
+  ];
+
+  return (
+    <>
+      <div className="panel__section">Tween</div>
+      <CheckboxField
+        label="Tween this object"
+        value={tween !== null}
+        onChange={(on) => setNodeTween(node.id, on ? {} : null)}
+      />
+
+      {tween && (
+        <>
+          {/* The six switches two to a row, then a field for each one that is
+              on. Not a switch paired with its own field on one row: a checkbox
+              field is centred on its own height while a number field is a label
+              stacked over an input, so the two would need a new alignment rule
+              to stop the box floating halfway up the label beside it. Six full
+              rows of switches would also cost 264px of a 390px sheet before the
+              first number, which is why they are paired. */}
+          {[0, 2, 4].map((start) => (
+            <div className="field-row" key={start}>
+              {rows.slice(start, start + 2).map(({ property, label, from }) => (
+                <CheckboxField
+                  key={property}
+                  label={label.replace(' to', '')}
+                  value={tween.to[property] !== undefined}
+                  // Seeded from where the object is now, so switching one on is
+                  // immediately a valid tween rather than a jump to the origin
+                  // — `defaultTween`'s argument, one property at a time.
+                  onChange={(on) => setTweenTarget(node.id, property, on ? from : null)}
+                />
+              ))}
+            </div>
+          ))}
+
+          {rows.map(({ property, label, step }) => {
+            const value = tween.to[property];
+            return value === undefined ? null : (
+              <NumberField
+                key={property}
+                label={label}
+                value={value}
+                step={step}
+                onChange={(next) => setTweenTarget(node.id, property, next)}
+              />
+            );
+          })}
+
+          <div className="field-row">
+            <NumberField
+              label="Tween duration ms"
+              value={tween.duration}
+              min={1}
+              step={100}
+              onChange={(duration) => setNodeTween(node.id, { duration })}
+            />
+            <NumberField
+              label="Tween delay ms"
+              value={tween.delay}
+              min={0}
+              step={100}
+              onChange={(delay) => setNodeTween(node.id, { delay })}
+            />
+          </div>
+
+          {/* A select rather than free text: an ease is a name with no near
+              neighbour, so typed by hand it is wrong by one character and
+              Phaser silently falls back to linear. The atlas Frame field's
+              argument. */}
+          <SelectField
+            label="Tween ease"
+            value={tween.ease}
+            options={TWEEN_EASES.map((ease) => ({ value: ease, label: ease }))}
+            onChange={(ease) =>
+              setNodeTween(node.id, { ease: ease as (typeof TWEEN_EASES)[number] })
+            }
+          />
+
+          <CheckboxField
+            label="Tween goes back again"
+            value={tween.yoyo}
+            onChange={(yoyo) => setNodeTween(node.id, { yoyo })}
+          />
+
+          <div className="field-row">
+            <NumberField
+              label="Tween repeat"
+              value={tween.repeat}
+              min={-1}
+              step={1}
+              onChange={(repeat) => setNodeTween(node.id, { repeat })}
+            />
+            <NumberField
+              label="Tween repeat delay ms"
+              value={tween.repeatDelay}
+              min={0}
+              step={100}
+              onChange={(repeatDelay) => setNodeTween(node.id, { repeatDelay })}
+            />
+          </div>
+
+          <p className="hint">
+            −1 repeats forever. The dashed outline is where the tween ends up —
+            press ▶ to run it. Nothing here is written back to the object: the
+            numbers above stay exactly as you left them, and switching preview
+            off puts everything back.
+          </p>
+          {node.physics && (
+            <p className="hint">
+              This object also has a physics body. A tween and a body both write
+              the object's position, and in the exported game the tween wins.
             </p>
           )}
         </>

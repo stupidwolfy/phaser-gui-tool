@@ -51,8 +51,8 @@ on a desktop.
   which frame a sprite shows
 - Animate it: build a clip from the frames (`0-3, 7` picks and orders them), set the
   frame rate and whether it loops, and press ▶ in the toolbar to watch it play on the
-  canvas — the same button starts and stops every particle emitter, since both are the
-  canvas moving by itself. Animations are saved with the project and exported as real
+  canvas — the same button starts and stops every particle emitter and every tween, since
+  all three are the canvas moving by itself. Animations are saved with the project and exported as real
   `this.anims.create(...)` calls, so the sheet and the clip come out the other side
 - Edit name, position, rotation, scale, size, colour and alpha in the inspector
 - Group objects: a group moves, rotates, scales and fades everything inside it as one,
@@ -79,6 +79,13 @@ on a desktop.
   until you press ▶ in the toolbar, so an emitter stays where you put it while you place
   the rest of the scene, and exports as a real `this.add.particles(...)` with every
   setting in one object
+- Make an object **move by itself**: switch on Tween in the inspector and say where its
+  X, Y, rotation, scale or alpha should end up, over how long, with which easing, and
+  whether it goes back again and repeats. The destination is drawn on the canvas as a
+  dashed outline, so you can place it by eye; press ▶ and it runs, press ▶ again and
+  everything snaps back exactly where you left it — a preview never changes a single
+  number in your project. It works on anything at any depth, groups and prefabs included,
+  and exports as a real `this.tweens.add({ ... })` beside the object it belongs to
 - Stretch a **panel** without stretching its corners: `+ Panel` adds a nine-slice, and the
   four Slice fields say how wide its border is. Make it any size you like — the corners
   keep the size you drew them at, and only the edges and the middle stretch, which is what
@@ -275,6 +282,11 @@ it is not — there are no per-tile properties beyond that. On-screen controls a
 three: the layout is fixed rather than placeable, there is no analogue stick or swipe (every
 direction here is on or off, as a key is), and the buttons' look belongs to the exported
 code rather than to a setting in the editor.
+Tweens are in, with five limits: one tween per object (a second one is a different
+duration, which is a list this does not have), nothing chains or sequences them, nothing
+*starts* one but the scene starting, only the six transform-and-alpha properties can be
+driven, and there are no callbacks — what happens when a tween finishes is a line in your
+own code.
 Scenes are in, with one limit: nothing in the editor starts one scene from another, since
 that is a line of game logic rather than a piece of layout — the export registers them all
 and leaves `this.scene.start('Level 2')` to you. Prefabs are in, with two limits: a prefab cannot contain another prefab,

@@ -26,6 +26,9 @@ import {
   textStyleOf,
   tileMapOf,
   touchZonesOf,
+  tweenOf,
+  TWEEN_PROPERTIES,
+  TWEEN_PHASER_KEY,
   type AnimationClip,
   type AudioAsset,
   type FontAsset,
@@ -1880,7 +1883,10 @@ function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimatio
   // passes, so the whole of iteration 22 lands in that literal and nothing
   // chains. Said out loud because on this function's checklist "no branch
   // needed" and "forgot a branch" read exactly the same, as they do for the
-  // particles and physics notes below.
+  // particles and physics notes below — and for a tween, which gains nothing
+  // here for a mechanical reason rather than a chosen one: `tweens.add` answers
+  // with a Tween, not with the object, so it cannot join a constructor chain at
+  // all. `emitNode` emits it as its own statement instead.
   if (node.type === 'text') out.push('.setOrigin(0.5)');
   if (rotation !== 0) out.push(`.setAngle(${num(rotation)})`);
   if (scaleX !== 1 || scaleY !== 1) out.push(`.setScale(${num(scaleX)}, ${num(scaleY)})`);
@@ -2002,6 +2008,58 @@ function emitNode(
       if (!layer.visible) lines.push(`${ids[index]}.setVisible(false);`);
     });
   }
+
+  // The tween, last in the node's own block and emitted as its own statement.
+  //
+  // Not the epilogue, where the camera's `startFollow` and the collider rows
+  // go: those name bindings the object list has not made yet, and a tween names
+  // only the binding on the line above. And `${ctx.receiver}` is what makes the
+  // same emit correct in both places verbatim — `this.tweens.add` inside a
+  // Scene method, `scene.tweens.add` inside a prefab factory, which a tween on
+  // a definition's child needs and which the canvas already animates in every
+  // instance. That is the field `EmitContext` exists for.
+  //
+  // `targets` is the whole `ids` list rather than the first, so a tilemap of
+  // several layers travels as one object instead of sliding its floor out from
+  // under its walls.
+  //
+  // No gate and no table: the block sits inside the successful branch, so a
+  // project with no tween emits byte for byte what it emitted before, and a
+  // tween on a node that emitted no object never reaches this line at all —
+  // which is why `missingReason` needs no branch for one.
+  const tween = tweenOf(node);
+  if (tween) {
+    const targets = ids.length > 1 ? `[${ids.join(', ')}]` : id;
+    const properties = TWEEN_PROPERTIES.flatMap((property) => {
+      const value = tween.to[property];
+      if (value === undefined) return [];
+      // `TWEEN_PHASER_KEY`, never the document's own name: `rotation` on a Game
+      // Object is radians and this document's is degrees, so emitting the
+      // document's name is a legal tween of 180 radians that compiles, runs and
+      // is wrong by a factor of 57.
+      return [`${TWEEN_PHASER_KEY[property]}: ${num(value)}`];
+    });
+    // Emitted whole, defaults included — the emitter config's and the physics
+    // body's call rather than `modifiersFor`'s, because these dials only mean
+    // anything beside each other: a yoyo says nothing without a duration, a
+    // repeat delay nothing without a repeat. The six properties are the
+    // exception and are emitted only where they exist, because an absent one is
+    // not a default — it is a property this tween is not about, and printing
+    // the object's current value would emit a tween that holds it still.
+    lines.push(`${ctx.receiver}.tweens.add({`);
+    lines.push(`  targets: ${targets},`);
+    for (const property of properties) lines.push(`  ${property},`);
+    lines.push(`  duration: ${num(tween.duration)},`);
+    lines.push(`  delay: ${num(tween.delay)},`);
+    // Through `str` even though `tweenOf` has already allowlisted it, by the
+    // rule that nothing free-text reaches the output unquoted.
+    lines.push(`  ease: ${str(tween.ease)},`);
+    lines.push(`  yoyo: ${tween.yoyo},`);
+    lines.push(`  repeat: ${num(tween.repeat)},`);
+    lines.push(`  repeatDelay: ${num(tween.repeatDelay)},`);
+    lines.push('});');
+  }
+
   lines.push('');
 
   if (node.type === 'container' && node.children.length > 0) {
@@ -2018,7 +2076,14 @@ function emitNode(
   return ids;
 }
 
-/** Why a node emitted nothing, for the comment that stands in its place. */
+/**
+ * Why a node emitted nothing, for the comment that stands in its place.
+ *
+ * A tween adds no case, and that is structural rather than an oversight: a node
+ * with no constructor takes `emitNode`'s early return long before the tween
+ * block, so a tween on an image-less sprite is correctly and silently absent
+ * along with the sprite. There is no half-emitted state for one to explain.
+ */
 function missingReason(node: GameObjectNode): string {
   if (node.type === 'instance') {
     return 'the prefab it placed is no longer in the project, so nothing to add.';
@@ -2852,6 +2917,14 @@ function buildCreateBody(
  * `cssColor` — so an `@font-face` in a `<style>` block would be a new
  * unescaped surface, carrying a family name and a data URL, in the half of that
  * output where the escaping has historically been got wrong.
+ *
+ * And nothing for a tween either, the sixth entry here. `Scene.tweens` is a
+ * TweenManager the plugin manager installs for every scene in every Phaser game
+ * there has ever been, exactly as `cameras.main` and `sound` are — so a module
+ * dropped into somebody else's game needs no key added to a config it does not
+ * own, and there is no note to write. Said out loud because a tween is the one
+ * thing in this list that visibly moves something, which makes "surely that
+ * needed enabling" the natural assumption.
  */
 const arcadeConfig = (needed: boolean) =>
   needed ? "        physics: { default: 'arcade' },\n" : '';

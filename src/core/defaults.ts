@@ -350,6 +350,10 @@ export function cloneWithNewIds(node: GameObjectNode): GameObjectNode {
     // editing the duplicate's bounce would edit the original's too.
     ...(node.physics ? { physics: { ...node.physics } } : {}),
     ...(node.controls ? { controls: { ...node.controls } } : {}),
+    // And a third, one level deeper than either: a tween's `to` is an object
+    // inside an object, so copying only the tween would leave the duplicate and
+    // the original sharing one destination.
+    ...(node.tween ? { tween: { ...node.tween, to: { ...node.tween.to } } } : {}),
     children: node.children.map(cloneWithNewIds),
   } as GameObjectNode;
 }

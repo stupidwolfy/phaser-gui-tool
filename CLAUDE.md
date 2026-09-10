@@ -64,6 +64,11 @@ by *nesting* an existing prop rather than adding a type or a table. Iteration 26
 gave a scene its choice of engine: an Arcade body grown to hold the object it is turned
 with, or a Matter body that is a real polygon and turns with it — the first iteration to
 put a second implementation behind an existing feature rather than adding to it.
+Iteration 27 (shipped) let an object move on its own: a tween on a node, its destination
+drawn on the canvas, run under the ▶ toggle the animations and emitters already had — and
+the first thing ever allowed to break `applyNode`'s "drawn position == stored position"
+invariant, because it is also the first that can be stopped without the document having
+moved.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -330,7 +335,9 @@ document state, and the shape of them follows from where each thing actually bel
   is for, so there the still case stays the `add.image` it always was — frame argument and
   all, since frame 0 is `add.image`'s own default.
 - **Preview is off by default and is editor state**, and since iteration 15 the field is
-  `previewMotion` and governs emitters too — see "Particles".
+  `previewMotion` and governs emitters too — see "Particles" — and since iteration 27
+  tweens, which is the one thing it governs that moves an object rather than redrawing
+  one.
 - **The original argument for it.** A canvas that animates by itself is a
   canvas whose objects are never where you last looked, which makes placing one by eye a
   matter of timing; and the frame a still sprite shows is a document field the user is
@@ -340,7 +347,7 @@ document state, and the shape of them follows from where each thing actually bel
   store change, so without it a selection or a nudge of some unrelated object restarts
   every animation from frame 0 and nothing ever visibly advances.
 - **The toolbar's ▶ appears only once the project holds something that moves** — an
-  animation or, since iteration 15, an emitter (`hasMotionIn`). A 390px toolbar already
+  animation, an emitter since iteration 15, or a tween since iteration 27 (`hasMotionIn`). A 390px toolbar already
   clips when everything is shown, and a control that can only ever do nothing is worth
   less than the width it costs — while a project that *does* move needs it in the toolbar
   rather than a panel, because on a phone a panel is a sheet over the canvas you are
@@ -1515,6 +1522,216 @@ does *over time*, and two decisions carry the rest of it.
   Scale X/Y and the object's own Alpha are a few rows up the same panel, so bare "Scale"
   and "Alpha" would be ambiguous to a reader and to `labelled()`'s exact-match locator
   alike — the "Animation name, not Name" rule.
+
+## Tweens
+
+A `tween` on a node says where its own numbers end up and how they get there. It runs on
+the canvas under the ▶ toggle the animations and the emitters already had, it is drawn as
+a dashed destination when it is not running, and it exports as a real `this.tweens.add`.
+
+- **It is the first thing allowed to break `applyNode`'s invariant, and the difference
+  from physics is the whole of why.** That comment says "drawn position == stored
+  position, always"; while preview is on, a tween owns the properties it drives and the
+  document is never written. Physics is refused here because a step *rewrites the numbers
+  the document is made of* — there is nowhere else for the result to go, so there is no
+  version of "run it for a moment" that leaves the document alone. A tween's result is
+  thrown away the instant it stops, so switching ▶ off puts every object back exactly. It
+  is the animation branch's own admission one step further: preview is the moment the
+  canvas deliberately stops mirroring the document, and until now that only cost a sprite
+  the frame it was showing. `tweens.spec.ts` asserts the document byte for byte across a
+  run rather than taking the argument on trust.
+- **The tween is on the node, beside `physics` and `controls`, and it is the first of the
+  three with no top-level rule.** That contrast is the point rather than an omission. An
+  Arcade body and a drive-scheme both read their owner's `x`/`y` as *world* coordinates
+  every step, which is why both are banned inside a container and inside a prefab
+  definition; a tween writes the object's own properties, which are parent-relative for a
+  container child exactly as the document's are. So `tweenOf` takes no `topLevel`
+  argument, nothing is stripped on read, `setNodeTween` reaches through `mapNode`, and a
+  tween in a definition animates in every placement. Beside two neighbours that
+  deliberately search only `scene.children`, using `mapNode` looks like a mistake — which
+  is why the store says so in as many words.
+- **Project-level was the other shape and it is wrong for `AnimationClip`'s own reason,
+  inverted.** A clip is project-level because it is a way of reading one *image*: the
+  frames belong to the bytes, and two sprites drawing one sheet must not disagree about
+  how it is cut. A tween's targets are the object's own numbers — `x: 400` means nothing
+  without the object it is about. The nine-slice insets' call, not the frame grid's.
+- **One tween per node, several properties inside it.** Phaser's config takes many
+  properties under one duration and one ease, which is most of what anybody asks for
+  ("slide and fade"). A second tween on one object means a second *duration*, which is a
+  list — a deliberate hole rather than a thing forgotten.
+- **A new tween's destination is offset from the object, not equal to it.** The first
+  thing anybody does after switching this on is press ▶, and a target equal to the
+  object's current position is a tween that runs perfectly and moves nothing — which is
+  indistinguishable from the feature being broken, and is the failure mode this file warns
+  about more than any other. `addCollider`'s rule: a row arrives already pointing at two
+  objects rather than at nothing. `x` is the offset property because it is the one well
+  defined for every node type — a container and an instance have no width of their own and
+  a sprite has no height — and the default yoyos forever so that it ends where it began,
+  since switching preview off must not look like the editor moved something. Switching on
+  one *further* property seeds it at the object's current value instead, and that is not
+  an inconsistency: by then something is already moving, and the user is naming an axis
+  they are about to type a number into.
+- **`tweenOf` is the only reader**, in the `guidesOf` / `physicsOf` / `controlsOf` /
+  `soundsOf` / `cameraOf` / `tileMapOf` family, answering four questions at once: is there
+  a tween, does it drive anything, are the numbers ones Phaser can be handed, and is the
+  ease one the editor offers. The second costs the whole tween rather than being repaired,
+  which is `soundsOf`'s split: a tween with an empty `to` is a real Phaser tween that
+  animates no property, holds the object for its duration and looks exactly like the
+  feature being broken. A fresh object per call, so `useEditorStore((s) => tweenOf(...))`
+  is React error #185 — the `tileMapOf` trap, ninth time.
+- **An absent target is not a zero, and that is why `to` is a bag of optionals.**
+  `wordWrapWidth: 0`'s sentinel inverted: a wrap width of zero has no second meaning,
+  while `x: 0`, `rotation: 0` and `alpha: 0` are all destinations somebody asks for. A
+  sentinel would have been the one target the user could not express.
+- **Absolute values, never Phaser's `'+=100'`.** Phaser takes either, and a relative
+  offset would be a second way of saying where something ends up. Absolute names a
+  *place*, which is what lets the canvas draw the destination — and drawing it is half of
+  what makes this editable by eye. It is also what keeps a `repeat: -1` tween from walking
+  the object off the scene.
+- **`TWEEN_EASES` is an allowlist, and the argument is not injection.** `str()` already
+  sits between the value and the output. It is that `GetEaseFunction` resolves an unknown
+  name to `Power0` and **says nothing at all** — no warning, no error, a linear tween
+  where the user asked for a bounce. `CSS_GENERICS` and `__BASE` one module over, and the
+  same answer: refuse the value rather than discover it on the far side of an export. It
+  is also what makes the control a `SelectField`, the atlas Frame field's argument.
+- **`TWEEN_PHASER_KEY` is the one builder for what each property is called in Phaser, and
+  five of its six entries are the same word twice.** The sixth is why it exists:
+  `rotation` on a Game Object is **radians** and Phaser's degrees property is `angle`, so
+  a tween emitted against `rotation: 180` is a legal tween of 180 radians. It compiles, it
+  runs, the emitted text looks right, and it is wrong by a factor of 57. Two consumers —
+  the renderer and the exporter — which is `textStyleOf`'s and `bodyShapeOf`'s rule on one
+  of the few things nobody can see until the game is in their hand.
+- **Alpha became one channel across the whole union, and that was a prerequisite rather
+  than tidying.** `applyNode` used to write alpha eight times, once per type, and the
+  shapes were the odd one out: a rectangle carried the document's alpha as its *fill's*
+  alpha while everything else carried it as the object's — and the exporter has always
+  emitted `.setAlpha()` for all of them. Invisible while nothing animates, since a solid
+  fill over the background composites the same either way, and wrong the moment a tween
+  eases one channel while the export eases the other. It is now written once, above the
+  switch, which is also what makes the skip below a single line.
+- **The release is above the writes and the start is below them, and that ordering is the
+  feature.** `releaseTween` lets go of a tween that should no longer hold the object
+  *before* the document's values are restored, so the sync that switches ▶ off puts
+  everything back in that same sync; doing it afterwards strands the object wherever the
+  tween left it until some unrelated store change redraws it, which is the
+  `draggingId`-cleared-after-`endTransaction` trap wearing a new face and looks exactly
+  like "the toggle only applies when I touch something else". `startTween` runs after the
+  writes so a tween created this pass starts from the document's own values. Both halves
+  live inside `applyNode`, where the key, the node and the object are already in hand —
+  which makes the requirement structural rather than remembered, and avoids a second
+  traversal that would be a second place to compute a display key.
+- **The signature carries the start values as well as the tween, and that half is the one
+  a reader will not expect.** Without them a drag under ▶ is invisible: the tween holds
+  `x`, `applyNode` skips the write, and the object never follows the finger. With them a
+  nudge restarts the tween from where the object now sits, while a selection — or a nudge
+  of some *other* object — leaves every signature alone. That second half is
+  `play(key, true)`'s ignoreIfPlaying and `setConfig`'s cache guard for the third time:
+  the scene syncs on every store change, so an unguarded rebuild means nothing ever
+  visibly travels anywhere.
+- **Keyed by display key, never node id.** Two instances of one prefab share their
+  children's node ids and must not share a tween, exactly as they do not share a display
+  object — `containerBounds`' argument. `tweens.spec.ts` places one definition twice and
+  polls that *both* move, which is the one claim a node-id implementation fails while
+  passing every other test in the file.
+- **`persist: true` on every tween, so the scene owns the whole lifetime.** Phaser
+  destroys a completed tween unless told otherwise, which would leave the map holding a
+  corpse that `applyNode`'s skip still believes in. With it, one map answers both "is this
+  running" and "what is it driving".
+- **`remove()`, not `stop()`.** A stopped tween is only flagged for removal and is still in
+  the manager for another update, which would let it write once more over the values being
+  restored on the very line below.
+- **SHUTDOWN needs no removal loop, and that absence is worth a sentence** beside four
+  neighbours that all do bookkeeping — here "nothing to do" and "forgot to do it" read
+  identically. A texture belongs to the game, an animation to the game's manager and a
+  `FontFace` to the *page*, so all three outlive the scene; a Tween belongs to the scene's
+  own `TweenManager`, which the scene destroys with itself. Only the lookups are dropped.
+- **`nodeTweens`, not `tweens`.** `Phaser.Scene` already owns a `tweens` property — its
+  `TweenManager` — and a field of that name would shadow the very thing every line below
+  calls to make one. The easiest way to lose an afternoon in this file.
+- **The ghost is shown exactly when the tween is not**, which is the emitter marker's rule
+  one feature over: one condition, `nodeTweens.has(key)`, so there is one notion of
+  "running" rather than two. Without it the feature has nothing on the canvas at all until
+  ▶ is pressed, since a tween that is not running is invisible by definition.
+- **It is drawn from `localRectOf` and the destination's own local transform, composed
+  with the *parent's* world matrix.** That is what puts a container child's ghost in its
+  parent's frame exactly as the child itself is, and it is what would be wrong if it were
+  built from a world transform. The box comes from `localRectOf` so a tilemap's top-left
+  origin and a container's measured bounds are both already right, expressed in one place.
+- **Dashed, stroked, at depth 996, and in `update()`.** Dashed because this is the one
+  mark on the canvas deliberately the same shape and size as a real object, so the break
+  is what tells them apart at a glance. Stroked rather than filled — the opposite call
+  from the emitter marker and the control arrows, and right for the opposite reason: those
+  are small marks that have to survive antialiasing, this is full-size and sitting over
+  the layout the object is about to travel across. Depth 996 is above every object, since
+  a destination hidden under a tilemap says nothing, and below every other piece of chrome,
+  since everything that says something about the document belongs on top of a second copy
+  of an object. In `update()` with `drawBodies` and `drawCamera` for their reason — the
+  stroke and the dash are screen widths divided by the camera zoom, and a pinch changes
+  the zoom without touching the store — and signature-gated, because on almost every frame
+  none of it has moved.
+- **Alpha is not ghosted.** A ghost drawn at the target alpha would say "this fades" and
+  "this is barely drawn" with the same pixels, and an outline is not where a fade is
+  legible anyway. The panel says it; the canvas does not.
+- **The ghost colour was picked by arithmetic, and the obvious yellow failed.** `#ffe600`
+  is within `findColor`'s tolerance of the fixture `#ffd60a` on *all three* channels — the
+  touch rings' azure trap exactly, one band over, and the warm band is the most crowded
+  one in `tests/`. The check is against every fixture colour in the suite as well as every
+  chrome colour, and the chartreuse that survives clears all forty-four by at least 84.
+- **`hasMotionIn` gained its first *addition***, where the four paragraphs above it are
+  refusals. A tween under ▶ moves an object across the canvas by itself, which is exactly
+  what that button exists to stop — where a body, a sound and a key press all move nothing
+  here. Read through `tweenOf`, so a tween that drives nothing does not put a button on
+  the toolbar that stops nothing.
+- **The export is one statement immediately after the node's own binding, through
+  `ctx.receiver`.** Not the epilogue, where the camera's `startFollow` and the collider
+  rows go: those name bindings the object list has not made yet, and a tween names only
+  the binding on the line above. `receiver` is what makes the same emit correct verbatim
+  in `create()` and in a prefab factory, which a tween on a definition's child needs — and
+  unlike the sound block, which hardcodes `this` because a definition has no scene of its
+  own, a factory genuinely is handed one.
+- **`targets` is the whole `ids` list rather than the first**, so a tilemap of several
+  layers travels as one object instead of sliding its floor out from under its walls.
+- **The config is emitted whole, defaults included; the six properties are not.** The
+  dials are the emitter config's and the physics body's call, because they only mean
+  anything beside each other — a yoyo says nothing without a duration, a repeat delay
+  nothing without a repeat. A target is the opposite and not by the `modifiersFor` rule
+  either: an absent one is not a default, it is a property this tween is *not about*, and
+  printing the object's current value would emit a tween that holds it still.
+- **No gate and no table, which is unlike every feature before it.** The block sits inside
+  `emitNode`'s successful branch, so a project with no tween emits byte for byte what it
+  emitted before with nothing to suppress — and a tween on a node that emitted no object
+  never reaches the line at all, which is why `missingReason` needs no branch for one.
+  `modifiersFor` gains nothing for a mechanical reason rather than a chosen one:
+  `tweens.add` answers with a Tween, not with the object, so it cannot join a chain.
+- **No game-config key and no header note**, the sixth entry in the comment block above
+  `arcadeConfig`. `Scene.tweens` is installed for every scene in every Phaser game there
+  has ever been, as `cameras.main` and `sound` are. Said out loud because a tween is the
+  one thing in that list that visibly moves something, which makes "surely that needed
+  enabling" the natural assumption.
+- **`SCHEMA_VERSION` did not bump — the guides case, seventh time.** `tween` is an
+  optional field on a node and adds no `NodeType`, so a v12 `createDisplayObject` has a
+  case for everything in the file. It rides in on `scenes`, which `parseProject` passes
+  through verbatim, **and on `prefabs`, whose `children` `parsePrefabs` also passes
+  through unvalidated** — so both homes survive an old build's re-save. Still contingent
+  on `parseProject` not reconstructing scenes or prefab children field by field, exactly
+  as physics, cameras, behaviour, touch and Matter are. `tweens.spec.ts` asserts the 12 in
+  the saved artefact.
+- **A tween and a dynamic body both write the object's position, and the tween wins.**
+  That is Phaser's, not this editor's, and it is a thing the panel says rather than a
+  combination refused — the Matter/`drivenIn` lesson, that a silently absent behaviour
+  reads as a broken one.
+- **`publishMeasuredBounds` publishes the *tweened* box while ▶ is on**, so aligning or
+  snapping against an object mid-tween uses where it is drawn this frame. `bounds.ts` is
+  by definition "as the renderer last drew it", so this is consistent rather than wrong —
+  said here because the other reading ("align moved my object oddly") is a bug report
+  waiting to happen.
+- **The hostile project's tweens are deliberately at rest**, every target equal to the
+  value the object already has. That is `NO_MOTION`'s rule one field over: the fixture's
+  job is the *shape* of the emit meeting `TweenBuilderConfig` under `tsc --strict`, and a
+  tween that actually moved would have `export.spec`'s colour assertions racing a fade and
+  a slide that are both correct behaviour and neither of which those assertions are about.
+  All six keys are still emitted and still type-checked, which is the whole job. The
+  positive runtime claim is its own test, built through the UI and polled.
 
 ## Physics
 
@@ -2902,6 +3119,8 @@ tests/
   tilemap.spec.ts           slicing a tileset, painting it, filling and erasing, and
                             layering it: which one is on top, hidden, moved and resized
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
+  tweens.spec.ts            a destination drawn, a preview that runs it, and a
+                            document that never moves
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
   fonts.spec.ts             a font imported, drawn, round-tripped, removed and exported
@@ -3187,6 +3406,25 @@ gives a blank page with 404ing assets — the single most likely deploy failure.
 with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
+
+Tweens shipped in iteration 27 with six deliberate holes. **One tween per node** — a
+second on the same object means a second *duration*, which is a list; that is a pure
+loosening later (`tween?: NodeTween` becomes `tweens?: NodeTween[]` and the emit becomes a
+loop), and what it actually costs is an inspector that has to say which of several is being
+edited. **No chain and no timeline** — one tween after another is a *sequence of events*,
+which is the line iteration 20 drew and this iteration is careful to stay on the near side
+of: `tweens.chain` is exactly the shape a behaviour model would take, and it is one.
+**Nothing starts a tween but the scene starting** — `paused: true` plus a handle is a
+trigger, which is the collider callback's refusal one feature over. **No callbacks** —
+`onComplete` is code in the document, the emit-zone argument and the gradient fill's.
+**Only the six transform-and-alpha properties**, because a seventh would be the first that
+is not on every node: a tint, a tile sprite's offset and a text object's font size are all
+per-type, so `to` would stop being one shape across the union and `TWEEN_PHASER_KEY` would
+need a per-type answer. And **no per-property duration or ease** — Phaser takes
+`x: { value, duration, ease }`, which is a timeline written sideways and the first hole
+again. Note what is *not* on this list: relative targets are refused rather than deferred
+(see Tweens above), and `hold` is absent for `useAdvancedWrap`'s reason — it is visible
+only on a tween that already yoyos and costs more to explain than it gives.
 
 Web fonts shipped in iteration 23 with four deliberate holes. **No `descriptors`** — the
 loader takes `{ weight, style }` and would let a real bold face be registered under the

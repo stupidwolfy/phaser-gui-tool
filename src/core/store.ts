@@ -31,6 +31,7 @@ import {
   containsNode,
   controlsOf,
   defaultControls,
+  defaultTween,
   findAsset,
   findNode,
   findParent,
@@ -46,6 +47,7 @@ import {
   prefabChildrenOf,
   fontStackOf,
   soundsOf,
+  tweenOf,
   worldTransformOf,
   type AnimationClip,
   type AudioAsset,
@@ -57,6 +59,8 @@ import {
   MAX_TILEMAP_SIDE,
   tileLayerOf,
   tileMapOf,
+  type NodeTween,
+  type TweenProperty,
   type TileLayer,
   type TilemapLayerDoc,
   type NodeControls,
@@ -573,6 +577,35 @@ export interface EditorState {
    * no second place to remember the guard.
    */
   setNodeControls: (id: string, patch: Partial<NodeControls> | null) => void;
+
+  // -- tweens ----------------------------------------------------------------
+  /**
+   * Adds, edits or removes a node's tween. `null` removes it.
+   *
+   * It goes through `mapNode` rather than reaching into `scene.children`, and
+   * that difference from `setNodePhysics` and `setNodeControls` is the whole of
+   * "a tween has no top-level rule". Those two search that array *because* only
+   * a top-level node may carry a body or be driven — a velocity and an Arcade
+   * body both read world coordinates. A tween writes the object's own
+   * properties, which a container child has as surely as a scene child does, so
+   * copying their shape here would be a limit nobody argued for.
+   *
+   * A patch merges over whatever the node already has, so the inspector's
+   * fields each send one key. `to` is merged one level deeper by
+   * `setTweenTarget`, since a `Partial<NodeTween>` naming `to` would replace the
+   * whole destination rather than one of its properties.
+   */
+  setNodeTween: (id: string, patch: Partial<NodeTween> | null) => void;
+  /**
+   * Sets one of the six destination properties, or clears it with `null`.
+   *
+   * Its sibling rather than a fifth argument to `setNodeTween`, which is
+   * `editTilemapLayer`'s relationship to `editTilemapProps` and for its reason:
+   * a patch merged at the top level cannot say "leave the other five alone".
+   * Clearing is a `delete` rather than a zero, because `tweenOf` reads an absent
+   * property as one this tween is not about and a zero as a destination.
+   */
+  setTweenTarget: (id: string, property: TweenProperty, value: number | null) => void;
   /**
    * Adds a collider row between two nodes, or edits or removes one.
    *
@@ -2427,6 +2460,60 @@ export const useEditorStore = create<EditorState>((set, get) => {
         return { ...scene, children };
       }),
 
+    setNodeTween: (id, patch) =>
+      editScene((scene) => {
+        // Found first, then mapped — `detachInstance`'s shape, and here for the
+        // "nothing happened, no undo step" contract rather than for the node
+        // itself: `mapNode` allocates a new array whether or not it finds
+        // anything, so without this an id that names nothing would still push a
+        // history entry.
+        const node = findNode(scene.children, id);
+        if (!node) return scene;
+        if (patch === null && !node.tween) return scene;
+
+        // `mapNode`, not `scene.children` — see the declaration. A tween on a
+        // node inside a group is a perfectly ordinary thing to want.
+        return {
+          ...scene,
+          children: mapNode(scene.children, id, (current) => {
+            if (patch === null) {
+              const stripped = { ...current } as GameObjectNode;
+              delete stripped.tween;
+              return stripped;
+            }
+            const base = tweenOf(current) ?? defaultTween(current);
+            return { ...current, tween: { ...base, ...patch } } as GameObjectNode;
+          }),
+        };
+      }),
+
+    setTweenTarget: (id, property, value) =>
+      editScene((scene) => {
+        const node = findNode(scene.children, id);
+        if (!node) return scene;
+
+        return {
+          ...scene,
+          children: mapNode(scene.children, id, (current) => {
+            const base = tweenOf(current) ?? defaultTween(current);
+            const to = { ...base.to };
+            if (value === null) delete to[property];
+            else to[property] = value;
+            // Every property cleared is a tween that drives nothing, which
+            // `tweenOf` reads as absent — so the document says so too rather
+            // than holding a tween the reader will refuse. The alternative is a
+            // node whose stored tween and whose drawn state disagree, which is
+            // the one thing a single reader exists to prevent.
+            if (Object.keys(to).length === 0) {
+              const stripped = { ...current } as GameObjectNode;
+              delete stripped.tween;
+              return stripped;
+            }
+            return { ...current, tween: { ...base, to } } as GameObjectNode;
+          }),
+        };
+      }),
+
     addCollider: (aId, bId) =>
       editScene((scene) => ({
         ...scene,
@@ -2765,8 +2852,8 @@ export function countFontUses(project: Project, family: string): number {
 }
 
 /**
- * Whether anything in the project moves by itself — an animation clip, or a
- * particle emitter anywhere in it.
+ * Whether anything in the project moves by itself — an animation clip, a
+ * particle emitter, or a tween anywhere in it.
  *
  * What decides whether the toolbar shows its preview toggle at all. It walks
  * the prefab definitions as well as the scenes, because an emitter that exists
@@ -2788,6 +2875,11 @@ export function countFontUses(project: Project, family: string): number {
  * them makes no noise there is anything to stop. Auditioning one is a press on
  * its own row, which starts and ends inside the same gesture.
  *
+ * A tween is the one *addition* among all of this, and it is here rather than
+ * in the refusals below because it is the only one of them that moves an object
+ * across the canvas on its own. The three that follow all describe things that
+ * move nothing here at all.
+ *
  * And blind to controls, keyboard and on-screen alike — the third refusal, and
  * the same one twice. A driven object does not move here because nothing here
  * simulates a body, and the buttons `touchZonesOf` puts on the canvas are
@@ -2797,8 +2889,16 @@ export function countFontUses(project: Project, family: string): number {
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;
 
+  // A tween is the first *addition* this function has taken since the emitters,
+  // where the four paragraphs above are all refusals — and it is the one thing
+  // since them that plainly qualifies: under ▶ a tween moves an object across
+  // the canvas by itself, which is exactly what the button exists to stop.
+  // Read through `tweenOf` rather than testing `node.tween`, so a tween that
+  // drives nothing does not put a button on the toolbar that stops nothing.
   const walk = (nodes: GameObjectNode[]): boolean =>
-    nodes.some((node) => node.type === 'particles' || walk(node.children));
+    nodes.some(
+      (node) => node.type === 'particles' || tweenOf(node) !== null || walk(node.children),
+    );
 
   return (
     project.scenes.some((scene) => walk(scene.children)) ||

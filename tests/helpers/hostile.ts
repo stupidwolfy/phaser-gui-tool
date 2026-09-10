@@ -215,6 +215,24 @@ export function hostileProject(): Project {
               // dropping it is asserted rather than assumed.
               touch: true,
             },
+            // A tween in a *definition*, which is the only thing that puts
+            // `scene.tweens.add` through both toolchains — the one line whose
+            // receiver differs between a Scene method and a factory body, and
+            // therefore the only place `EmitContext.receiver` is under test for
+            // this feature. Unlike the body and the controls above, this one is
+            // legal here and the export must emit it: a tween writes the
+            // object's own local numbers, which a container child has.
+            tween: {
+              // At rest, for the reason the rectangle's is — `export.spec`
+              // measures this child's colour to prove the factory ran.
+              to: { x: 0, alpha: 1 },
+              duration: 900,
+              delay: 50,
+              ease: 'Quad.easeInOut' as const,
+              yoyo: true,
+              repeat: -1,
+              repeatDelay: 120,
+            },
             name: breakout,
             type: 'rectangle',
             visible: true,
@@ -343,6 +361,32 @@ export function hostileProject(): Project {
             // sprite's static body covers the other branch, at 7 degrees.
             transform: { x: 480, y: 270, rotation: 33.5, scaleX: 1, scaleY: 1 },
             props: { width: 200, height: 120, fill: '#4f8cff', alpha: 1 },
+            // A tween driving all six properties with a non-default value in
+            // every dial, and here for the emitter config's reason rather than
+            // for escaping: this is the only place the emitted config literal's
+            // *shape* meets `Phaser.Types.Tweens.TweenBuilderConfig` under
+            // `tsc --strict`, which is where a key Phaser renamed between
+            // versions fails and nowhere else. The ease is an allowlisted name
+            // rather than a hostile string on purpose — `tweenOf` refuses
+            // anything else, so a hostile one could never reach the output and
+            // asserting on it would be asserting on the parser instead.
+            // Every target is the value the object already has, which is
+            // `NO_MOTION`'s rule one field over: the point of this fixture is
+            // the *shape* of the emit, and an export test that measures this
+            // rectangle's colour would otherwise be racing a tween that starts
+            // the instant the game boots — a fade to 0.2 and a slide across the
+            // scene, both of which are correct behaviour and neither of which
+            // that assertion is about. All six keys are still emitted and still
+            // meet the config type, which is the whole job.
+            tween: {
+              to: { x: 480, y: 270, rotation: 33.5, scaleX: 1, scaleY: 1, alpha: 1 },
+              duration: 1250,
+              delay: 75,
+              ease: 'Back.easeInOut' as const,
+              yoyo: true,
+              repeat: 2,
+              repeatDelay: 40,
+            },
             // A dynamic body with a non-default value in every field. Not here
             // for escaping — a body carries no free user text — but because
             // `export-toolchain.spec` compiles the emitted `.ts` under
