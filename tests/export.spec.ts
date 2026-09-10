@@ -20,6 +20,39 @@ const NESTED_FILL = '#22d3ee';
 /** The fill of the rectangle inside the hostile project's prefab. */
 const PREFAB_FILL = '#7ee787';
 
+/**
+ * Polls a reading until it satisfies a claim, and answers with the last one.
+ *
+ * The instrument for anything a *simulation* has to reach, and the reason is
+ * this file's oldest recorded trap wearing a new face: what a running game is
+ * doing at one wall-clock instant is a race with the frame rate. A physics page
+ * under two Playwright workers and two browsers steps at a different effective
+ * rate from one running alone, so a fixed `waitForTimeout` and a single
+ * screenshot asserts where the ball *happened to be*, not where it ends up. The
+ * ramp test below went green twice standalone and red twice in a full run, on a
+ * different assertion each time, which is the shape of a wrong instrument
+ * rather than a flaky feature.
+ *
+ * Polling turns it back into the claim the suite is allowed to make — "it
+ * reaches this state", a statement about time passing — and it costs nothing on
+ * a correct implementation, which reaches it on the first or second read. A
+ * wrong one never reaches it and fails on the timeout with the last reading in
+ * the message.
+ */
+async function reaches<T>(
+  read: () => Promise<T>,
+  claim: (value: T) => boolean,
+  timeout = 8000,
+): Promise<T> {
+  const started = Date.now();
+  let last = await read();
+  while (!claim(last) && Date.now() - started < timeout) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    last = await read();
+  }
+  return last;
+}
+
 interface Run {
   page: Page;
   errors: string[];
@@ -713,19 +746,110 @@ test('a project with one world of each engine emits both, and neither leaks', as
   // Arcade branch's "a StaticBody has nothing to chain" one engine over.
   expect(exported.contents.match(/matter\.body\.setMass\(/g) ?? []).toHaveLength(1);
 
-  // And the two things a Matter scene must *not* emit. A collider row is
-  // Arcade's `physics.add.collider`, and the scene that started Matter has no
-  // `this.physics` for it to be called on; the fixture holds a row on purpose
-  // so that dropping it is asserted rather than assumed. The driven node is the
-  // same claim for controls: the built-in behaviour writes to an Arcade body
-  // and gates its jump on `blocked.down`, so `drivenIn` refuses it — which
-  // means this whole file emits exactly one `update()`, the Arcade scene's.
-  // Three, which is exactly what the Arcade scene's seven rows survive down to.
-  // The Matter scene's row would be a fourth, so the count is the assertion.
+  // The one thing a Matter scene must *not* emit: a collider row is Arcade's
+  // `physics.add.collider`, and the scene that started Matter has no
+  // `this.physics` for it to be called on, so a row there would throw inside
+  // `create()` before anything was drawn. The fixture holds one on purpose so
+  // that dropping it is asserted rather than assumed. Three is exactly what the
+  // Arcade scene's seven rows survive down to; the Matter scene's would be a
+  // fourth, so the count is the assertion.
   expect(
     exported.contents.match(/physics\.add\.collider\(/g) ?? [],
   ).toHaveLength(3);
-  expect(exported.contents.match(/^  update\(\)/gm) ?? []).toHaveLength(1);
+
+  // And controls, which each scene drives its own way. Two `update()` methods,
+  // one per scene with something driven, and they share no code at all: Arcade
+  // writes `setVelocityX` onto its body and reads `blocked.down`, Matter sets
+  // both axes at once in its own per-step units and reads the grounded tracker.
+  // A `setVelocityX` inside the Matter scene would compile and throw.
+  expect(exported.contents.match(/^  update\(\)/gm) ?? []).toHaveLength(2);
+  expect(exported.contents.match(/^function matterGround\(/gm) ?? []).toHaveLength(1);
+  expect(exported.contents).toMatch(/this\.matter\.body\.setVelocity\(\w+, \{ x: \w+, y: \w+ \}\)/);
+  expect(exported.contents).toContain('blocked.down');
+});
+
+test('a Matter platformer jumps off what it is standing on, by thumb', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // The bug this closes, end to end: switching a scene to Matter used to leave
+  // the Controls panel still offering "Player controls" and "On-screen buttons",
+  // accept both, and then draw nothing and export nothing — a feature that is
+  // silently absent, which reads exactly like one that is broken.
+  //
+  // It is also the only place the grounded tracker can be checked at all. The
+  // sign of Matter's collision normal is the whole of that helper, and it is
+  // the opposite of the obvious guess: `Collision.collides` points the normal
+  // from bodyB towards bodyA. Get it backwards and the jump works against a
+  // ceiling and nowhere else — which compiles, runs, emits identical text, and
+  // fails only here.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Ground');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 480);
+  await editor.setField('Width', 900);
+  await editor.setField('Height', 40);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body', 'Static — never moves');
+  await editor.deselect();
+
+  await editor.setGravity(0, 900);
+  await editor.setSceneEngine('matter');
+
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Hopper');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 380);
+  await editor.setField('Width', 60);
+  await editor.setField('Height', 60);
+  await editor.setPhysics(true);
+  await editor.setControls(true);
+  await editor.setField('Jump speed', 700);
+  await editor.setTouchControls(true);
+
+  const exported = await editor.exportCode('html');
+  // The buttons are emitted at all, which is the reported half of the bug.
+  expect(exported.contents).toContain('createTouchControls(this, [');
+  expect(exported.contents).toContain('matterGround(this,');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('matter-jump'), exported.contents);
+
+  // Long enough to have fallen the 70 units onto the floor and settled, so what
+  // the press below acts on is an object that is genuinely standing on
+  // something rather than one still in the air.
+  await run.page.waitForTimeout(900);
+  const resting = await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL);
+
+  // The jump button, which is the mirror of the pad: on a 960x540 scene the
+  // radius is 40.5 and the margin is one radius, so it sits a radius in from
+  // the right edge and level with the pad's centre.
+  const box = await run.page.locator('canvas').boundingBox();
+  if (!box) throw new Error('the exported page has no canvas');
+  const scale = box.width / 960;
+  const target = { x: box.x + (960 - 81) * scale, y: box.y + 378 * scale };
+
+  await run.page.mouse.move(target.x, target.y);
+  await run.page.mouse.down();
+  // Polled rather than snapshotted, and the button stays held throughout. A
+  // jump is the one control whose effect undoes itself, so a single shot has to
+  // be timed against a simulation whose rate depends on the machine — while a
+  // held button jumps again on every landing, so "it got this high at some
+  // point" is a claim that only a game which never jumps can fail.
+  const rising = await reaches(
+    async () =>
+      findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL),
+    (at) => at.count > 50 && at.y < resting.y - 40,
+  );
+  await run.page.mouse.up();
+
+  expect(rising.count).toBeGreaterThan(50);
+  // Up the screen is a *smaller* y. Without the tracker, or with the normal's
+  // sign inverted, the press does nothing and this is zero.
+  expect(rising.y).toBeLessThan(resting.y - 40);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
 });
 
 test('a Matter floor collides at the angle it is drawn, not at the box round it', async ({
@@ -736,14 +860,19 @@ test('a Matter floor collides at the angle it is drawn, not at the box round it'
   // made: the editor never simulates, so "the body is really turned" is a
   // statement about a running game.
   //
-  // The fixture is shaped so that the two engines give opposite answers. The
-  // ramp is drawn 400x30 and turned 30 degrees; the faller is dropped over its
-  // *upper* end, well inside the axis-aligned box that holds the ramp but well
-  // clear of the turned bar itself at that x. Under Arcade the faller lands on
-  // the invisible box and stops high; under Matter it passes the empty air
-  // where no polygon is and carries on down to the world bounds. Asserting the
-  // *pass* rather than a catch is deliberate — a catch is what a wrong box
-  // gives you too.
+  // The first version of this fixture dropped the ball through the *empty air*
+  // inside the ramp's bounding box, and that was a mistake worth recording. For
+  // a long thin bar there is almost no such air: a 400x30 bar turned 30 degrees
+  // spans x 306.8 to 653.2 while its bounding box spans 299.3 to 660.7, so the
+  // gap is a seven-unit sliver at each end. A 40-wide ball aimed at it grazed
+  // past on two runs and landed on the third. It was a coin flip, not a test.
+  //
+  // What actually separates the two engines is *where the ball comes to rest*,
+  // and dead centre is where they disagree most. An axis-aligned body is the
+  // whole 361x226 box, whose top edge is y=307 — so Arcade would hold the ball
+  // up at a centre of y=287, a hundred units above the bar it is drawn as. The
+  // turned polygon catches it on its actual surface near y=400 and then lets it
+  // slide, which is lower still.
   await editor.clearScene();
   await editor.addObject('Rectangle');
   await editor.setField('Name', 'Ramp');
@@ -754,17 +883,18 @@ test('a Matter floor collides at the angle it is drawn, not at the box round it'
   await editor.setField('Rotation°', 30);
   await editor.setPhysics(true);
   await editor.setChoice('Body', 'Static — never moves');
+  await editor.deselect();
+
+  await editor.setGravity(0, 900);
+  await editor.setSceneEngine('matter');
 
   await editor.addObject('Ellipse');
   await editor.setField('Name', 'Drop');
-  await editor.setField('X', 300);
+  await editor.setField('X', 480);
   await editor.setField('Y', 60);
   await editor.setField('Width', 40);
   await editor.setField('Height', 40);
   await editor.setPhysics(true);
-
-  await editor.setGravity(0, 900);
-  await editor.setSceneEngine('matter');
 
   const exported = await editor.exportCode('html');
   // No Arcade anywhere in a file whose only scene runs Matter: no game-config
@@ -777,17 +907,39 @@ test('a Matter floor collides at the angle it is drawn, not at the box round it'
   const run = await runExportedPage(page.context(), testInfo.outputPath('matter'), exported.contents);
 
   const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL);
-  await run.page.waitForTimeout(1500);
-  const shot = await run.page.locator('canvas').screenshot();
-  const dropped = await findColor(run.page, shot, ELLIPSE_FILL);
-  const ramp = await findColor(run.page, shot, RECT_FILL);
+
+  // The page scales the 960x540 scene into its canvas, so a scene coordinate is
+  // a proportion of the canvas box — the same conversion the button tests make.
+  const box = await run.page.locator('canvas').boundingBox();
+  if (!box) throw new Error('the exported page has no canvas');
+  const scale = box.width / 960;
+  const heldByABox = box.y + 287 * scale;
+
+  // Both halves at once, polled: the ball has to get *below* where a bounding
+  // box would have held it and *downhill* of where it started, and it reaches
+  // both within a stride of each other. Waiting a fixed time and reading once
+  // asserts where it happened to be on the machine the test ran on.
+  const dropped = await reaches(
+    async () =>
+      findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL),
+    (at) =>
+      at.count > 50 &&
+      at.y > heldByABox + 40 * scale &&
+      at.x > before.x + 20 * scale,
+  );
 
   expect(dropped.count).toBeGreaterThan(50);
   expect(dropped.y).toBeGreaterThan(before.y + 20);
-  // Past the ramp's own centroid, which is what an axis-aligned body would
-  // never have allowed: the box that holds this ramp reaches up to y≈310 at
-  // this x, and the faller comes to rest on the floor of the world instead.
-  expect(dropped.y).toBeGreaterThan(ramp.y);
+  // Below where the bounding box would have stopped it, which says the body is
+  // a polygon rather than a box.
+  expect(dropped.y).toBeGreaterThan(heldByABox + 40 * scale);
+  // And downhill, which is the half that says the polygon is *turned* rather
+  // than merely a polygon. A body left upright — the shape the helper builds
+  // before it applies the angle — is a flat 400x30 ledge that catches the ball
+  // at almost the same height and then holds it dead still, so the reading
+  // above cannot tell the two apart and this one can. The bar runs from its
+  // upper-left end to its lower-right, so downhill is to the right.
+  expect(dropped.x).toBeGreaterThan(before.x + 20 * scale);
   expect(run.errors).toEqual([]);
 
   await run.close();
@@ -951,14 +1103,21 @@ test('a hostile project emits its solid tiles and only the collisions it can', a
   expect(calls).toHaveLength(4);
   expect(exported.contents).toContain('// A collider names an object that could not be added.');
 
-  // The driven node is the hostilely named one, so its `this.<field>` has been
+  // Both driven nodes are hostilely named, so each `this.<field>` has been
   // through `toIdentifier` — and the nested and in-prefab controls the fixture
-  // also holds are stripped on read, so there is exactly one driven object.
+  // also holds are stripped on read, so there are exactly two: the Arcade
+  // scene's and the Matter scene's.
   const fields = exported.contents.match(/^\s+private \w+: Phaser\.GameObjects\.GameObject/gm) ?? [];
-  expect(fields).toHaveLength(1);
-  // Only the scene that has one gets an `update()`; the second scene has no
-  // driven object and so no method at all.
-  expect(exported.contents.match(/update\(\): void \{/g) ?? []).toHaveLength(1);
+  expect(fields).toHaveLength(2);
+  // A Matter platformer parks its grounded tracker beside the object, because
+  // `blocked.down` is a flag it has not got. The Arcade scene emits no such
+  // field, which is what keeps its export byte for byte what it always was.
+  expect(
+    exported.contents.match(/^\s+private \w+: \{ at: number \}/gm) ?? [],
+  ).toHaveLength(1);
+  // One `update()` per scene that drives something, and the third scene has
+  // nothing driven and so no method at all.
+  expect(exported.contents.match(/update\(\): void \{/g) ?? []).toHaveLength(2);
 });
 
 test('sounds are tabled once, loaded per scene, and named without collision', async ({

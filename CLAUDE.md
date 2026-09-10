@@ -1744,15 +1744,40 @@ closes iteration 16's fourth deliberate hole, and it closed for one reason: the 
   version.** The walls go up when *anything* in the scene asks to be stopped by them, which
   is the closest thing Matter can say to what the checkbox says. Worth knowing before
   someone reads the emit and thinks a body was missed.
-- **`drivenIn` is the third scene-level reader, and a Matter scene drives nothing.** The
-  built-in behaviour *is* a velocity written onto an Arcade body every frame, and a
-  platformer's jump is gated on `blocked.down` — Arcade's own flag for "there is something
-  under me this step". Matter has no such flag: saying what is underneath a polygon that
-  turns means reading collision normals, which is a behaviour model rather than a field.
-  Answered in one reader for `collidersOf`'s reason, so the exporter, the canvas arrows and
-  `touchZonesOf` fall silent together. Emitting the keyboard block anyway would be worse
-  than useless — `update()` would hand a Matter object to `arcadeBody`, which throws by
-  design.
+- **`drivenIn` is the third scene-level reader, and it briefly refused a Matter scene.
+  That was a bug, and it is worth keeping the reasoning beside the correction.** The
+  argument was that the behaviour *is* a velocity written onto an Arcade body every frame,
+  and that a platformer's jump was gated on `blocked.down` — Arcade's own flag for "there
+  is something under me this step", which Matter has not got. Every clause of that is true
+  and the conclusion still did not follow. What it shipped was a Controls panel that went
+  on offering "Player controls" and "On-screen buttons" in a Matter scene, accepted both,
+  and then drew no arrows, no rings, and emitted no `update()` — **with no sentence
+  anywhere saying why**. That is this file's own repeated failure mode arriving from the
+  inside: a feature that is silently absent reads exactly like one that is broken, and the
+  first person to switch a scene over reported it as one.
+- **`update()` has two shapes, and they share no code.** Arcade writes `setVelocityX` and
+  leaves the other axis alone; `Body.setVelocity` sets *both*, so the Matter branch reads
+  `body.velocity.y` back and writes it again — a zero there holds the object in mid-air and
+  makes gravity look broken. Speeds divide by 60 for the reason the body's dials do:
+  Matter's units are per step and the document's are per second, converted at the emit so
+  there is one number and not two.
+- **`matterGround` is Matter's answer to `blocked.down`, and it is a helper rather than the
+  behaviour model that was feared.** Matter cannot have that flag — a polygon that turns is
+  touched at an angle, and the only thing that says *where* is the collision normal — but
+  reading one is twelve lines. Two facts about it are wrong if guessed, and both were
+  checked against `Collision.collides` rather than remembered: the normal points **from
+  bodyB towards bodyA** (the opposite of what the comment beside it in Matter's source
+  suggests), so the other body is underneath when the normal aims *up* out of ours —
+  negated when we are bodyA, as-is when we are bodyB. Backwards, the jump works against a
+  ceiling and nowhere else: it compiles, it runs, the emitted text is identical, and
+  **only a test that presses the button can see it**. It records a *timestamp* rather than
+  a boolean because `collisionactive` fires on the physics step and `update()` runs on the
+  frame, and the two are not one to one — a flag set on one and cleared on the other
+  flickers. Emitted only for a Matter scene that has something that jumps.
+- **`matterBodyOf` was split out of `matterBody` rather than written twice**, because
+  `update()` needs the same narrowing every frame. That is what lets `create()`'s epilogue
+  stay `this.<field> = <object>;` under both engines — identical text, one less thing that
+  can disagree.
 - **The canvas still never simulates, under either engine**, and nothing here is on the ▶
   toggle. `hasMotionIn` is untouched and records its fourth refusal for its first reason: a
   physics step does not merely animate an object, it rewrites the numbers the document is
@@ -2883,7 +2908,8 @@ tests/
   physics.spec.ts           a body drawn, never simulated, sized to hold what it is
                             turned with, and refused inside a group
   matter.spec.ts            a scene switched to Matter: a body that turns, dials that
-                            replace Arcade's, and both sets kept through the switch
+                            replace Arcade's, both sets kept through the switch, and
+                            controls that survive the engine change
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
