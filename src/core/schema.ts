@@ -1309,6 +1309,24 @@ export type GameObjectNode = {
      */
     controls?: NodeControls;
     /**
+     * A tween driving this object's own numbers, or absent for everything that
+     * does not move by itself.
+     *
+     * Beside `physics` and `controls` rather than in `props` for their reason:
+     * it is not a per-type setting, and every entry of `NodePropsByType` would
+     * otherwise carry the same seven fields. Optional for the reason `guides`
+     * is, and read through `tweenOf`, never directly.
+     *
+     * Unlike those two neighbours there is **no top-level rule** here, and the
+     * contrast is the point rather than an omission. A body and a drive-scheme
+     * are banned inside a container because both read their owner's `x`/`y` as
+     * *world* coordinates every step; a tween writes the object's own
+     * properties, which are parent-relative for a container child exactly as
+     * the document's are. So `tweenOf` takes no `topLevel` argument, nothing is
+     * stripped on read, and `setNodeTween` reaches a node at any depth.
+     */
+    tween?: NodeTween;
+    /**
      * Nested nodes, positioned relative to this one. Only a `container`
      * renders them, but the array is present on every node so that traversal,
      * cloning and the parser never have to branch on the type.
@@ -1672,6 +1690,247 @@ export function defaultControls(): NodeControls {
     speed: DEFAULT_SPEED,
     jump: DEFAULT_JUMP,
     touch: false,
+  };
+}
+
+/**
+ * The eases the editor offers, which are exact keys of Phaser's own `EaseMap`.
+ *
+ * An allowlist rather than free text, and this is stricter than the escaping
+ * needs to be. `str()` already sits between this string and the output, so the
+ * argument is not injection — it is that `GetEaseFunction` resolves an unknown
+ * name to `Power0` and **says nothing at all**: no warning, no error, just a
+ * linear tween where the user asked for a bounce. That is the silent-fallback
+ * family this file keeps running into, `CSS_GENERICS` and `__BASE` one module
+ * over, and the answer is the same — refuse the value rather than discover it
+ * on the far side of an export.
+ *
+ * It is also what makes the inspector's control a `SelectField`: an ease is a
+ * name with no near neighbour, so typed by hand it is wrong by one character
+ * and silently does something else. The atlas Frame field's argument exactly.
+ *
+ * Phaser's map holds five `PowerN` aliases and eleven bare family names that
+ * all mean `.easeOut`; none of them is here, because two names for one curve is
+ * a thing to explain in a dropdown rather than a choice anybody wants.
+ */
+export const TWEEN_EASES = [
+  'Linear',
+  'Sine.easeIn',
+  'Sine.easeOut',
+  'Sine.easeInOut',
+  'Quad.easeIn',
+  'Quad.easeOut',
+  'Quad.easeInOut',
+  'Cubic.easeIn',
+  'Cubic.easeOut',
+  'Cubic.easeInOut',
+  'Expo.easeIn',
+  'Expo.easeOut',
+  'Expo.easeInOut',
+  'Back.easeIn',
+  'Back.easeOut',
+  'Back.easeInOut',
+  'Bounce.easeIn',
+  'Bounce.easeOut',
+  'Bounce.easeInOut',
+  'Elastic.easeIn',
+  'Elastic.easeOut',
+  'Elastic.easeInOut',
+] as const;
+
+export type TweenEase = (typeof TWEEN_EASES)[number];
+
+/**
+ * The properties a tween may drive, and what each one ends at.
+ *
+ * A bag of optionals rather than six numbers, because **an absent property is
+ * not a zero**: `x: undefined` says "this tween is not about x" and `x: 0` says
+ * "end at the left edge". That is `wordWrapWidth: 0`'s sentinel inverted — a
+ * wrap width of zero has no second meaning, while every one of these six has a
+ * perfectly ordinary zero.
+ *
+ * The values are **absolute** and in the units the inspector already shows, not
+ * Phaser's `'+=100'` relative strings. Phaser takes either; a relative offset
+ * would be a second way of saying where something ends up, and absolute is the
+ * one that names a *place* — which is what lets the canvas draw the
+ * destination, and drawing it is half of what makes this editable by eye.
+ *
+ * `rotation` keeps the document's name and the document's units and becomes
+ * Phaser's `angle` at the emit, for `Transform.rotation`'s reason: degrees are
+ * what the inspector shows, and a second unit in a second place is how the two
+ * come to disagree.
+ */
+export interface TweenTargets {
+  x?: number;
+  y?: number;
+  /** Degrees, emitted as Phaser's `angle`. */
+  rotation?: number;
+  scaleX?: number;
+  scaleY?: number;
+  alpha?: number;
+}
+
+/** The property names a tween may drive, for the inspector and the emit alike. */
+export const TWEEN_PROPERTIES = [
+  'x',
+  'y',
+  'rotation',
+  'scaleX',
+  'scaleY',
+  'alpha',
+] as const;
+
+export type TweenProperty = (typeof TWEEN_PROPERTIES)[number];
+
+/**
+ * What each of those properties is called on a Phaser Game Object.
+ *
+ * One builder with two consumers — `EditorScene`'s tween and the exporter's
+ * config literal — which is `textStyleOf`'s and `bodyShapeOf`'s rule on one of
+ * the few things here nobody can see until the game is in their hand. Five of
+ * the six are the same word twice and look like a table not worth writing; the
+ * sixth is the whole reason it exists. `rotation` on a Game Object is
+ * **radians**, and Phaser's degrees property is `angle` — so a tween emitted
+ * against `rotation: 180` is a perfectly legal tween of 180 radians. It
+ * compiles, it runs, it is wrong by a factor of 57, and nothing but a person
+ * looking at the game would ever say so.
+ */
+export const TWEEN_PHASER_KEY: Readonly<Record<TweenProperty, string>> = {
+  x: 'x',
+  y: 'y',
+  rotation: 'angle',
+  scaleX: 'scaleX',
+  scaleY: 'scaleY',
+  alpha: 'alpha',
+};
+
+/**
+ * A tween attached to one object: where its numbers end up, and how they get
+ * there.
+ *
+ * The fields are Phaser's own under Phaser's names, so `tweens.add` in the
+ * exported code is this object with `to` spread into it — the rule
+ * `AnimationClip` and the emitter config already follow.
+ *
+ * **One tween per node, several properties inside it.** Phaser's config takes
+ * many properties under one duration and one ease, which is most of what
+ * anybody asks for ("slide and fade"). A second tween on one object means a
+ * second *duration*, which is a list — and a list is the deliberate hole here
+ * rather than a thing that was forgotten.
+ */
+export interface NodeTween {
+  to: TweenTargets;
+  /** Milliseconds. */
+  duration: number;
+  /** Milliseconds before it starts. */
+  delay: number;
+  ease: TweenEase;
+  /** Runs back to where it started before repeating. */
+  yoyo: boolean;
+  /** Phaser's own: -1 repeats forever, 0 plays once. */
+  repeat: number;
+  /** Milliseconds paused before each repeat. */
+  repeatDelay: number;
+}
+
+const DEFAULT_TWEEN_DURATION = 1000;
+/**
+ * How far a brand-new tween's destination sits from the object.
+ *
+ * Far enough to be visibly somewhere else at either project's zoom, and small
+ * enough that it is still on screen for an object anywhere but hard against the
+ * right edge.
+ */
+const DEFAULT_TWEEN_TRAVEL = 100;
+
+/**
+ * The node's tween, defaulted and validated in one place.
+ *
+ * The `physicsOf` / `controlsOf` / `guidesOf` / `soundsOf` / `cameraOf` /
+ * `tileMapOf` family, and it answers four questions at once: is there a tween
+ * here, does it drive anything, are the numbers ones Phaser can be handed, and
+ * is the ease one the editor offers. Any one of them answered somewhere else is
+ * a canvas and an export that disagree about how an object moves — which is the
+ * one kind of failure a user cannot see until the game is in their hand.
+ *
+ * The second question is the one that costs the whole tween rather than being
+ * repaired, and it is `soundsOf`'s split: a tween with nothing in `to` is a
+ * real Phaser tween that animates no property, holds the object for its
+ * duration and looks exactly like the feature being broken. There is no
+ * placeholder state for it to be in, so it reads as **absent**.
+ *
+ * A `duration` of 0 is repaired rather than passed on, which is `followLerp`'s
+ * case: Phaser completes such a tween on its first frame, so it is a tween that
+ * says it moves something and then does not.
+ *
+ * A fresh object every call, so `useEditorStore((s) => tweenOf(...))` is an
+ * infinite render loop (React error #185) — the `tileMapOf` trap, ninth time.
+ * Select the node and derive outside the selector.
+ */
+export function tweenOf(node: GameObjectNode): NodeTween | null {
+  const raw = node.tween;
+  if (typeof raw !== 'object' || raw === null) return null;
+
+  const source = raw.to;
+  if (typeof source !== 'object' || source === null) return null;
+
+  const to: TweenTargets = {};
+  for (const key of TWEEN_PROPERTIES) {
+    const value = source[key];
+    // A property is either a finite number or it is not part of this tween.
+    // Repairing a NaN to 0 would invent a destination nobody named, which for a
+    // position is a jump to the origin.
+    if (typeof value === 'number' && Number.isFinite(value)) to[key] = value;
+  }
+  if (Object.keys(to).length === 0) return null;
+
+  const numberOr = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+  return {
+    to,
+    // At least one millisecond, for the reason above: zero is a tween that
+    // completes before it has drawn a frame.
+    duration: Math.max(1, numberOr(raw.duration, DEFAULT_TWEEN_DURATION)),
+    delay: Math.max(0, numberOr(raw.delay, 0)),
+    ease: TWEEN_EASES.includes(raw.ease as TweenEase) ? (raw.ease as TweenEase) : 'Linear',
+    yoyo: raw.yoyo === true,
+    // Rounded as well as floored at -1, because Phaser counts repeats down and a
+    // fractional one never reaches its own end.
+    repeat: Math.max(-1, Math.round(numberOr(raw.repeat, 0))),
+    repeatDelay: Math.max(0, numberOr(raw.repeatDelay, 0)),
+  };
+}
+
+/**
+ * The tween a node gets the moment one is switched on: a second of travel to
+ * the right, and back again, forever.
+ *
+ * Seeded from the node's own transform and then *offset*, which is `addCollider`
+ * adding a row already pointing at two objects rather than at nothing. The
+ * first thing anybody does after switching this on is press ▶, and a
+ * destination equal to the object's current position is a tween that runs
+ * correctly and moves nothing — which is indistinguishable from the feature
+ * being broken, and is the failure mode this file warns about more than any
+ * other. Seeding from zero instead would open with a ghost parked in the
+ * scene's top-left corner, which reads as a second object rather than as a
+ * destination.
+ *
+ * `x` because it is the one property well defined for every node type: a
+ * container and an instance have no width of their own, and a sprite has no
+ * height. And `yoyo` with `repeat: -1` so the default ends where it began —
+ * switching preview off must not look like the editor moved the object, and a
+ * one-shot default would leave it parked at the far end for as long as ▶ is on.
+ */
+export function defaultTween(node: GameObjectNode): NodeTween {
+  return {
+    to: { x: node.transform.x + DEFAULT_TWEEN_TRAVEL },
+    duration: DEFAULT_TWEEN_DURATION,
+    delay: 0,
+    ease: 'Sine.easeInOut',
+    yoyo: true,
+    repeat: -1,
+    repeatDelay: 0,
   };
 }
 

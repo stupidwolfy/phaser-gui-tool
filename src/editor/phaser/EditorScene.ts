@@ -31,6 +31,12 @@ import {
   tileLayerOf,
   tileMapOf,
   touchZonesOf,
+  tweenOf,
+  TWEEN_PROPERTIES,
+  TWEEN_PHASER_KEY,
+  type NodeTween,
+  type Transform,
+  type TweenProperty,
   worldTransformOf,
   type AnimationClip,
   type GameObjectNode,
@@ -154,6 +160,40 @@ const CAMERA_WIDTH = 2;
  */
 const TOUCH_COLOR = 0xff5c33;
 const TOUCH_WIDTH = 2;
+
+/**
+ * Where a tween ends up, drawn only while the tween is not running.
+ *
+ * Shown exactly when the motion is not, which is the emitter marker's rule one
+ * feature over: one field, two appearances, never two notions of the same
+ * state. A tween that is not running is otherwise completely invisible — the
+ * object just sits where the document says — so without this the whole feature
+ * has nothing on the canvas until ▶ is pressed.
+ *
+ * Chartreuse, and picked by the arithmetic `TOUCH_COLOR`'s comment sets out
+ * rather than by eye. The palette this has to clear is far more crowded than
+ * that one's: every colour any spec asks `findColor` for counts, and the warm
+ * band in particular is full — `#ffcc00`, `#ffd60a`, `#ffe066` and `#cccc22`
+ * are all fixtures somewhere in `tests/`. The obvious yellow `#ffe600` is
+ * within 24 of `#ffd60a` on *all three* channels, which is exactly the trap
+ * `TOUCH_COLOR` records: it looks clearly different and would have counted
+ * another test's rectangle. Run the check rather than trusting an eye — against
+ * all forty-four fixture and chrome colours this one's worst case is a margin
+ * of 84, its nearest neighbours being the body green `0x00ff00` (120 on red)
+ * and `#7ee787` (135 on blue).
+ *
+ * Stroked, not filled — the opposite of the emitter marker and the control
+ * arrows, and right for the opposite reason. Those are small marks that have to
+ * survive antialiasing to be seen at all; this is a full-size copy of an
+ * object's own box sitting over the layout being built, and a filled one would
+ * hide whatever the object is about to travel across.
+ */
+const TWEEN_COLOR = 0x78f000;
+const TWEEN_WIDTH = 2;
+/** Screen pixels of ink and gap in the ghost's dashed outline. */
+const TWEEN_DASH = 8;
+/** Shared, because "this tween holds nothing" is answered on most nodes. */
+const EMPTY_HELD: ReadonlySet<TweenProperty> = new Set<TweenProperty>();
 
 /**
  * The grab band around a guide, in screen pixels.
@@ -570,6 +610,52 @@ export class EditorScene extends Phaser.Scene {
   private textStyles = new Map<string, string>();
 
   /**
+   * The live tween on each display object, by display key.
+   *
+   * **`nodeTweens`, not `tweens`** — `Phaser.Scene` already owns a `tweens`
+   * property, its `TweenManager`, and a field of that name here would shadow
+   * the very thing every line below calls to make one.
+   *
+   * Keyed by *display* key rather than node id, which is the prefab rule: two
+   * instances of one definition share their children's node ids and must not
+   * share a tween, exactly as they do not share a display object.
+   *
+   * Every tween is created with `persist: true`, so this map is never left
+   * holding one Phaser destroyed on completion. That makes the scene the sole
+   * owner of their lifetime, which is what the diff below and `applyNode`'s
+   * skip both depend on — and it is why they are removed by hand in
+   * `destroyDisplayObject` and on SHUTDOWN.
+   */
+  private nodeTweens = new Map<
+    string,
+    { tween: Phaser.Tweens.Tween; held: ReadonlySet<TweenProperty> }
+  >();
+
+  /**
+   * The tween each live one was built from, by display key.
+   *
+   * `emitterConfigs`' and `textStyles`' cache guard, third time and for the
+   * sharpest version of their reason: the scene syncs on *every* store change,
+   * so rebuilding a tween unconditionally would have a selection, or a nudge of
+   * some unrelated object, restart every tween from its starting values —
+   * nothing would ever visibly travel anywhere. `play(key, true)`'s
+   * ignoreIfPlaying, arrived at by a third route.
+   */
+  private nodeTweenSignatures = new Map<string, string>();
+
+  /**
+   * Where each tween ends up, in its object's own parent space, rebuilt every
+   * sync by `applyNode`.
+   *
+   * Recorded there rather than re-derived by the drawer because `applyNode` is
+   * the one place that holds a display key and the node it draws at the same
+   * time — a derived child inside a prefab is in no array the scene owns, so
+   * nothing downstream could look one up. `drawTweenGhosts` then needs only the
+   * key and this transform.
+   */
+  private tweenGhosts = new Map<string, Transform>();
+
+  /**
    * The display keys belonging to real document nodes, rebuilt every sync.
    *
    * A prefab's contents are drawn but are not in the document, so they are the
@@ -861,6 +947,14 @@ export class EditorScene extends Phaser.Scene {
    * zoom, so a pinch has to redraw them, and a pinch is not a store change.
    */
   private touchSignature = '';
+  private ghostGraphics!: Phaser.GameObjects.Graphics;
+  /**
+   * What the tween ghosts were last drawn for — `touchSignature`'s sibling and
+   * for its reason: the outline's stroke and its dash length are screen widths
+   * divided by the editor's zoom, so a pinch has to redraw them, and a pinch is
+   * not a store change.
+   */
+  private ghostSignature = '';
   private isPanning = false;
   private pinchDistance = 0;
   /** Once the user has zoomed or panned, stop re-framing the view for them. */
@@ -953,6 +1047,17 @@ export class EditorScene extends Phaser.Scene {
     // the objects. Below, because unlike a guide this is furniture nobody
     // grabs: it is not interactive at all, so it must never cover something
     // that is.
+    // Above every object, because a destination hidden under a tilemap is a
+    // destination that says nothing — the argument that puts the guides over the
+    // objects. And below every other piece of chrome, which makes this the
+    // furthest back of them on purpose: a ghost is a full-size second copy of an
+    // object's own outline, so of all the marks on this canvas it is the one
+    // most easily mistaken for a real object, and everything that says something
+    // about the document belongs on top of it. Furniture nobody grabs, like the
+    // camera frame above it.
+    this.ghostGraphics = this.add.graphics().setDepth(996);
+
+    // Above every object and below the paint grid, the placed guides and the
     this.cameraGraphics = this.add.graphics().setDepth(997);
 
     // Just above the camera frame and still below the paint grid and the placed
@@ -1043,6 +1148,16 @@ export class EditorScene extends Phaser.Scene {
       for (const face of this.fontFaces.values()) document.fonts.delete(face);
       this.fontFaces.clear();
       this.loadingFonts.clear();
+      // Tweens need no `remove` loop, and that absence is worth a sentence
+      // beside four neighbours that all do bookkeeping — here "nothing to do"
+      // and "forgot to do it" read identically. A texture belongs to the game,
+      // an animation to the game's manager and a `FontFace` to the page, so all
+      // three outlive this scene; a Tween belongs to the scene's *own*
+      // TweenManager, which the scene destroys with itself. Only the lookups
+      // have to be dropped.
+      this.nodeTweens.clear();
+      this.nodeTweenSignatures.clear();
+      this.tweenGhosts.clear();
     });
   }
 
@@ -1457,6 +1572,13 @@ export class EditorScene extends Phaser.Scene {
     // A text style cache entry outliving its object would have the next node to
     // land on this key skip the style it has never actually been given.
     this.textStyles.delete(key);
+    // A tween outliving its object is one writing to a destroyed target, and
+    // the next node to land on this key would inherit a signature it was never
+    // given. The same two lines, one map over.
+    this.nodeTweens.get(key)?.tween.remove();
+    this.nodeTweens.delete(key);
+    this.nodeTweenSignatures.delete(key);
+    this.tweenGhosts.delete(key);
   }
 
   /**
@@ -2608,6 +2730,7 @@ export class EditorScene extends Phaser.Scene {
     this.drawBodies();
     this.drawCamera();
     this.drawTouchZones();
+    this.drawTweenGhosts();
   }
 
   /** Two fingers down: zoom by how much the gap between them changed. */
@@ -2694,6 +2817,10 @@ export class EditorScene extends Phaser.Scene {
     // `syncNodes` rather than derived from the key's shape, so the separator
     // that builds a derived key stays a detail of one function.
     this.documentKeys = new Set<string>();
+    // Rebuilt by `applyNode`, so a node that loses its tween loses its ghost in
+    // the same pass rather than leaving one on the canvas until something else
+    // redraws.
+    this.tweenGhosts.clear();
     this.syncNodes(scene.children, null, seen, '');
 
     for (const [id, object] of this.displayObjects) {
@@ -2929,6 +3056,114 @@ export class EditorScene extends Phaser.Scene {
       label.setPosition(button.x, button.y);
       label.setVisible(true);
     });
+  }
+
+  /**
+   * Outlines where each tween ends up, for every tween that is not running.
+   *
+   * Shown exactly when the motion is not — one condition, `nodeTweens.has(key)`,
+   * so there is one notion of "running" rather than two. The emitter marker's
+   * rule, one feature over.
+   *
+   * In `update()` rather than at the end of the sync for `drawBodies`' reason:
+   * the stroke and the dash are screen widths divided by the camera zoom, and a
+   * pinch changes the zoom without touching the store. Signature-gated like the
+   * camera frame and the touch rings, because on almost every frame none of it
+   * has moved.
+   *
+   * Dashed, and stroked rather than filled. The dash is what tells a ghost from
+   * the object it is a copy of at a glance — this is the one mark on the canvas
+   * that is deliberately the same shape and size as a real object. Filled, it
+   * would hide the layout the object is about to travel across, which is the
+   * touch rings' argument.
+   */
+  private drawTweenGhosts(): void {
+    const zoom = this.cameras.main.zoom;
+    const parts: string[] = [];
+    for (const [key, target] of this.tweenGhosts) {
+      if (this.nodeTweens.has(key)) continue;
+      parts.push(
+        `${key}@${target.x},${target.y},${target.rotation},${target.scaleX},${target.scaleY}`,
+      );
+    }
+    const signature = parts.length ? `${zoom}:${parts.join('|')}` : '';
+    if (signature === this.ghostSignature) return;
+    this.ghostSignature = signature;
+
+    this.ghostGraphics.clear();
+    if (!signature) return;
+
+    this.ghostGraphics.lineStyle(TWEEN_WIDTH / zoom, TWEEN_COLOR, 1);
+    const dash = TWEEN_DASH / zoom;
+
+    for (const [key, target] of this.tweenGhosts) {
+      if (this.nodeTweens.has(key)) continue;
+      const object = this.displayObjects.get(key);
+      if (!object) continue;
+
+      // The object's own box, so a tilemap's top-left origin and a container's
+      // measured bounds are both already right — `localRectOf` is the one place
+      // either is expressed.
+      const rect = this.localRectOf(object);
+      // Its parent's world matrix composed with the *destination's* local
+      // transform, which is what puts a container child's ghost in its parent's
+      // frame exactly as the child itself is. Built rather than borrowed from
+      // the object, because the object is standing somewhere else.
+      const local = new Phaser.GameObjects.Components.TransformMatrix();
+      local.applyITRS(
+        target.x,
+        target.y,
+        Phaser.Math.DegToRad(target.rotation),
+        target.scaleX,
+        target.scaleY,
+      );
+      const world = new Phaser.GameObjects.Components.TransformMatrix();
+      const parent = object.parentContainer;
+      if (parent) {
+        parent.getWorldTransformMatrix(world);
+        world.multiply(local, world);
+      } else {
+        world.copyFrom(local);
+      }
+
+      const corners = [
+        world.transformPoint(rect.x, rect.y),
+        world.transformPoint(rect.right, rect.y),
+        world.transformPoint(rect.right, rect.bottom),
+        world.transformPoint(rect.x, rect.bottom),
+      ];
+      for (let index = 0; index < corners.length; index += 1) {
+        this.dashedLine(corners[index], corners[(index + 1) % corners.length], dash);
+      }
+    }
+  }
+
+  /** One edge of a ghost, drawn as a run of dashes of a fixed world length. */
+  private dashedLine(
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    dash: number,
+  ): void {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy);
+    if (!(length > 0) || !(dash > 0)) return;
+
+    // Whole dashes only, sized to fit the edge — so a small object's outline is
+    // still visibly broken rather than one dash and a long gap, and every
+    // corner lands on ink.
+    const count = Math.max(1, Math.round(length / (dash * 2)));
+    const step = length / count;
+    for (let index = 0; index < count; index += 1) {
+      const start = (index * step) / length;
+      const end = (index * step + step / 2) / length;
+      this.ghostGraphics.lineBetween(
+        from.x + dx * start,
+        from.y + dy * start,
+        from.x + dx * end,
+        from.y + dy * end,
+      );
+    }
   }
 
   /**
@@ -3465,9 +3700,41 @@ export class EditorScene extends Phaser.Scene {
     // object stranded at a stale position. The drag now stores exact floats and
     // rounds once on release, so there is nothing to fight and the invariant is
     // simply: drawn position == stored position, always.
-    object.setPosition(transform.x, transform.y);
-    object.setRotation(Phaser.Math.DegToRad(transform.rotation));
-    object.setScale(transform.scaleX, transform.scaleY);
+    // …with exactly one exception, and it is deliberate rather than a hole in
+    // the paragraph above: while ▶ is on, a tween owns the properties it
+    // drives. This is *not* the physics refusal. A physics step rewrites the
+    // numbers the document is made of because there is nowhere else for the
+    // result to go; a tween's result is thrown away the instant it stops, so
+    // the document never moves and switching preview off puts every object back
+    // exactly where it says. The canvas stops mirroring the document for as
+    // long as the toggle is on, which is what a playing animation already does
+    // to the frame a sprite shows.
+    //
+    // Released *above* the writes, so the sync that switches preview off has
+    // already let go by the time the document's values are restored. Doing it
+    // afterwards leaves the object stranded wherever the tween happened to
+    // be — the `draggingId`-cleared-too-late trap by a new route, and it looks
+    // exactly like "the toggle only applies when I touch something else".
+    const held = this.releaseTween(node, key);
+
+    // Per property rather than `setPosition`/`setScale`, because the two axes
+    // are independently tweenable: an object sliding sideways under ▶ still
+    // follows a vertical nudge, and a tween on alpha alone must not pin
+    // anything at all.
+    if (!held.has('x')) object.x = transform.x;
+    if (!held.has('y')) object.y = transform.y;
+    if (!held.has('rotation')) object.setRotation(Phaser.Math.DegToRad(transform.rotation));
+    if (!held.has('scaleX')) object.scaleX = transform.scaleX;
+    if (!held.has('scaleY')) object.scaleY = transform.scaleY;
+    // Alpha is written here for every type rather than eight times inside the
+    // switch below, and that centralisation is what makes it tweenable at all.
+    // It used to be per-type, and the shapes were the odd one out: they carried
+    // the document's alpha as the *fill's* alpha while everything else carried
+    // it as the object's — and the exporter has always used `.setAlpha()` for
+    // all of them. Invisible while nothing animates, since a solid fill over
+    // the background composites the same either way, and wrong the moment a
+    // tween eases one channel while the export eases the other.
+    if (!held.has('alpha')) object.setAlpha(node.props.alpha);
     object.setVisible(node.visible);
     object.setDepth(index);
 
@@ -3475,7 +3742,9 @@ export class EditorScene extends Phaser.Scene {
       case 'rectangle':
       case 'ellipse': {
         const shape = object as Phaser.GameObjects.Rectangle | Phaser.GameObjects.Ellipse;
-        shape.setFillStyle(hexToNumber(node.props.fill), node.props.alpha);
+        // Alpha is the object's now, written once above for every type — so
+        // the fill carries the colour and nothing else.
+        shape.setFillStyle(hexToNumber(node.props.fill));
         if (shape.width !== node.props.width || shape.height !== node.props.height) {
           shape.setSize(node.props.width, node.props.height);
         }
@@ -3506,7 +3775,6 @@ export class EditorScene extends Phaser.Scene {
           else sprite.setFrame(drawn);
         }
 
-        sprite.setAlpha(node.props.alpha);
         // Multiply is the default tint mode, so white is exactly "no tint".
         sprite.setTint(hexToNumber(node.props.tint));
         sprite.setFlip(node.props.flipX, node.props.flipY);
@@ -3542,7 +3810,6 @@ export class EditorScene extends Phaser.Scene {
             insets.bottom,
           );
         }
-        panel.setAlpha(props.alpha);
         panel.setTint(hexToNumber(props.tint));
         break;
       }
@@ -3557,7 +3824,6 @@ export class EditorScene extends Phaser.Scene {
         // these leave the box alone and change how the texture sits inside it.
         tiled.setTilePosition(props.tilePositionX, props.tilePositionY);
         tiled.setTileScale(props.tileScaleX, props.tileScaleY);
-        tiled.setAlpha(props.alpha);
         tiled.setTint(hexToNumber(props.tint));
         break;
       }
@@ -3591,7 +3857,6 @@ export class EditorScene extends Phaser.Scene {
         // Alpha on the container, so it multiplies down onto every layer — the
         // particles wrapper's call, and what the exported `.setAlpha` does to
         // each emitted layer.
-        group.setAlpha(node.props.alpha);
         // The map's own box, published where a group's measured one goes. That
         // is what keeps a tilemap layer's top-left origin expressed in exactly
         // one place: `localRectOf` reads `containerBounds` before it reaches its
@@ -3609,7 +3874,6 @@ export class EditorScene extends Phaser.Scene {
         // On the container, so it multiplies down onto the marker and the
         // particles alike — what "fade this emitter" should mean, and what the
         // exported `.setAlpha` does to the bare emitter.
-        group.setAlpha(node.props.alpha);
         this.applyEmitter(group, node.props, key);
         break;
       }
@@ -3619,7 +3883,6 @@ export class EditorScene extends Phaser.Scene {
         // Alpha on a Container multiplies down onto its children, which is
         // exactly what "fade the whole group" should mean — and what an
         // instance's alpha should mean over a prefab's contents.
-        group.setAlpha(node.props.alpha);
         // Keyed by the display key, not the node id: a container *inside* a
         // definition is drawn once per instance, and each of those needs its
         // own box. `localRectOf` reads it back through the same `nodeId` this
@@ -3631,12 +3894,132 @@ export class EditorScene extends Phaser.Scene {
         const text = object as Phaser.GameObjects.Text;
         if (text.text !== node.props.text) text.setText(node.props.text);
         this.applyTextStyle(text, node.props, key);
-        text.setAlpha(node.props.alpha);
         break;
       }
     }
 
     this.applyHitArea(object);
+
+    // Recorded here because this is the one place that holds a display key and
+    // the node it draws at the same time: a derived child inside a prefab is in
+    // no array the scene owns, so nothing downstream could look one up.
+    const destination = tweenOf(node);
+    if (destination !== null && node.visible) {
+      this.tweenGhosts.set(key, {
+        x: destination.to.x ?? transform.x,
+        y: destination.to.y ?? transform.y,
+        rotation: destination.to.rotation ?? transform.rotation,
+        scaleX: destination.to.scaleX ?? transform.scaleX,
+        scaleY: destination.to.scaleY ?? transform.scaleY,
+      });
+    }
+
+    // After the writes, not before: a tween created this pass has to start from
+    // the document's own values rather than from wherever the last one left the
+    // object. Together with `releaseTween` above the writes, that makes the
+    // ordering this feature depends on structural rather than remembered.
+    this.startTween(object, node, key);
+  }
+
+  /**
+   * Lets go of any tween that should no longer be holding this object, and
+   * answers with the properties the surviving one drives.
+   *
+   * The returned set is the one the live tween was actually built from rather
+   * than one derived fresh here. On the pass where a tween's definition changes
+   * those two disagree — by exactly the property that was just switched on or
+   * off — and the skip has to follow the tween that is running, not the one
+   * that is about to be.
+   */
+  private releaseTween(node: GameObjectNode, key: string): ReadonlySet<TweenProperty> {
+    const tween = this.previewing ? tweenOf(node) : null;
+    // A hidden object is not on screen, so animating it is work with nothing to
+    // show for it — the rule that already keeps hidden objects out of the snap
+    // targets and out of `drawBodies`.
+    const live = this.nodeTweens.get(key);
+
+    // The start values are part of the signature, and that is the half a reader
+    // will not expect. Without them a drag under ▶ is invisible: the tween
+    // holds x, so `applyNode` skips the write, so the object never follows the
+    // finger. With them, a nudge restarts the tween from where the object now
+    // sits, while a selection — or a nudge of some *other* object — leaves
+    // every signature alone and nothing restarts. That second half is
+    // `play(key, true)`'s ignoreIfPlaying and `setConfig`'s cache guard, third
+    // time: the scene syncs on every store change, so an unguarded rebuild
+    // means nothing ever visibly travels anywhere.
+    const signature =
+      tween !== null && node.visible ? this.tweenSignatureOf(node, tween) : '';
+
+    if (live && this.nodeTweenSignatures.get(key) === signature) {
+      return live.held;
+    }
+
+    if (live) {
+      // `remove`, not `stop`: a stopped tween is only flagged for removal and
+      // is still in the manager for another update, which would let it write
+      // once more over the values the lines below are about to restore.
+      live.tween.remove();
+      this.nodeTweens.delete(key);
+      this.nodeTweenSignatures.delete(key);
+    }
+    return EMPTY_HELD;
+  }
+
+  /**
+   * What a live tween was built from: the tween itself and the document's own
+   * value for each property it drives.
+   *
+   * One builder, so `releaseTween`'s comparison and `startTween`'s record
+   * cannot disagree about what counts as the same tween — which would leave one
+   * of them rebuilding on every store change.
+   */
+  private tweenSignatureOf(node: GameObjectNode, tween: NodeTween): string {
+    const from = TWEEN_PROPERTIES.filter((property) => property in tween.to).map((property) =>
+      property === 'alpha' ? node.props.alpha : node.transform[property],
+    );
+    return JSON.stringify([tween, from]);
+  }
+
+  /**
+   * Starts the tween this node asks for, if one is wanted and none is running.
+   *
+   * `persist: true` because a tween that is not repeating forever completes,
+   * and Phaser destroys a completed tween unless told otherwise — which would
+   * leave `nodeTweens` holding a corpse the skip above still believes in. With
+   * it the scene owns every tween's whole life, which is what lets one map
+   * answer both "is this one running" and "what is it driving".
+   */
+  private startTween(object: Renderable, node: GameObjectNode, key: string): void {
+    if (this.nodeTweens.has(key)) return;
+    const tween = this.previewing ? tweenOf(node) : null;
+    if (tween === null || !node.visible) return;
+
+    const held = new Set<TweenProperty>();
+    const targets: Record<string, number> = {};
+    for (const property of TWEEN_PROPERTIES) {
+      const value = tween.to[property];
+      if (value === undefined) continue;
+      held.add(property);
+      // `TWEEN_PHASER_KEY`, never the document's own name — `rotation` on a
+      // Game Object is radians, and this document's is degrees.
+      targets[TWEEN_PHASER_KEY[property]] = value;
+    }
+
+    this.nodeTweens.set(key, {
+      tween: this.tweens.add({
+        targets: object,
+        ...targets,
+        duration: tween.duration,
+        delay: tween.delay,
+        ease: tween.ease,
+        yoyo: tween.yoyo,
+        repeat: tween.repeat,
+        repeatDelay: tween.repeatDelay,
+        persist: true,
+      }),
+      held,
+    });
+    this.nodeTweenSignatures.set(key, this.tweenSignatureOf(node, tween));
   }
 
   /**

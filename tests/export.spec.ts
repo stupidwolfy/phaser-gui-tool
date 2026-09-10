@@ -1205,3 +1205,77 @@ test('a sprite with no image is called out rather than dropped', async ({ editor
   const exported = await editor.exportCode('ts');
   expect(exported.contents).toContain('no image chosen in the editor');
 });
+
+test('the exported page runs the tween it was given', async ({ editor, page }, testInfo) => {
+  // Built through the UI rather than from a fixture, exactly as the falling
+  // test is and for its reason: this is the one assertion that the whole chain
+  // arrived — the config literal's keys, the ease name Phaser has to resolve,
+  // and `this.tweens` existing without a game-config key having been added for
+  // it. A wrong key or an ease Phaser does not know is a page that boots, draws
+  // the object, and never moves it, which every text assertion in this file
+  // would call correct.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('X', 160);
+  await editor.setField('Y', 270);
+  await editor.setTween(true);
+  await editor.setTweenTarget('X', 800);
+  await editor.setField('Tween duration ms', 4000);
+  await editor.setChoice('Tween ease', 'Linear');
+  // Yoyo, forever. A one-shot tween is a race this test cannot win: the page
+  // has to boot, load Phaser from the routed CDN and draw a frame before the
+  // first screenshot, and under a full parallel run that is comfortably longer
+  // than any duration short enough to finish inside a poll — so the "before"
+  // reading lands on the object already parked at its destination and no
+  // "it moved" claim can be made afterwards. It passed standalone and failed in
+  // the suite, which is the shape of a wrong instrument rather than a flaky
+  // feature. Something that never stops moving can be sampled at any moment.
+  await editor.setField('Tween repeat', -1);
+  await editor.settle();
+
+  const exported = await editor.exportCode('html');
+  // `angle`, never `rotation` — the one mapping that is wrong by a factor of 57
+  // with nothing anywhere failing.
+  expect(exported.contents).toContain('this.tweens.add({');
+  expect(exported.contents).not.toContain('physics: { default');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('tween'), exported.contents);
+
+  const read = async () =>
+    findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+  const first = await read();
+  expect(first.count, 'the exported page drew no rectangle').toBeGreaterThan(100);
+
+  // The spread of where the object is seen, rather than a difference from one
+  // sampled starting point. What is being claimed is that the exported page
+  // *moves* the object, and a spread says exactly that from any two moments in
+  // the cycle — where a fixed reference point only works if the first reading
+  // happened to catch the object before it set off.
+  let low = first.x;
+  let high = first.x;
+  await reaches(
+    async () => {
+      const blob = await read();
+      if (blob.count > 100) {
+        low = Math.min(low, blob.x);
+        high = Math.max(high, blob.x);
+      }
+      return high - low;
+    },
+    (spread) => spread > 80,
+  );
+  expect(high - low, 'the exported tween never moved the object').toBeGreaterThan(80);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('a project with no tween exports none', async ({ editor }) => {
+  // The rule the asset table, the tilemap helper and the prefab factories all
+  // follow. Scoped to the export of a project that has no tween rather than
+  // asserted over some other output, because the hostile project legitimately
+  // contains the string — a whole-file `not.toContain` is a shared resource,
+  // which the prefab suite learned the hard way.
+  const exported = await editor.exportCode('ts');
+  expect(exported.contents).not.toContain('tweens.add');
+});
