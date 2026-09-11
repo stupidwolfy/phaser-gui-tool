@@ -135,8 +135,26 @@
  * that is merely empty, which is indistinguishable from one nobody has painted
  * yet. `tilemap.spec.ts` asserts the 12 in the saved artefact, as ten other
  * specs now do, which is what makes a bump loud on purpose.
+ *
+ * **v13 is the variable table, and it is the v8 audio case and the v10 font
+ * case for a third time — the silent-data-loss half of the rule with no crash
+ * half at all.** Rules add no `NodeType`, so a v12 build has a
+ * `createDisplayObject` case for everything in the file and draws it exactly as
+ * this one does. `scene.rules` alone would not have bumped anything: it rides
+ * in on `scenes`, the one part of a file `parseProject` passes through
+ * verbatim, so an old build carries every rule back out on a re-save untouched.
+ * What bumps this is `project.variables`, which is a *project* table and
+ * therefore one of the fields `parseProject` names one at a time — so a v12
+ * build drops the whole table on open and re-saves without it. What it leaves
+ * behind is the audio case made worse in the way the font case was: the rules
+ * survive, still naming variables whose declarations have just been thrown
+ * away, so every condition in the project reads nothing and `rulesOf` drops the
+ * rules that were the point of the file. A sound that loses its table makes no
+ * noise; a game that loses its variables still runs, and stops being the game.
+ * `rules.spec.ts` asserts the 13 in the saved artefact, as sixteen other specs
+ * now assert their own version, which is what makes a bump a deliberate act.
  */
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -2636,6 +2654,42 @@ export interface Prefab {
   children: GameObjectNode[];
 }
 
+/**
+ * A number the game keeps, declared once and shared by every scene.
+ *
+ * Project-level for the reason `animations` and `prefabs` are, with one
+ * addition that settles it on its own: a variable has to survive
+ * `scene.start`, which is itself one of the things a rule can do. It is
+ * emitted through Phaser's `this.registry` — the game-wide `DataManager`,
+ * which is the only store that outlives a change of scene. `this.data` is the
+ * per-scene one and would silently reset on every restart, which for a score
+ * is the whole of what a score is not.
+ *
+ * `value` is the *initial* value and nothing else. The exported helper sets it
+ * with a `has(key) ||` guard, so it is applied once per game rather than once
+ * per `create()` — the `anims.exists` and `sound.get(key) ??` guard for the
+ * third time, and for their reason: `create()` runs again every time a scene
+ * starts, which is the ordinary way a game returns to its menu. That guard is
+ * also the strictly more expressive choice, which is what settles it. The
+ * document can already say "reset this when the level starts", because
+ * `sceneStart -> setVar score 0` is two things it already holds; unguarded, it
+ * could not say *don't*.
+ *
+ * The name is free user text and the registry key is derived from it at export
+ * time, never stored — `audioKeyOf`'s treatment rather than `FontAsset.family`'s,
+ * and the test CLAUDE.md already states is the one that decides between them:
+ * a family *is* the link, so it must be stable for the life of the project,
+ * while nothing in this document ever names a registry key. Conditions and
+ * actions name `id`. That is what keeps renaming free.
+ */
+export interface ProjectVariable {
+  id: string;
+  /** Free user text. `variableKeyOf` derives the registry key from it. */
+  name: string;
+  /** The value the game starts with, set once rather than once per scene. */
+  value: number;
+}
+
 export interface Project {
   schemaVersion: number;
   name: string;
@@ -2685,6 +2739,15 @@ export interface Project {
    * everywhere at once. Nothing propagates, because nothing was ever copied.
    */
   prefabs: Prefab[];
+  /**
+   * The numbers the game keeps, shared across every scene.
+   *
+   * Project-level rather than per-scene because a variable has to survive
+   * `scene.start` — see `ProjectVariable`. That is a stronger reason than the
+   * one the tables above it have: an image is shared because copying the bytes
+   * would be wasteful, where a score shared per scene would not be a score.
+   */
+  variables: ProjectVariable[];
   scenes: SceneDoc[];
   activeSceneId: string;
 }
@@ -2701,6 +2764,21 @@ export function findAudio(
   id: string | null | undefined,
 ): AudioAsset | undefined {
   return id ? project.audio.find((asset) => asset.id === id) : undefined;
+}
+
+/**
+ * The variable an id names, if the project still holds it.
+ *
+ * The `findAsset` / `findAudio` / `findAnimation` row. Every caller treats
+ * `undefined` as "this rule names a variable the project has not got", which
+ * `rulesOf` answers by dropping the whole rule rather than the part — see the
+ * widening argument there.
+ */
+export function findVariable(
+  project: Project,
+  id: string | null | undefined,
+): ProjectVariable | undefined {
+  return id ? project.variables.find((variable) => variable.id === id) : undefined;
 }
 
 /**

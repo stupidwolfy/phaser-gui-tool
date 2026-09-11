@@ -171,7 +171,7 @@ test('an atlas survives a save and an open, linking by name', async ({ editor },
 
   // The literal, so a bump is a deliberate act rather than something the suite
   // compares against itself and never notices.
-  expect(saved.schemaVersion).toBe(12);
+  expect(saved.schemaVersion).toBe(13);
   expect(saved.assets[0].atlas).toEqual(
     ATLAS_FRAMES.map(({ name: frameName, x, y, w, h }) => ({
       name: frameName,

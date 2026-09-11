@@ -40,6 +40,7 @@ import {
   type TextProps,
   type TileSpriteProps,
 } from '../core/schema';
+import { variableKeysOf } from '../io/exportPhaser';
 import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
 import { AudioSection } from './AudioPicker';
 import { FontPicker } from './FontPicker';
@@ -339,8 +340,108 @@ function SceneInspector() {
           fields, the gravity and the guides, which is what it is one of. */}
       <AudioSection />
 
+      {/* With the sounds and for their reason: a variable is declared and tuned
+          a handful of times in a project's life, and it names no node. It sits
+          below the audio rather than above it because a sound is a thing the
+          scene has and a variable is a thing the *project* has, so it reads as
+          the last and widest of the scene panel's settings. */}
+      <VariablesSection />
+
       <SnappingSection />
     </div>
+  );
+}
+
+/**
+ * The numbers the game keeps.
+ *
+ * Project state shown on the scene panel, which is the one thing here that is
+ * not what it looks like — `AudioSection` above it edits the *scene's* list of
+ * sounds while the table of files is the project's, and this edits the project
+ * outright. It is here because `SceneInspector` is where every setting that is
+ * about the game rather than about one object already lives, and because the
+ * alternative (a fourth mobile tab) costs a `MobileTab`, a sheet, a
+ * `SHEET_TITLE` and a quarter of a 390px tab bar.
+ *
+ * Each row shows the registry key it derives, the way an audio row shows the
+ * key it plays as — `variableKeyOf` is exported from the exporter so the row
+ * and the output cannot disagree about it. It shows the *de-duplicated* key,
+ * because two variables deriving one key is a value silently shared at runtime,
+ * and the suffix is the only thing on screen that says so.
+ */
+function VariablesSection() {
+  const project = useEditorStore((s) => s.project);
+  const variables = project.variables;
+  const addVariable = useEditorStore((s) => s.addVariable);
+  const updateVariable = useEditorStore((s) => s.updateVariable);
+  const removeVariable = useEditorStore((s) => s.removeVariable);
+
+  // The exporter's own answer rather than a second walk, so the key a row shows
+  // is the key the export writes. Derived here rather than in a selector
+  // because it builds a fresh Map every call — the `tileMapOf` trap, and the
+  // reason every reader in `schema.ts` carries that warning.
+  const keys = variableKeysOf(project);
+
+  return (
+    <>
+      <div className="panel__section">Variables</div>
+
+      {variables.length === 0 ? (
+        <p className="hint">
+          Nothing here counts anything yet. A variable is a number the game keeps — a
+          score, a lives count — and it survives a change of scene.
+        </p>
+      ) : null}
+
+      {variables.map((variable, index) => (
+        <div key={variable.id}>
+          <div className="field-row">
+            <TextField
+              label={`Variable ${index + 1} name`}
+              value={variable.name}
+              onChange={(name) => updateVariable(variable.id, { name })}
+            />
+            {/* "starts at", not "Value": it is the number the game *begins*
+                with, set once per game rather than once per scene, and a row
+                labelled Value would say the opposite of what the helper does.
+                The "Animation name, not Name" rule, arriving by a sixth route. */}
+            <NumberField
+              label={`Variable ${index + 1} starts at`}
+              value={variable.value}
+              onChange={(value) => updateVariable(variable.id, { value })}
+            />
+          </div>
+          <div className="field-row">
+            {/* By title as well as text, the way an audio row is found: the
+                text is the derived key, which is the very thing a caller is
+                trying to read, so it cannot also be what locates the row. */}
+            <p className="hint" title={`Variable ${index + 1} key`}>
+              reads as {keys.get(variable.id)}
+            </p>
+            <button
+              className="icon-btn icon-btn--danger"
+              onClick={() => removeVariable(variable.id)}
+              title={`Delete variable ${variable.name}`}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      ))}
+
+      <button
+        className="btn btn--add"
+        onClick={addVariable}
+        title="Declare a number the game keeps"
+      >
+        + Variable
+      </button>
+      <p className="hint">
+        Exported code declares these once and keeps them in Phaser&apos;s registry, so
+        they survive a change of scene. Read one anywhere with{' '}
+        <code>this.registry.get(&apos;name&apos;)</code>.
+      </p>
+    </>
   );
 }
 

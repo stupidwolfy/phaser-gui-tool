@@ -402,6 +402,7 @@ export function newProject(name = 'Untitled Project'): Project {
     fonts: [],
     animations: [],
     prefabs: [],
+    variables: [],
     scenes: [scene],
     activeSceneId: scene.id,
   };

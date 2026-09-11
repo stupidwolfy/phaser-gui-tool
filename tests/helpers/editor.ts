@@ -1245,6 +1245,50 @@ export class EditorPage {
   }
 
   /**
+   * Declares a variable in the scene panel and returns the key it reads as.
+   *
+   * Deselects first, because `VariablesSection` lives in `SceneInspector`,
+   * which renders only with an empty selection — `addSceneSound`'s reason.
+   */
+  async addVariable(): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByTitle('Declare a number the game keeps').click();
+    await this.settle();
+  }
+
+  /** Renames a declared variable and sets what it starts at. */
+  async setVariable(index: number, name: string, value: number): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.setField(`Variable ${index} name`, name);
+    await this.setField(`Variable ${index} starts at`, value);
+    await this.settle();
+  }
+
+  /**
+   * What the panel says a variable reads as in exported code.
+   *
+   * By index, like every other variable field, because the text of this row
+   * *is* the derived key — so the thing being read cannot also be the thing
+   * that locates it.
+   */
+  async variableKey(index: number): Promise<string> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    const hint = this.panel('inspect').getByTitle(`Variable ${index} key`);
+    return (await hint.innerText()).replace('reads as ', '').trim();
+  }
+
+  /** Deletes a declared variable by name. */
+  async removeVariable(name: string): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByTitle(`Delete variable ${name}`).click();
+    await this.settle();
+  }
+
+  /**
    * Discards the project and starts a new one.
    *
    * The confirm has to be accepted, and without that this method **silently

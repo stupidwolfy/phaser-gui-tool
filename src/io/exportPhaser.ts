@@ -38,6 +38,7 @@ import {
   type PhysicsBody,
   type Prefab,
   type Project,
+  type ProjectVariable,
   type SceneDoc,
   type TextStyle,
   type TileMap,
@@ -487,6 +488,119 @@ function buildAudioTable(used: Map<string, UsedAudio>, indent: string): string {
     'const AUDIO = {',
     ...[...used.values()].map(({ audio, key }) => `  ${str(key)}: ${str(audio.dataUrl)},`),
     '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * One variable, paired with the registry key it is read and written by.
+ *
+ * `UsedAudio`'s shape and for its reason: the key is *derived here* from free
+ * user text, so a wrapper is what carries the derivation beside the thing.
+ * The keys come out of a set of their own rather than any other table's,
+ * exactly as the sounds' do — a registry key and a texture key live in
+ * different namespaces, so a project holding an image called `score` and a
+ * variable called `score` should get `'score'` twice.
+ */
+interface UsedVariable {
+  variable: ProjectVariable;
+  key: string;
+}
+
+/**
+ * Every variable's registry key, by id — for the panel rows that show the user
+ * what a hand-written line would have to say.
+ *
+ * `audioKeyOf`'s sibling, exported for its reason: the row and the export must
+ * not disagree about it, and a second implementation in the UI would be two
+ * answers to one question.
+ *
+ * **It answers for the whole table where `audioKeyOf` answers for one name, and
+ * that difference is the point rather than an inconsistency.** An audio row can
+ * afford to show an un-de-duplicated key because a key that collides is a
+ * *second sound* that does not play — visibly wrong, and recoverable by
+ * renaming the file. Two variables deriving one registry key is a value
+ * silently shared at runtime: both rows go on showing their own number while
+ * the game keeps one, and the row being edited may not be the one a rule reads.
+ * The suffix is the only thing on screen that can say so, so the panel has to
+ * be shown the de-duplicated answer, which means it has to be shown all of
+ * them at once. `atlasOf`'s uniqueness argument, one table over.
+ */
+export function variableKeysOf(project: Project): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const [id, entry] of collectVariables(project)) keys.set(id, entry.key);
+  return keys;
+}
+
+/**
+ * Every variable the project declares, keyed by id.
+ *
+ * **Unfiltered, where `collectAssets` and `collectAudio` both emit only what a
+ * scene uses** — and that difference is deliberate rather than a missed step,
+ * which is why it says so here. Those two are filtered because bytes are
+ * expensive and an unused image would ship a megabyte for nothing. A variable
+ * is three tokens; and more to the point it exists *so that a hand-written line
+ * can read it*, which is `mass` and `immovable`'s reason for being emitted when
+ * nothing this exporter generates reads them.
+ */
+function collectVariables(project: Project): Map<string, UsedVariable> {
+  const used = new Map<string, UsedVariable>();
+  const keys = new Set<string>();
+  for (const variable of project.variables) {
+    used.set(variable.id, { variable, key: toIdentifier(variable.name, keys) });
+  }
+  return used;
+}
+
+/**
+ * The variable table, `ASSETS`' and `AUDIO`'s sibling and a named const for
+ * their reason: the numbers a reader is most likely to want to change belong in
+ * one object at the top of the file rather than scattered through `create()`.
+ */
+function buildVariableTable(used: Map<string, UsedVariable>, indent: string): string {
+  const lines = [
+    '/**',
+    ' * The numbers the game keeps. Read them anywhere with',
+    " * `this.registry.get('name')`, and change one with `set` or `inc`.",
+    ' */',
+    'const VARIABLES = {',
+    ...[...used.values()].map(({ variable, key }) => `  ${str(key)}: ${num(variable.value)},`),
+    '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * The one function every scene declares its variables through.
+ *
+ * The `has` guard is the whole of it, and it is `anims.exists`' guard and
+ * `this.sound.get(key) ??`'s for the third time: `create()` runs again every
+ * time a scene starts, and `scene.start` is one of the things a rule can do —
+ * so an unguarded `set` would reset the score on every change of level, which
+ * would make the registry (the one store that survives a scene change) do
+ * exactly nothing for the one job it is here for.
+ *
+ * It is also the strictly more expressive choice, which is what settles it
+ * rather than taste. The document can already say "zero this when the level
+ * starts", because `sceneStart -> setVar` is two things it already holds.
+ * Unguarded, there would be no way for it to say *don't* — `wordWrapWidth: 0`'s
+ * "the one target the user could not express", inverted.
+ *
+ * `Object.keys` rather than a printed list of `set` calls, so that a project
+ * with forty variables is one loop rather than forty lines — and so the table
+ * above stays the only place the names appear.
+ */
+function buildVariableHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(scene: Phaser.Scene, values: Record<string, number>): void {`
+    : `function ${fn}(scene, values) {`;
+  const lines = [
+    signature,
+    '  for (const key of Object.keys(values)) {',
+    '    if (!scene.registry.has(key)) scene.registry.set(key, values[key]);',
+    '  }',
+    '}',
   ];
   return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
 }
@@ -1604,6 +1718,20 @@ interface EmitContext {
   /** The grounded tracker a Matter platformer's jump reads. */
   groundFn: string;
   /**
+   * What the variable-declaring helper is called in this module, allocated from
+   * the same identifier set and for the same reason as `tilemapFn`.
+   */
+  initVariablesFn: string;
+  /**
+   * The variable table, file-wide like `assets` and `audio`.
+   *
+   * Keyed by variable id, because that is what a rule names; the registry key
+   * a scene actually reads is the entry's `key`. Unfiltered — see
+   * `collectVariables` — so unlike the three tables above it, its size is the
+   * count of what the *project* declares rather than of what a scene uses.
+   */
+  variables: Map<string, UsedVariable>;
+  /**
    * Which engine the scene being emitted runs. On the context rather than
    * threaded through `emitNode` because a prefab factory's bodies are refused
    * for a different reason entirely (they are container children), so nothing
@@ -2671,6 +2799,21 @@ function buildCreateBody(
   // identifier set — these handles are allocated out of `used` before any
   // object binding is, so an object named "jump" cannot take a name a
   // hand-written line elsewhere is reaching for.
+  // Before the sound handles and after everything about the world, because it
+  // is the same kind of thing as both: a fact this scene starts with. It names
+  // no binding, so unlike the camera's `startFollow` and the collider rows it
+  // has no reason to wait for the object list — and a `sceneStart` rule in the
+  // epilogue may add to a variable immediately, so it must not.
+  //
+  // Gated on the project declaring one, the rule the asset table, the tilemap
+  // helper, the prefab factories, the emitted `update()` and the touch buttons
+  // all follow: a project that predates variables emits this line nowhere and
+  // exports byte for byte what it always did.
+  if (ctx.variables.size > 0) {
+    if (lines.at(-1) !== '') lines.push('');
+    lines.push(`${ctx.initVariablesFn}(this, VARIABLES);`);
+  }
+
   const sounds = buildSoundLines(project, scene, ctx.audio, used);
   if (sounds.length > 0) {
     if (lines.at(-1) !== '') lines.push('');
@@ -2995,10 +3138,20 @@ function prepare(project: Project): Emission {
   const matterFn = toIdentifier('matter body', moduleNames);
   const matterBodyFn = toIdentifier('matter body of', moduleNames);
   const groundFn = toIdentifier('matter ground', moduleNames);
+  // And a ninth, by that same rule. After all eight above it rather than beside
+  // the table it reads, for `fitFn`'s reason: drawing earlier would move the
+  // suffix a clash gives one of the others, and four of those are asserted by
+  // name in the suite.
+  const initVariablesFn = toIdentifier('init variables', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
   const audio = collectAudio(project, project.scenes);
+  // Takes the project alone, where every other collector takes the scenes as
+  // well: a variable belongs to no scene, so there is nothing here to filter by
+  // one. That absence reads exactly like a forgotten argument, which is why
+  // `collectVariables` says so at length.
+  const variables = collectVariables(project);
   const fonts = collectFonts(project, project.scenes, prefabs);
   const animations = collectAnimations(project, project.scenes, assets, prefabs);
   const tilemaps = collectTilemaps(project, project.scenes, prefabs, assets);
@@ -3019,6 +3172,8 @@ function prepare(project: Project): Emission {
       matterFn,
       matterBodyFn,
       groundFn,
+      initVariablesFn,
+      variables,
       fonts,
       receiver: 'this',
       // A placeholder the per-scene context overwrites. The engine is a
@@ -3160,6 +3315,15 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // byte-for-byte property every table before it has kept.
   const atlases = hasAtlasIn(ctx.assets) ? `\n${buildAtlasTable(ctx.assets, '')}\n` : '';
   const fonts = ctx.fonts.size > 0 ? `\n${buildFontTable(ctx.fonts, '')}\n` : '';
+  // The table and its helper as one block, exactly as `TILEMAPS` is followed by
+  // the function that reads it — because here too the helper is the table's
+  // only reader, and splitting them puts a `for` loop a screen away from the
+  // object it walks.
+  const variables =
+    ctx.variables.size > 0
+      ? `\n${buildVariableTable(ctx.variables, '')}\n` +
+        `\n${buildVariableHelper(ctx.initVariablesFn, language, '')}\n`
+      : '';
   // Same rule again: no tilemaps, no table and no helper, so every project that
   // predates them exports byte for byte what it always did.
   const tiles =
@@ -3200,7 +3364,7 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
 
   return `${header(project)}${physicsNote(physics.arcade)}
 import Phaser from 'phaser';
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${factories}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -3231,6 +3395,11 @@ export function generateRunnableHtml(project: Project): string {
     : '';
   const fonts =
     ctx.fonts.size > 0 ? `${buildFontTable(ctx.fonts, '      ')}\n\n` : '';
+  const variables =
+    ctx.variables.size > 0
+      ? `${buildVariableTable(ctx.variables, '      ')}\n\n` +
+        `${buildVariableHelper(ctx.initVariablesFn, 'js', '      ')}\n\n`
+      : '';
   const tiles =
     ctx.tilemaps.size > 0
       ? `${buildTilemapTable(ctx.tilemaps, '      ')}\n\n` +
@@ -3285,7 +3454,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

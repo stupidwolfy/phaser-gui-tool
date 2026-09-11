@@ -68,6 +68,7 @@ import {
   type PhysicsBody,
   type Prefab,
   type Project,
+  type ProjectVariable,
   type SceneCamera,
   type SceneCollider,
   type SceneDoc,
@@ -422,6 +423,23 @@ export interface EditorState {
    * import again but the family name is not one press to retype.
    */
   removeFont: (id: string) => void;
+
+  // -- variables -------------------------------------------------------------
+  /**
+   * Declares a new variable, starting at zero under a name nothing else has.
+   *
+   * The name is unique on arrival rather than de-duplicated at export, so a
+   * fresh row never opens already showing a suffixed key — `defaultTween`'s
+   * rule that a thing switched on should arrive doing something legible. A
+   * *rename* is deliberately not de-duplicated, for `renamePrefab`'s reason:
+   * forcing uniqueness on every keystroke fights the user halfway through a
+   * word, and `collectVariables`' own set is the backstop that makes the
+   * export correct regardless.
+   */
+  addVariable: () => void;
+  updateVariable: (id: string, patch: Partial<Omit<ProjectVariable, 'id'>>) => void;
+  /** Removes a variable. */
+  removeVariable: (id: string) => void;
 
   // -- prefabs ---------------------------------------------------------------
   /**
@@ -1367,6 +1385,25 @@ function unusedSceneName(project: Project, base?: string): string {
   return candidate;
 }
 
+/**
+ * A variable name nothing in the project has taken yet.
+ *
+ * `unusedSceneName`'s sibling and for a sharper version of its reason. Two
+ * scenes sharing a name is fatal twice over in the export; two *variables*
+ * sharing one is quieter and worse — `collectVariables` gives the second a
+ * numeric suffix, so the document shows two rows while the game keeps one
+ * number, and the row the user is editing may not be the one their rule reads.
+ * Arriving unique means that never happens by default.
+ */
+function unusedVariableName(project: Project): string {
+  const taken = new Set(project.variables.map((variable) => variable.name));
+  const stem = `Variable ${project.variables.length + 1}`;
+  let candidate = stem;
+  let n = 2;
+  while (taken.has(candidate)) candidate = `${stem} ${n++}`;
+  return candidate;
+}
+
 export function activeScene(project: Project): SceneDoc {
   return (
     project.scenes.find((scene) => scene.id === project.activeSceneId) ??
@@ -1933,6 +1970,32 @@ export const useEditorStore = create<EditorState>((set, get) => {
       editProject((project) => ({
         ...project,
         fonts: project.fonts.filter((asset) => asset.id !== id),
+      })),
+
+    addVariable: () =>
+      editProject((project) => ({
+        ...project,
+        variables: [
+          ...project.variables,
+          { id: newId(), name: unusedVariableName(project), value: 0 },
+        ],
+      })),
+
+    // Rebuilt rather than mutated in place, for the reason `updateSceneSound`
+    // is: the undo history is snapshots of this document, so an in-place edit
+    // would rewrite the past along with the present.
+    updateVariable: (id, patch) =>
+      editProject((project) => ({
+        ...project,
+        variables: project.variables.map((variable) =>
+          variable.id === id ? { ...variable, ...patch } : variable,
+        ),
+      })),
+
+    removeVariable: (id) =>
+      editProject((project) => ({
+        ...project,
+        variables: project.variables.filter((variable) => variable.id !== id),
       })),
 
     createPrefabFromSelection: () => {

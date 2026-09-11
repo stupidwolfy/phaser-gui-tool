@@ -265,6 +265,26 @@ export function hostileProject(): Project {
         ],
       },
     ],
+    // Three variables, and each is here for its own reason.
+    //
+    // The first carries hostile free text, which reaches the output in three
+    // places `variableKeyOf` and `str()` sit between: an object-literal *key*
+    // in the `VARIABLES` table, a call argument to `registry.set`/`get`/`inc`,
+    // and the runnable page's own `<script>` body. The atlas frame name's three
+    // paths, one table over.
+    //
+    // The second is plainly named, so the ordinary emit is exercised too.
+    //
+    // The third derives the same identifier as the second — `toIdentifier`
+    // strips the space and lower-cases nothing that matters — so the
+    // de-duplication in `collectVariables` actually runs. Two variables sharing
+    // one registry key is a *silently shared value at runtime*, which is worse
+    // than two sounds sharing a key, so the suffix is the thing being asserted.
+    variables: [
+      { id: 'var-1', name: `score ${breakout}`, value: 0 },
+      { id: 'var-2', name: 'lives', value: 3 },
+      { id: 'var-3', name: 'Lives', value: 99 },
+    ],
     activeSceneId: 'scene-1',
     scenes: [
       {
