@@ -68,7 +68,10 @@ Iteration 27 (shipped) let an object move on its own: a tween on a node, its des
 drawn on the canvas, run under the ▶ toggle the animations and emitters already had — and
 the first thing ever allowed to break `applyNode`'s "drawn position == stored position"
 invariant, because it is also the first that can be stopped without the document having
-moved.
+moved. Iteration 28 (shipped) crossed the line iteration 20 drew and let the document
+say what *happens*: a rule table on the scene, numbers the game keeps on the project, and an
+export that emits real listeners — on a canvas that runs none of it, because a rule does not
+merely animate the document, it destroys objects and starts other scenes.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -2232,6 +2235,216 @@ reason: not per-type, so not in `props`.
   *whether it has stopped moving* — a settled-yet reading compares two shots milliseconds
   apart and goes red on a loaded machine for a reason that is not the collider.
 
+## Rules
+
+Three things the document may now say that it could not before: **when** something
+happens, **whether** it happens, and **what** happens. `SceneDoc.rules: SceneRule[]` holds
+them and `project.variables: ProjectVariable[]` holds the numbers they test. It is the
+first iteration to cross a line this file has been drawing since iteration 20, which is
+why most of what follows is about where the new line falls rather than about the code.
+
+- **The line moved, and this is the sentence that replaces iteration 20's.** That one said
+  the document may state standing facts about the world but not a sequence of events. This
+  one is narrower than "anything goes" and falls out of the emit rather than out of taste:
+
+  > **The document may name a moment Phaser already delivers, and a list of things to do
+  > at it. It may not name a moment Phaser would have to go looking for.**
+  >
+  > **And a rule's actions are a list, never a program.** No order that depends on a
+  > result, no value that depends on a value, no branch inside the list. The conditions are
+  > one gate on the whole list, read once, at the moment.
+
+  The first half is why all five triggers are `create()`, a collider's own callback,
+  `pointerdown`, `keydown-<KEY>` and a `TimerEvent`, and why **`update()` gains nothing at
+  all**. Not one of them is polled, and that is not a coincidence — it is the constraint
+  that *chose* the five. A sixth trigger of the form "while…" or "when the score passes
+  ten" is the first that has to be watched for every frame, which is the first that needs
+  an emitted `update()`, which is exactly where the line now falls. A future reader adding
+  a "while" trigger is crossing it, not extending it. The second half refuses OR, nesting,
+  `onComplete`, arithmetic and callback parameters in one breath.
+- **The editor still never runs a rule, and this is the strongest version of a refusal
+  made four times already.** Physics is not simulated because a step rewrites the numbers
+  the document is made of; a tween *is* run under ▶ because its result is thrown away the
+  moment it stops. A rule is neither: it destroys objects and starts other scenes, so a
+  preview would not merely animate the document, it would demolish it. There is no version
+  of "run it for a moment". **`EditorScene.ts` is untouched by this entire feature** —
+  Audio's claim one iteration on — and `hasMotionIn` records its **sixth** refusal, which
+  is the one a reader will most expect to be wrong, since a rule is *nothing but* a thing
+  that happens over time. But that toggle exists so a canvas moving by itself can be
+  stopped, and no rule here moves anything at all.
+- **`rulesOf(project, scene)` is the only reader**, in the `guidesOf` / `soundsOf` /
+  `collidersOf` / `cameraOf` / `tileMapOf` family, answering six questions at once. A fresh
+  array per call, so `useEditorStore((s) => rulesOf(...))` is React error #185 — the
+  `tileMapOf` trap, **tenth** time, and `rulesNaming` is the eleventh.
+- **Its policy is deliberately not uniform, and the sentence underneath it had never needed
+  saying before:**
+
+  > **A repair may narrow what the document says. It may never widen it.**
+
+  Every reader in `schema.ts` has only ever narrowed — `soundsOf` clamps a volume,
+  `cameraOf` repairs a zoom, `tileMapOf` drops a tile, `collidersOf` drops a row,
+  `physicsOf` strips a nested body. It never had to be said, because until now nothing in
+  this document *could* be widened by a repair. A dropped **condition** is the first thing
+  that can: `if score >= 10` removed is not a rule that does less, it is a rule that now
+  fires **always**. So a condition naming a missing variable costs the **whole rule**,
+  where an action naming a missing node costs only that action.
+- **A dangling variable in an *action* costs the whole rule too**, which is that argument
+  one step further and the one a reader will want to trim back. A variable is the one thing
+  a rule names that *another rule reads*: drop an `addVar` and every condition elsewhere in
+  the project goes on testing a number that was supposed to have moved, silently. `destroy`
+  has no such reach, so it goes alone. The store says the same thing — `removeVariable`
+  drops every rule that names it rather than pruning the parts, so the reader and the store
+  cannot disagree.
+- **A repair may set a rate; it may not open a gate.** `timer.delay` is repaired with a 1ms
+  floor exactly as `tweenOf` repairs a duration, and that floor is the whole protection
+  against **the one thing in this vocabulary that can run away**: a looping timer at 0ms
+  fires on every step of the game loop, and under `addVar` that is a counter in the
+  thousands within a second.
+- **An unknown trigger kind costs the rule; an unknown action kind costs the action.** A
+  trigger is a moment and there is exactly one, so an unknown one leaves nothing to attach
+  to. An action is one line of a list the rest of which still means something — and the
+  empty-`do` check catches the case where it was the only one, because a real listener
+  running an empty callback is indistinguishable from the feature being broken. That is
+  `tweenOf`'s "an unknown ease is repaired, an empty `to` is not", inverted.
+- **Rules name top-level nodes only, and the reason is *not* `physicsOf`'s.** A body is
+  banned inside a container because it reads world coordinates. A rule is banned there
+  because `buildCreateBody`'s `bindings` map is keyed off `scene.children`, so a nested node
+  has no binding for an action to name — and because a prefab definition's children share
+  their node ids across every placement, so `destroy` could not say *which* coin. That is
+  `containerBounds`' "two coins on screen would fight over one map entry", arriving in the
+  document. Strip on read, refuse on write, as always.
+- **A collide trigger binds to the `SceneCollider` row, and under Matter it does not — and
+  the split is Phaser's rather than this editor's.** Arcade's handler *is* the third
+  argument of the `add.collider` call the row already emits, so a rule **changes that line**
+  rather than adding one; two calls on one pair would separate twice. Binding also keeps one
+  notion of what collides, inherits `collidersOf`'s four refusals free, gets the
+  multi-layer-tilemap loop free, and **inherits the row's own `collide`/`overlap` word** —
+  so overlap-versus-contact is a rule parameter this feature never had to invent.
+  Under Matter there is no row at all, and the argument is better than "the engines differ":
+  `collidersOf` answers `[]` for Matter *because* Matter already collides everything with
+  everything, so a row saying "these two meet" says nothing it has not done. **That does not
+  transfer by a single word** — "when these two touch, *do this*" is something Matter does
+  not do on its own — so this is the one place a Matter scene needs *more* emitted code than
+  an Arcade one. Refusing it would be iteration 26's Controls-panel bug repeated
+  deliberately, three iterations after it was recorded.
+- **`addRule` and `updateRule` both create the row a collide trigger needs, in the same undo
+  step.** `addCollider`'s "a row arrives already pointing at two objects", and **the first
+  time the write half of strip-on-read/refuse-on-write is a *construction* rather than a
+  refusal.** Both halves are needed and the second is the one that was missed first: a rule
+  *becomes* a collide rule as often as it arrives as one, and a trigger switched with no row
+  is a rule `rulesOf` drops on the very next read — which reads as a rule that vanished the
+  moment it was made. `removeCollider` goes the other way and takes that pair's rules with
+  it, which is `removePrefab` detaching its instances; creating the row is a convenience,
+  destroying the rules is correctness, and the asymmetry is `removeFont`'s.
+- **`mapRule` reads `scene.rules` raw, and it is the one place in this feature that
+  deliberately does not go through the reader.** `rulesOf` *drops* what it cannot validate,
+  so editing through it would silently delete every rule the panel is not currently showing
+  the moment any other one was touched — and a rule mid-edit is exactly the rule that does
+  not validate yet. The reader is for what the renderer and the exporter see; the store
+  edits the document as written.
+- **A condition reads a variable and never a live object property.** That is the second
+  thing this feature refuses rather than a hole in it. A variable is the one quantity here
+  that survives `scene.start`, that validates against a table the document holds, and that
+  is *one shape across the whole union* — where `x` on a tilemap, `alpha` on a particles
+  wrapper and `width` on a sprite are three different questions. `TWEEN_PROPERTIES`' refusal
+  of a seventh property, arriving in a condition.
+- **Conditions and actions carry no `id`.** `SceneGuide`, `SceneCollider` and
+  `TilemapLayerDoc` each carry one because something *outside* the array names it — a row on
+  another panel, or `activeLayerId`. Nothing names an action: it has no existence outside
+  the rule that holds it, and that rule is itself keyed. React keys are
+  `` `${rule.id}:${index}` ``. Said out loud, because here "no id needed" and "forgot the
+  id" read identically.
+- **`RULE_KEYS` is an allowlist and the argument is not injection** — `str()` already sits
+  between the value and the output. It is that `keyboard.on('keydown-BANANA', …)` registers
+  a listener on an event string nothing ever emits: no warning, no error, no throw, and a
+  key that simply never works. `TWEEN_EASES`' argument to the character, one plugin over,
+  and it is what makes the control a `SelectField`.
+- **`RULE_OPERATOR_JS` is the one builder for what a comparison is written as**, read by the
+  panel's label and by the emit — `TWEEN_PHASER_KEY`'s rule, on something nobody can see
+  until the game is in their hand. `eq` is `===` rather than `==`, because the registry
+  holds whatever was last written to it and a coercing comparison would make `0` and `false`
+  the same answer.
+- **`TAPPABLE_TYPES` is presently the same six as `PHYSICS_TYPES` and is deliberately a
+  second list.** One is about whether Arcade can simulate a body, the other about whether
+  Phaser can build a hit area, and they come apart the moment either changes — the note in
+  `EditorScene` about `ParticleEmitter` gaining ComputedSize is exactly the change that
+  would move one and not the other. `canCollide` being separate from `PHYSICS_TYPES` is the
+  same call already made once.
+- **`playSound` names a `SceneSound` row, not an `audioId`.** `buildSoundLines` already binds
+  one `const jumpSound` per row in `create()`'s prologue, so the action emits a name that
+  exists over a key `preload()` has already loaded — and `collectAudio`, `usedIn`,
+  `missingReason` and the preload gate all need **no edit at all**. An `audioId` would name a
+  sound the scene may not register, and `sound.add` on a key the cache does not hold *throws
+  inside `create()` before a single object is added*, which Audio already records as worse
+  than the image case. It is also the sentence this iteration exists to write: Audio said
+  "`jumpSound.play()` is the user's line to write, exactly as the collider is", and this is
+  where the document writes it, on the handle iteration 17 built for it.
+- **The panel is in two places, and that is the point rather than a duplication.** The
+  scene-wide list is in `SceneInspector`; `NodeRulesSection` shows the same rules filtered to
+  one object on that object's own panel, built on `rulesNaming` so a rule the scene panel
+  dropped cannot come back to life there. `CollidersSection` recorded why: `SceneInspector`
+  renders only with an **empty selection**, so a panel that lives only there is off screen
+  for the whole of the time a person spends building the objects a rule is about — and *a
+  panel that is right and cannot be reached reads to a user exactly like a feature that does
+  not exist.* This feature applies that lesson before the bug rather than after it.
+- **A rule is a collapsed summary that expands**, because it holds more controls than
+  anything else in the panel, and the toggle is titled `Edit <name>` rather than carrying the
+  bare name — the scene chips' `Switch to ` rule, arriving a fifth time, and it matters
+  because nothing stops a user calling a rule "Scene". Never more than two controls per
+  `field-row`: at 390px a third is ~85px and truncates every object name in a picker to
+  nothing, which is the reason `CollidersSection` splits four controls into two rows of two.
+- **Every picker is seeded with a real choice**, `defaultTween`'s rule and its reason: a rule
+  that arrives naming nothing is one `rulesOf` drops on the next read, so there would be
+  nothing on screen left to fill in. `restartScene` is the one action that names nothing at
+  all, which makes it the only seed that can never dangle whatever the scene holds.
+- **`SCHEMA_VERSION` bumped to 13, on the silent-data-loss half and only that half.**
+  `scene.rules` rides in on `scenes` — passed through verbatim — and would not have bumped
+  anything on its own. `project.variables` is a *project* table, one of the fields
+  `parseProject` names one at a time, so a v12 build drops it on open and re-saves without
+  it. What it leaves is the audio case made worse the way the font case was: the rules
+  survive, naming variables whose declarations are gone, so `rulesOf` drops the rules that
+  were the point of the file. A sound that loses its table makes no noise; a game that loses
+  its variables still runs, and stops being the game.
+
+### Variables
+
+- **Project-level, and the reason is stronger than the one the tables beside it have.** An
+  image is shared because copying the bytes would be wasteful; a score shared per scene would
+  not be a score. It has to survive `scene.start`, which is itself one of the actions — so it
+  is emitted through `this.registry`, the game-wide `DataManager` and the only store that
+  outlives a change of scene. `this.data` is the per-scene one and would silently reset on
+  every restart.
+- **The initial value is set once per game, and resetting it is a rule.** The emitted helper
+  guards with `registry.has(key) ||`, which is `anims.exists`' and `this.sound.get(key) ??`'s
+  guard for the third time and for their reason: `create()` runs again every time a scene
+  starts. It is also the strictly more expressive choice, which is what settles it rather
+  than taste — the document can already say "zero this when the level starts", because
+  `sceneStart → setVar` is two things it already holds. Unguarded, there would be no way for
+  it to say *don't*. `wordWrapWidth: 0`'s "the one target the user could not express",
+  inverted.
+- **The registry key is derived at export and never stored** — `audioKeyOf`'s treatment
+  rather than `FontAsset.family`'s, by the test this file already states: a family *is* the
+  link a node holds, so it must be stable for the life of the project, while nothing in this
+  document ever names a registry key. Conditions and actions name `id`, and that is what
+  keeps renaming free.
+- **`variableKeysOf` answers for the whole table where `audioKeyOf` answers for one name, and
+  that difference is the point.** An audio row can afford an un-de-duplicated key because a
+  collision is a *second sound that visibly does not play*. Two variables deriving one
+  registry key is a value **silently shared at runtime**: both rows go on showing their own
+  number while the game keeps one, and the row being edited may not be the one a rule reads.
+  The suffix is the only thing on screen that can say so, so the panel has to be shown the
+  de-duplicated answer — which means being shown all of them at once. `atlasOf`'s uniqueness
+  argument, one table over.
+- **`collectVariables` is unfiltered where `collectAssets` and `collectAudio` emit only what a
+  scene uses.** Those are filtered because bytes are expensive; a variable is three tokens,
+  and it exists *precisely so a hand-written line can read it* — `mass` and `immovable`'s
+  reason for being emitted when nothing generated reads them. On that checklist an unfiltered
+  collector reads exactly like a missed step, which is why it says so at length.
+- **A new variable arrives under a name nothing else has**, so a fresh row never opens already
+  showing a suffixed key. A *rename* is deliberately not de-duplicated, for `renamePrefab`'s
+  reason: forcing uniqueness on every keystroke fights the user halfway through a word, and
+  `collectVariables`' own set is the backstop that keeps the export correct regardless.
+
 ## Touch controls
 
 `NodeControls.touch` is a boolean beside `scheme`, and the exported game draws a D-pad and
@@ -3406,6 +3619,51 @@ gives a blank page with 404ing assets — the single most likely deploy failure.
 with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
+
+Rules shipped in iteration 28, and what they refuse divides cleanly into things that are a
+pure loosening later and things the feature exists to say no to.
+
+*Loosenings.* **No OR and no nesting** — an OR is two rules with one trigger and one action
+list, and the editor could offer a "duplicate this rule" button and deliberately does not.
+What would *not* be a loosening is a condition **tree**, which is a second document format
+inside a field. **No arithmetic beyond set and add** — `addVar{by: -1}` is subtraction, and
+multiply, min and clamp are one `op` field; it is refused because the request after multiply
+is `score = score + lives`, which is a second operand *naming a variable*, which is an
+expression tree and therefore code in the document. **No string variables**, which is a
+loosening in shape and is refused for a reason of sequencing: the only thing anyone wants one
+for is a name to *show*, which is `setText` — the first action that would write free text into
+a running game — and it should arrive with that action rather than before it. **No collision
+callback parameters** (which object hit which), and this one is mechanical as well as
+principled: the emitted callback takes zero parameters, which is assignable to
+`ArcadePhysicsCallback` with nothing to annotate, and the moment it wants two it needs two
+types the shared `create()` body has nowhere to put. **No rule inside a prefab** — a rule
+names top-level scene nodes only, so a definition's children are unreachable, and the shape it
+would take later is a per-*instance* rule, which is the override model prefabs already refuse.
+**No tap on a group, an instance, a tilemap or an emitter** — the instance one is the loosening
+(the factory would `setSize` from `getBounds()` before returning); the other three are Phaser's
+limits or the document's rather than deferred work, and each is said in the panel. **No camera
+effects** — shake, flash, fade, pan and zoom were offered as part of this iteration and not
+taken, and they are a pure loosening: five actions and no format change. **Nothing pauses and
+nothing stops** — `timer{loop: false}` is the whole of "once", and a rule that switches another
+rule off is a rule about rules.
+
+*And the things this feature exists to refuse.* **No condition on a live object property** —
+see Rules above; a variable is the one quantity that survives `scene.start`, validates against
+a table and is one shape across the whole union, where `x` on a tilemap and `width` on a sprite
+are different questions. **No per-object custom code** — a field holding JavaScript is a
+document that cannot be validated, cannot be escaped and cannot be drawn: the emit-zone
+argument at its purest, and the gradient fill's. **No `onComplete`, and nothing that waits** —
+a rule that fires when a tween finishes is a *sequence*, which is `tweens.chain`'s refusal one
+iteration on and the same sentence; `startTween` is allowed precisely because it names a moment
+and not an outcome. And **no "while" trigger**, which is the sharpest one: every trigger here
+is a moment Phaser already delivers, and a condition watched continuously is the first that
+would have to be polled — which is the first that needs an emitted `update()`, which is exactly
+where this iteration's line falls.
+
+*Not on either list:* relative variable targets are not refused, they are `addVar`; a rule has
+no `enabled` flag, because deleting it is one press and a disabled rule is a document saying two
+things; and `overlap` is not a hole at all, since a collide rule inherits `SceneCollider.kind`
+and the distinction was a parameter this feature never had to invent.
 
 Tweens shipped in iteration 27 with six deliberate holes. **One tween per node** — a
 second on the same object means a second *duration*, which is a list; that is a pure

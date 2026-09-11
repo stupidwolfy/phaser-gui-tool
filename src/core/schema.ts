@@ -2077,6 +2077,11 @@ export interface SceneDoc {
    * is, and read through `collidersOf`, never directly.
    */
   colliders?: SceneCollider[];
+  /**
+   * What happens in this scene, and when. Optional for the reason `guides` is,
+   * and read through `rulesOf`, never directly.
+   */
+  rules?: SceneRule[];
 }
 
 /**
@@ -2652,6 +2657,580 @@ export interface Prefab {
    */
   name: string;
   children: GameObjectNode[];
+}
+
+
+/* -------------------------------------------------------------------------- */
+/*  Rules                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The keys a rule may listen for, as Phaser names them.
+ *
+ * `Phaser.Input.Keyboard.KeyCodes`' own names, which are also the suffixes
+ * `keyboard.on('keydown-SPACE')` dispatches on — Phaser builds its `KeyMap` by
+ * inverting that table, so the two cannot disagree.
+ *
+ * An allowlist rather than a free string field, and **the argument is not
+ * injection** — `str()` already sits between this and the output. It is that
+ * `keyboard.on('keydown-BANANA', ...)` registers a listener on an event string
+ * nothing ever emits: no warning, no error, no throw, and a key that simply
+ * never works. That is `TWEEN_EASES`' argument to the character, one plugin
+ * over, and it is what makes the control a `SelectField`.
+ */
+export const RULE_KEYS: readonly string[] = [
+  'SPACE', 'ENTER', 'ESC', 'SHIFT', 'CTRL', 'ALT', 'TAB', 'BACKSPACE',
+  'LEFT', 'RIGHT', 'UP', 'DOWN',
+  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+  'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+  'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE',
+];
+
+/**
+ * The node types a `tap` trigger may name.
+ *
+ * Presently the same six as `PHYSICS_TYPES`, and deliberately a **second list**
+ * rather than a reuse of that one: they answer different questions — one is
+ * about whether Arcade can simulate a body, this is about whether Phaser can
+ * build a hit area — and they come apart the moment either changes. The note in
+ * `EditorScene` about `ParticleEmitter` gaining ComputedSize is exactly the
+ * change that would move this list and not that one.
+ *
+ * Each of the four left out is left out for a mechanical reason rather than a
+ * preference, and each is said in the panel rather than being silently absent:
+ *
+ * - a `container` and an `instance` are Phaser Containers, whose `width` and
+ *   `height` are 0 until something sets them — and a group's box is measured by
+ *   the *renderer* (`bounds.ts`) from its children, which a pure function of the
+ *   document cannot see. A tap on a group in a running game is a tap on
+ *   whichever child was under the finger, which is a question about children
+ *   that a rule naming one node cannot ask.
+ * - a `tilemap` emits one object per layer, so a tap on it has no single
+ *   target; and a tap on a map is really a tap on a *tile*, which is a per-cell
+ *   question this document has nowhere to put.
+ * - a `particles` node has neither Origin nor ComputedSize, so Phaser's
+ *   `pointWithinHitArea` adds an undefined `displayOriginX` and tests `NaN`.
+ *   That is the recorded reason the emitter is drawn inside a wrapper at all.
+ */
+const TAPPABLE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
+  'rectangle',
+  'ellipse',
+  'text',
+  'sprite',
+  'nineslice',
+  'tileSprite',
+]);
+
+/** Whether a `tap` trigger may name this node type, for the inspector. */
+export function canBeTapped(type: NodeType): boolean {
+  return TAPPABLE_TYPES.has(type);
+}
+
+/**
+ * The moment a rule fires at.
+ *
+ * Every one of the five is a moment **Phaser already delivers**: `create()`, a
+ * collider's own callback, `pointerdown`, `keydown-<KEY>` and a `TimerEvent`.
+ * Not one of them is polled, and that is not a coincidence — it is the
+ * constraint that chose them, and it is the line this feature draws in place of
+ * the one iteration 20 drew. A sixth trigger of the form "while..." or "when the
+ * score passes ten" would be the first that has to be watched for on every
+ * frame, which is the first that needs an emitted `update()`, which is exactly
+ * where the line now falls.
+ */
+export type RuleTrigger =
+  | { kind: 'sceneStart' }
+  | { kind: 'collide'; aId: string; bId: string }
+  | { kind: 'tap'; nodeId: string }
+  | { kind: 'keyDown'; key: string }
+  | { kind: 'timer'; delay: number; loop: boolean };
+
+/** The comparisons a condition may make. */
+export type RuleOperator = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
+
+export const RULE_OPERATORS: readonly RuleOperator[] = [
+  'eq',
+  'ne',
+  'lt',
+  'lte',
+  'gt',
+  'gte',
+];
+
+/**
+ * What each comparison is written as in JavaScript.
+ *
+ * The one builder for it, read by the panel's label and by the emit —
+ * `TWEEN_PHASER_KEY`'s rule, and for its reason: a document word and a language
+ * operator are two different things, and conflating them is the kind of mistake
+ * nobody can see until the game is in their hand. `eq` is `===` rather than
+ * `==`, because the registry holds whatever was last written to it and a
+ * coercing comparison would make `0` and `false` the same answer.
+ */
+export const RULE_OPERATOR_JS: Record<RuleOperator, string> = {
+  eq: '===',
+  ne: '!==',
+  lt: '<',
+  lte: '<=',
+  gt: '>',
+  gte: '>=',
+};
+
+/** How each comparison reads on a panel row. */
+export const RULE_OPERATOR_LABEL: Record<RuleOperator, string> = {
+  eq: 'is',
+  ne: 'is not',
+  lt: 'is under',
+  lte: 'is at most',
+  gt: 'is over',
+  gte: 'is at least',
+};
+
+/**
+ * One test a rule makes before it does anything.
+ *
+ * It reads a **variable** and nothing else — never a live property of an object.
+ * That is the second thing this feature refuses rather than a hole in it. A
+ * variable is the one quantity here that survives `scene.start`, that validates
+ * against a table the document holds, and that is *one shape across the whole
+ * union* — where `x` on a tilemap, `alpha` on a particles wrapper and `width` on
+ * a sprite are three different questions. It is `TWEEN_PROPERTIES`' refusal of a
+ * seventh property, arriving in a condition.
+ *
+ * No `id`, unlike `SceneGuide`, `SceneCollider` and `TilemapLayerDoc`. Each of
+ * those carries one because something *outside* the array names it — a row on
+ * another panel, or `activeLayerId`. Nothing names a condition: it has no
+ * existence outside the rule that holds it, and that rule is itself keyed. Said
+ * out loud, because on this list "no id needed" and "forgot the id" look
+ * identical.
+ */
+export interface RuleCondition {
+  variableId: string;
+  op: RuleOperator;
+  value: number;
+}
+
+/**
+ * One thing a rule does.
+ *
+ * A closed union of verbs, each naming a thing the document already holds — a
+ * node in this scene, a scene in this project, a sound this scene registers, a
+ * clip, a variable. Nothing here is free text, nothing is parsed, and nothing
+ * is interpolated as code. That is the whole of what makes a rule data rather
+ * than a program.
+ *
+ * `playSound` names a **`SceneSound` row**, not an `audioId`, and that is the
+ * one choice here worth defending. `buildSoundLines` already binds one
+ * `const jumpSound` per row in `create()`'s prologue, so the action emits a name
+ * that exists over a key `preload()` has already loaded, and `collectAudio`,
+ * `usedIn`, `missingReason` and the preload gate all need no edit at all. An
+ * `audioId` would name a sound the scene may not register — and `sound.add` on a
+ * key the cache does not hold *throws inside `create()` before a single object
+ * is added*, which Audio already records as worse than the image case.
+ *
+ * It is also the sentence this iteration exists to write. Audio said:
+ * "`jumpSound.play()` is the user's line to write, exactly as the collider is."
+ * This is where the document writes it, on the handle iteration 17 built for it.
+ */
+export type RuleAction =
+  | { kind: 'startScene'; sceneId: string }
+  | { kind: 'restartScene' }
+  | { kind: 'destroy'; nodeId: string }
+  | { kind: 'setVisible'; nodeId: string; visible: boolean }
+  | { kind: 'playSound'; soundId: string }
+  | { kind: 'stopSound'; soundId: string }
+  | { kind: 'playAnimation'; nodeId: string; animationId: string }
+  | { kind: 'startTween'; nodeId: string }
+  | { kind: 'setVar'; variableId: string; value: number }
+  | { kind: 'addVar'; variableId: string; by: number };
+
+/** Every action kind, for the inspector's picker. */
+export const RULE_ACTION_KINDS: readonly RuleAction['kind'][] = [
+  'destroy',
+  'setVisible',
+  'playSound',
+  'stopSound',
+  'playAnimation',
+  'startTween',
+  'setVar',
+  'addVar',
+  'startScene',
+  'restartScene',
+];
+
+/** Every trigger kind, for the inspector's picker. */
+export const RULE_TRIGGER_KINDS: readonly RuleTrigger['kind'][] = [
+  'sceneStart',
+  'collide',
+  'tap',
+  'keyDown',
+  'timer',
+];
+
+/**
+ * One rule: a moment, a gate, and a list of verbs.
+ *
+ * The conditions are **one gate on the whole list**, read once, at the moment —
+ * not a branch inside it. And the actions are a list, never a program: no order
+ * that depends on a result, no value that depends on a value, no nesting. That
+ * second half is what refuses OR, `onComplete`, arithmetic and callback
+ * parameters in one breath.
+ */
+export interface SceneRule {
+  /**
+   * Its own identity, for a `SceneCollider`'s reason: a rule is edited and
+   * removed individually, and an index does not survive undo rebuilding the
+   * array. It is also what the conditions and actions inside it are keyed by,
+   * since they have none of their own.
+   */
+  id: string;
+  /** Free user text, shown on the panel and emitted as a comment. */
+  name: string;
+  when: RuleTrigger;
+  conditions: RuleCondition[];
+  do: RuleAction[];
+}
+
+/** The smallest timer delay a rule may ask for, in milliseconds. */
+const MIN_TIMER_DELAY = 1;
+
+/**
+ * This scene's rules, validated against the project and the scene they belong
+ * to.
+ *
+ * The `guidesOf` / `soundsOf` / `collidersOf` / `cameraOf` / `tileMapOf` family,
+ * answering six questions at once: is there a list, is each row well formed,
+ * does the trigger name a moment this scene can deliver, does every reference
+ * name something that still exists *at the top level*, does every condition read
+ * a variable the project holds, and is there anything left to do.
+ *
+ * **The policy is deliberately not uniform, and the sentence underneath it had
+ * never needed saying before:**
+ *
+ * > A repair may narrow what the document says. It may never widen it.
+ *
+ * Every reader in this file has only ever narrowed. `soundsOf` clamps a volume,
+ * `cameraOf` repairs a zoom, `tileMapOf` drops a tile the tileset has not got,
+ * `collidersOf` drops a row, `physicsOf` and `controlsOf` strip a body from a
+ * nested node. It never had to be said, because until now nothing in this
+ * document *could* be widened by a repair. A dropped **condition** is the first
+ * thing that can: `if score >= 10` removed is not a rule that does less, it is a
+ * rule that now fires **always**. So a condition naming a variable the project
+ * has not got costs the whole rule, where an action naming a missing node costs
+ * only that action.
+ *
+ * A dangling variable in an **action** costs the whole rule too, and that is the
+ * same argument reaching one step further. A variable is the one thing a rule
+ * names that *another rule reads*: drop an `addVar` and every condition
+ * elsewhere in the project goes on testing a number that was supposed to have
+ * moved, silently. `destroy` has no such reach, so it goes alone.
+ *
+ * The trigger/action asymmetry follows from what each one *is*: a trigger is a
+ * moment and there is exactly one, so an unknown kind leaves nothing to attach
+ * to; an action is one line of a list the rest of which still means something,
+ * and the empty-`do` check below catches the case where it was the only one.
+ * That is `tweenOf`'s "an unknown ease is repaired, an empty `to` is not",
+ * inverted.
+ *
+ * **Top-level only, and the reason is not `physicsOf`'s.** A body is banned
+ * inside a container because it reads world coordinates; a rule is banned there
+ * because `buildCreateBody`'s bindings map is keyed off `scene.children`, so a
+ * nested node has no binding for an action to name — and because a prefab
+ * definition's children share their node ids across every placement, so
+ * `destroy` could not say *which* coin. That is `containerBounds`' "two coins on
+ * screen would fight over one map entry", arriving in the document.
+ *
+ * A fresh array every call, exactly as `collidersOf` builds one — so
+ * `useEditorStore((s) => rulesOf(...))` compares unequal on every store change
+ * and loops forever (React error #185). The `tileMapOf` trap, tenth time. Select
+ * the project and derive outside the selector.
+ */
+export function rulesOf(project: Project, scene: SceneDoc): SceneRule[] {
+  if (!Array.isArray(scene.rules)) return [];
+
+  // Only the scene's own children, which is how the top-level rule is inherited
+  // rather than repeated — `touchZonesOf` reading `scene.children` alone.
+  const byId = new Map<string, GameObjectNode>();
+  for (const child of scene.children) byId.set(child.id, child);
+  const colliders = collidersOf(scene);
+  const sounds = new Set(soundsOf(project, scene).map((sound) => sound.id));
+  const scenes = new Set(project.scenes.map((entry) => entry.id));
+  const matter = scenePhysicsOf(scene).engine === 'matter';
+
+  const rules: SceneRule[] = [];
+  const seen = new Set<string>();
+  for (const candidate of scene.rules) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const row = candidate as Partial<SceneRule>;
+    if (typeof row.id !== 'string' || !row.id) continue;
+    // De-duplicated for `tileMapOf`'s layer-id reason: a repeated id would have
+    // a press on one row edit another, and React would key two rows the same.
+    if (seen.has(row.id)) continue;
+
+    const when = ruleTriggerOf(row.when, byId, colliders, matter);
+    if (when === null) continue;
+
+    const conditions = ruleConditionsOf(row.conditions, project);
+    if (conditions === null) continue;
+
+    const actions = ruleActionsOf(row.do, byId, sounds, scenes, project);
+    // A rule with nothing left to do is a real listener running an empty
+    // callback, which is indistinguishable from the feature being broken —
+    // `tweenOf`'s empty-`to` refusal, one level up.
+    if (actions.length === 0) continue;
+
+    seen.add(row.id);
+    rules.push({
+      id: row.id,
+      name: typeof row.name === 'string' ? row.name : 'Rule',
+      when,
+      conditions,
+      do: actions,
+    });
+  }
+  return rules;
+}
+
+/** The trigger half of `rulesOf`, or null when the whole rule has to go. */
+function ruleTriggerOf(
+  raw: unknown,
+  byId: Map<string, GameObjectNode>,
+  colliders: SceneCollider[],
+  matter: boolean,
+): RuleTrigger | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const when = raw as Partial<RuleTrigger> & Record<string, unknown>;
+
+  switch (when.kind) {
+    case 'sceneStart':
+      return { kind: 'sceneStart' };
+
+    case 'collide': {
+      const aId = typeof when.aId === 'string' ? when.aId : '';
+      const bId = typeof when.bId === 'string' ? when.bId : '';
+      if (!aId || !bId || aId === bId) return null;
+      if (!byId.has(aId) || !byId.has(bId)) return null;
+      if (matter) {
+        // Matter needs no collider row, and the reason is better than "the two
+        // engines differ". `collidersOf` answers [] for Matter *because* Matter
+        // already collides everything with everything, so a row saying "these
+        // two meet" says nothing it has not done. That argument does not
+        // transfer by a single word: "when these two touch, *do this*" is
+        // something Matter does not do on its own at all. So this is the one
+        // place a Matter scene needs more emitted code than an Arcade one.
+        //
+        // A tilemap is refused here, though: a TilemapLayer is not a Matter
+        // body unless `convertTilemapLayer` is called, and this exporter never
+        // emits one.
+        if (byId.get(aId)?.type === 'tilemap' || byId.get(bId)?.type === 'tilemap') {
+          return null;
+        }
+        return { kind: 'collide', aId, bId };
+      }
+      // Arcade's handler *is* the third argument of the `add.collider` call the
+      // row already emits, so a rule changes that line rather than adding one —
+      // two calls on one pair would separate twice. Binding to the row is also
+      // what keeps one notion of what collides, and what lets the rule inherit
+      // the row's own `collide`/`overlap` word rather than inventing a
+      // parameter of its own.
+      const paired = colliders.some(
+        (row) =>
+          (row.aId === aId && row.bId === bId) || (row.aId === bId && row.bId === aId),
+      );
+      return paired ? { kind: 'collide', aId, bId } : null;
+    }
+
+    case 'tap': {
+      const nodeId = typeof when.nodeId === 'string' ? when.nodeId : '';
+      const node = byId.get(nodeId);
+      if (!node || !TAPPABLE_TYPES.has(node.type)) return null;
+      return { kind: 'tap', nodeId };
+    }
+
+    case 'keyDown': {
+      const key = typeof when.key === 'string' ? when.key : '';
+      // The allowlist, and it costs the rule rather than being repaired: a key
+      // resolved to some other key is a game that does the wrong thing, and a
+      // key left as typed is a listener that never fires and says nothing.
+      return RULE_KEYS.includes(key) ? { kind: 'keyDown', key } : null;
+    }
+
+    case 'timer': {
+      const delay = Number(when.delay);
+      // Repaired rather than dropped, which is `tweenOf`'s treatment of a
+      // duration: a rate is a number with a sensible floor, where a gate is not.
+      //
+      // The floor is the whole of the protection against the one thing in this
+      // vocabulary that can run away: a looping timer at 0ms fires on every
+      // step of the game loop, and under `addVar` that is a counter in the
+      // thousands within a second.
+      return {
+        kind: 'timer',
+        delay: Number.isFinite(delay) ? Math.max(MIN_TIMER_DELAY, delay) : 1000,
+        loop: when.loop === true,
+      };
+    }
+
+    default:
+      return null;
+  }
+}
+
+/** The condition half of `rulesOf`, or null when the whole rule has to go. */
+function ruleConditionsOf(raw: unknown, project: Project): RuleCondition[] | null {
+  // Absent means "no checks", which is what every rule the editor writes with
+  // an empty list already means.
+  if (raw === undefined || raw === null) return [];
+  // *Present and not a list* is a different thing entirely, and it costs the
+  // rule. Reading `conditions: "score > 10"` as "no conditions" would turn a
+  // gated rule into an unconditional one — the widening this whole function is
+  // organised around, arriving through the one door that looks like a
+  // formality. Only a hand-edited file can hold it.
+  if (!Array.isArray(raw)) return null;
+
+  const conditions: RuleCondition[] = [];
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) return null;
+    const row = candidate as Partial<RuleCondition>;
+    const value = Number(row.value);
+    // Every one of these costs the whole rule rather than the condition,
+    // because dropping a condition *widens* what the rule says — see `rulesOf`.
+    if (typeof row.variableId !== 'string') return null;
+    if (findVariable(project, row.variableId) === undefined) return null;
+    if (row.op === undefined || !RULE_OPERATORS.includes(row.op)) return null;
+    if (!Number.isFinite(value)) return null;
+    conditions.push({ variableId: row.variableId, op: row.op, value });
+  }
+  return conditions;
+}
+
+/** The action half of `rulesOf`. A bad action costs itself and nothing else. */
+function ruleActionsOf(
+  raw: unknown,
+  byId: Map<string, GameObjectNode>,
+  sounds: Set<string>,
+  scenes: Set<string>,
+  project: Project,
+): RuleAction[] {
+  if (!Array.isArray(raw)) return [];
+
+  const actions: RuleAction[] = [];
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const row = candidate as Partial<RuleAction> & Record<string, unknown>;
+    const nodeId = typeof row.nodeId === 'string' ? row.nodeId : '';
+    const variableId = typeof row.variableId === 'string' ? row.variableId : '';
+
+    switch (row.kind) {
+      case 'restartScene':
+        actions.push({ kind: 'restartScene' });
+        break;
+
+      case 'startScene': {
+        const sceneId = typeof row.sceneId === 'string' ? row.sceneId : '';
+        // `scene.start(undefined)` is not something Phaser can be asked for.
+        if (scenes.has(sceneId)) actions.push({ kind: 'startScene', sceneId });
+        break;
+      }
+
+      case 'destroy':
+        if (byId.has(nodeId)) actions.push({ kind: 'destroy', nodeId });
+        break;
+
+      case 'setVisible':
+        if (byId.has(nodeId)) {
+          actions.push({ kind: 'setVisible', nodeId, visible: row.visible === true });
+        }
+        break;
+
+      case 'playSound':
+      case 'stopSound': {
+        const soundId = typeof row.soundId === 'string' ? row.soundId : '';
+        if (sounds.has(soundId)) actions.push({ kind: row.kind, soundId });
+        break;
+      }
+
+      case 'playAnimation': {
+        const animationId = typeof row.animationId === 'string' ? row.animationId : '';
+        // Only a sprite carries an AnimationState, which is a fact about Phaser
+        // rather than a list that can go stale — `collectAnimations`' own note.
+        if (byId.get(nodeId)?.type !== 'sprite') break;
+        if (findAnimation(project, animationId) === undefined) break;
+        actions.push({ kind: 'playAnimation', nodeId, animationId });
+        break;
+      }
+
+      case 'startTween':
+        // A tween that drives nothing is one `tweenOf` already answers null
+        // for, so an action to start it would emit a handle nothing bound.
+        if (byId.has(nodeId) && tweenOf(byId.get(nodeId) as GameObjectNode) !== null) {
+          actions.push({ kind: 'startTween', nodeId });
+        }
+        break;
+
+      case 'setVar':
+      case 'addVar': {
+        const amount = Number(row.kind === 'setVar' ? row.value : row.by);
+        // A dangling variable costs the whole *rule*, not the action — see
+        // `rulesOf`. Answered by returning an empty list so the caller drops it.
+        if (findVariable(project, variableId) === undefined) return [];
+        // A non-finite number costs the action, because a repair to zero is an
+        // action that quietly does nothing.
+        if (!Number.isFinite(amount)) break;
+        actions.push(
+          row.kind === 'setVar'
+            ? { kind: 'setVar', variableId, value: amount }
+            : { kind: 'addVar', variableId, by: amount },
+        );
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+  return actions;
+}
+
+/**
+ * The validated rules that name this node, in document order.
+ *
+ * `rulesOf` filtered, never `scene.rules` read a second time — the whole point
+ * of that function being the only reader is that a rule it has dropped cannot
+ * come back to life on some other panel. `collidersNaming`'s rule, and
+ * `touchZonesOf`-on-`controlsOf`'s reason.
+ *
+ * It matches a node named in the **trigger or in any action**, because both are
+ * reasons a person standing on that object's panel would want to know a rule
+ * exists.
+ *
+ * A fresh array every call ⇒ React error #185 in a selector, the `tileMapOf`
+ * trap for the eleventh time.
+ */
+export function rulesNaming(
+  project: Project,
+  scene: SceneDoc,
+  nodeId: string,
+): SceneRule[] {
+  return rulesOf(project, scene).filter((rule) => ruleNames(rule, nodeId));
+}
+
+/** Whether one rule names a node, in its trigger or in any of its actions. */
+export function ruleNames(rule: SceneRule, nodeId: string): boolean {
+  const when = rule.when;
+  if (when.kind === 'tap' && when.nodeId === nodeId) return true;
+  if (when.kind === 'collide' && (when.aId === nodeId || when.bId === nodeId)) return true;
+  return rule.do.some(
+    (action) => 'nodeId' in action && action.nodeId === nodeId,
+  );
+}
+
+/** Whether one rule reads or writes a variable, in a condition or an action. */
+export function ruleUsesVariable(rule: SceneRule, variableId: string): boolean {
+  if (rule.conditions.some((condition) => condition.variableId === variableId)) return true;
+  return rule.do.some(
+    (action) => 'variableId' in action && action.variableId === variableId,
+  );
 }
 
 /**

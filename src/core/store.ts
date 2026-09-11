@@ -47,6 +47,9 @@ import {
   prefabChildrenOf,
   fontStackOf,
   soundsOf,
+  ruleUsesVariable,
+  rulesOf,
+  scenePhysicsOf,
   tweenOf,
   worldTransformOf,
   type AnimationClip,
@@ -69,6 +72,10 @@ import {
   type Prefab,
   type Project,
   type ProjectVariable,
+  type RuleAction,
+  type RuleCondition,
+  type RuleTrigger,
+  type SceneRule,
   type SceneCamera,
   type SceneCollider,
   type SceneDoc,
@@ -634,7 +641,46 @@ export interface EditorState {
    */
   addCollider: (aId: string, bId: string) => void;
   updateCollider: (id: string, patch: Partial<Omit<SceneCollider, 'id'>>) => void;
+  /**
+   * Removes a pairing, and with it every rule that fires on that touch.
+   *
+   * `removePrefab` detaching its instances, and `removeAsset`'s invariant: the
+   * document may never hold a dangling reference after any action in the
+   * editor. A collide rule *is* the row's third argument, so when the row goes
+   * there is nowhere left for the rule to be emitted.
+   */
   removeCollider: (id: string) => void;
+
+  // -- rules -----------------------------------------------------------------
+  /**
+   * Adds a rule to the active scene, already doing something.
+   *
+   * Every picker it opens with is seeded with a real choice, which is
+   * `defaultTween`'s rule and its reason: the first thing anybody does after
+   * switching a feature on is try it, and a rule that arrives naming nothing is
+   * one `rulesOf` drops on the very next read — so there would be nothing on
+   * screen left to fill in. `CollidersSection` already records that failure.
+   *
+   * An Arcade `collide` trigger **creates the collider row it needs**, in the
+   * same undo step. That is `addCollider`'s "a row arrives already pointing at
+   * two objects", and it is the first time the write half of "strip on read,
+   * refuse on write" is a *construction* rather than a refusal.
+   */
+  addRule: (when: RuleTrigger) => void;
+  updateRule: (id: string, patch: Partial<Omit<SceneRule, 'id'>>) => void;
+  removeRule: (id: string) => void;
+  /**
+   * Conditions and actions are addressed **by index**, because they carry no id
+   * — see `RuleCondition`. Nothing outside the rule names one.
+   */
+  addRuleCondition: (ruleId: string) => void;
+  updateRuleCondition: (ruleId: string, index: number, patch: Partial<RuleCondition>) => void;
+  removeRuleCondition: (ruleId: string, index: number) => void;
+  addRuleAction: (ruleId: string) => void;
+  updateRuleAction: (ruleId: string, index: number, action: RuleAction) => void;
+  removeRuleAction: (ruleId: string, index: number) => void;
+  /** The order actions run in is the order they are listed in, so it is edited. */
+  moveRuleAction: (ruleId: string, index: number, delta: number) => void;
 
   // -- tilemaps --------------------------------------------------------------
   /**
@@ -1404,6 +1450,107 @@ function unusedVariableName(project: Project): string {
   return candidate;
 }
 
+/**
+ * A rule name nothing in this scene has taken yet.
+ *
+ * `unusedSceneName`'s and `unusedVariableName`'s sibling. A rule's name is not
+ * a key of anything — it reaches the export only as a comment — so this is
+ * about the panel rather than about correctness: two rows reading "Rule 1" is a
+ * list nobody can navigate, and the name is what the expand toggle is titled by.
+ */
+function unusedRuleName(scene: SceneDoc): string {
+  const rules = scene.rules ?? [];
+  const taken = new Set(rules.map((rule) => rule.name));
+  const stem = `Rule ${rules.length + 1}`;
+  let candidate = stem;
+  let n = 2;
+  while (taken.has(candidate)) candidate = `${stem} ${n++}`;
+  return candidate;
+}
+
+/**
+ * The scene, with the collider row an Arcade `collide` trigger needs.
+ *
+ * Shared by `addRule` and `updateRule`, because a rule can arrive as a collide
+ * rule *or* become one — and a trigger changed to `collide` with no row is one
+ * `rulesOf` drops on the very next read, which is a rule that vanishes the
+ * moment it is created. `CollidersSection` already records that failure mode:
+ * "a row naming nothing is one `collidersOf` drops on the next read — so there
+ * would be nothing on screen left to fill in."
+ *
+ * Arcade only. A Matter collide rule watches for the touch itself, because
+ * `collidersOf` answers `[]` for Matter — and the reason it does is that Matter
+ * already collides everything with everything, so a row there says nothing it
+ * has not done. That argument does not transfer to a *rule*, which is why this
+ * is the one place a Matter scene needs more emitted code rather than less.
+ */
+function withColliderFor(scene: SceneDoc, when: RuleTrigger): SceneDoc {
+  if (when.kind !== 'collide') return scene;
+  if (scenePhysicsOf(scene).engine === 'matter') return scene;
+  const colliders = collidersOf(scene);
+  const paired = colliders.some(
+    (row) =>
+      (row.aId === when.aId && row.bId === when.bId) ||
+      (row.aId === when.bId && row.bId === when.aId),
+  );
+  if (paired) return scene;
+  return {
+    ...scene,
+    colliders: [...colliders, { id: newId(), aId: when.aId, bId: when.bId, kind: 'collide' }],
+  };
+}
+
+/**
+ * One rule rewritten in place in the scene's list, by id.
+ *
+ * The conditions and actions inside a rule are addressed by index and there are
+ * eight actions that reach them, so the "find the rule, rebuild the array"
+ * half is written once — `editSiblings`' argument, two levels down.
+ *
+ * It reads `scene.rules` raw rather than `rulesOf`, and that is the one place
+ * in this feature that deliberately does not go through the reader. `rulesOf`
+ * *drops* what it cannot validate, so editing through it would silently delete
+ * every rule the panel is not currently showing the moment any other one was
+ * touched — and a rule mid-edit is exactly the rule that does not validate yet.
+ * The reader is for what the renderer and the exporter see; the store edits the
+ * document as written.
+ */
+function mapRule(
+  scene: SceneDoc,
+  ruleId: string,
+  fn: (rule: SceneRule) => SceneRule,
+): SceneDoc {
+  const rules = scene.rules ?? [];
+  const index = rules.findIndex((rule) => rule.id === ruleId);
+  if (index < 0) return scene;
+  const next = [...rules];
+  next[index] = fn(rules[index]);
+  return { ...scene, rules: next };
+}
+
+/** A trigger with its node references put through a mapping. */
+function remapTriggerNodes(
+  when: RuleTrigger,
+  node: (id: string) => string,
+): RuleTrigger {
+  if (when.kind === 'tap') return { ...when, nodeId: node(when.nodeId) };
+  if (when.kind === 'collide') {
+    return { ...when, aId: node(when.aId), bId: node(when.bId) };
+  }
+  return when;
+}
+
+/** An action with its node and sound references put through a mapping. */
+function remapActionRefs(
+  action: RuleAction,
+  node: (id: string) => string,
+  sound: (id: string) => string,
+): RuleAction {
+  if ('nodeId' in action) return { ...action, nodeId: node(action.nodeId) };
+  if ('soundId' in action) return { ...action, soundId: sound(action.soundId) };
+  return action;
+}
+
 export function activeScene(project: Project): SceneDoc {
   return (
     project.scenes.find((scene) => scene.id === project.activeSceneId) ??
@@ -1662,6 +1809,37 @@ export const useEditorStore = create<EditorState>((set, get) => {
             id: newId(),
             aId: side(collider.aId),
             bId: side(collider.bId),
+          }));
+        }
+        // And the rules, which is a *third* kind of reference for this function
+        // to think about and the price of a `playSound` action naming a
+        // `SceneSound` row rather than an audio file. Three kinds, in fact:
+        //
+        // - node ids in `tap`, `collide` and every action that names one, by
+        //   the camera's index trick a third time;
+        // - **sound row ids**, because the rows above were just re-identified,
+        //   so a copied `playSound` would name a row that no longer exists;
+        // - variable ids, left alone on purpose. Variables are project-level,
+        //   and the copy counting the same score is the correct reading.
+        //
+        // `startScene` is left pointing at the original too: a rule that says
+        // "go to the menu" still means the menu, and one that named this scene
+        // now honestly means the scene it was copied from.
+        if (current.rules !== undefined) {
+          const node = (id: string) => {
+            const at = current.children.findIndex((child) => child.id === id);
+            return at < 0 ? id : copy.children[at].id;
+          };
+          const soundRows = soundsOf(project, current);
+          const sound = (id: string) => {
+            const at = soundRows.findIndex((row) => row.id === id);
+            return at < 0 ? id : (copy.sounds as SceneSound[])[at].id;
+          };
+          copy.rules = rulesOf(project, current).map((rule) => ({
+            ...rule,
+            id: newId(),
+            when: remapTriggerNodes(rule.when, node),
+            do: rule.do.map((action) => remapActionRefs(action, node, sound)),
           }));
         }
         const index = project.scenes.indexOf(current);
@@ -1996,6 +2174,27 @@ export const useEditorStore = create<EditorState>((set, get) => {
       editProject((project) => ({
         ...project,
         variables: project.variables.filter((variable) => variable.id !== id),
+        // Every rule that names it goes with it — **whole**, in a condition or
+        // in an action alike, and that is the same treatment `rulesOf` gives it
+        // on read, so the store and the reader say one thing.
+        //
+        // The naive prune is wrong, and wrong in the direction this feature
+        // cares about most: dropping only the *conditions* that read the
+        // variable would leave `when tap coin, if score >= 10, startScene win`
+        // as `when tap coin, startScene win`, which now fires always. A repair
+        // may narrow what the document says and may never widen it, and that
+        // rule binds the store exactly as it binds the reader.
+        //
+        // Every scene, because a rule in a scene the user is not looking at is
+        // exactly the dangling reference this is here to prevent —
+        // `removeAudio`'s walk. Array identity where nothing changed, which is
+        // `editProject`'s signal for "no undo step".
+        scenes: project.scenes.map((scene) => {
+          const rules = scene.rules;
+          if (rules === undefined) return scene;
+          const kept = rules.filter((rule) => !ruleUsesVariable(rule, id));
+          return kept.length === rules.length ? scene : { ...scene, rules: kept };
+        }),
       })),
 
     createPrefabFromSelection: () => {
@@ -2599,10 +2798,141 @@ export const useEditorStore = create<EditorState>((set, get) => {
     removeCollider: (id) =>
       editScene((scene) => {
         const colliders = collidersOf(scene);
+        const row = colliders.find((collider) => collider.id === id);
+        if (row === undefined) return scene;
         const next = colliders.filter((collider) => collider.id !== id);
-        if (next.length === colliders.length) return scene;
-        return { ...scene, colliders: next };
+        // The rules that fired on this touch go with it, in the same step. A
+        // collide rule is emitted *as* this row's third argument, so a rule left
+        // behind would be one `rulesOf` drops on the next read — visible only as
+        // a row that silently vanished from the panel some time later.
+        //
+        // Creating the row when a rule needs one is a convenience; destroying
+        // the rules when the row goes is a correctness fix. The asymmetry is
+        // deliberate, and it is `removeFont`'s.
+        const rules = (scene.rules ?? []).filter((rule) => {
+          const when = rule.when as RuleTrigger;
+          if (when.kind !== 'collide') return true;
+          return !(
+            (when.aId === row.aId && when.bId === row.bId) ||
+            (when.aId === row.bId && when.bId === row.aId)
+          );
+        });
+        return { ...scene, colliders: next, rules };
       }),
+
+    addRule: (when) =>
+      editScene((scene) => {
+        const paired = withColliderFor(scene, when);
+        return {
+          ...paired,
+          rules: [
+            ...(paired.rules ?? []),
+            {
+              id: newId(),
+              name: unusedRuleName(paired),
+              when,
+              conditions: [],
+              // `restartScene` is the one action that names nothing at all, so
+              // it is the only seed that can never dangle whatever the scene
+              // holds — which is what makes it the right default.
+              do: [{ kind: 'restartScene' }],
+            },
+          ],
+        };
+      }),
+
+    // Rebuilt rather than mutated, for `updateCollider`'s reason: the undo
+    // history is snapshots of this document.
+    updateRule: (id, patch) =>
+      editScene((scene) => {
+        // The row the *new* trigger needs, in the same step. A rule that
+        // becomes a collide rule needs one exactly as a rule that arrives as
+        // one does — and without this, switching the trigger produces a rule
+        // `rulesOf` drops on the next read.
+        const paired = patch.when ? withColliderFor(scene, patch.when) : scene;
+        return {
+          ...paired,
+          rules: (paired.rules ?? []).map((rule) =>
+            rule.id === id ? { ...rule, ...patch, id } : rule,
+          ),
+        };
+      }),
+
+    removeRule: (id) =>
+      editScene((scene) => ({
+        ...scene,
+        rules: (scene.rules ?? []).filter((rule) => rule.id !== id),
+      })),
+
+    addRuleCondition: (ruleId) =>
+      editScene((scene) => {
+        const variable = get().project.variables[0];
+        // Nothing to test against is not an error, it is a scene with no
+        // variables yet — and a condition naming nothing would cost the whole
+        // rule on the next read rather than just itself.
+        if (variable === undefined) return scene;
+        return mapRule(scene, ruleId, (rule) => ({
+          ...rule,
+          conditions: [
+            ...rule.conditions,
+            { variableId: variable.id, op: 'gte' as const, value: 1 },
+          ],
+        }));
+      }),
+
+    updateRuleCondition: (ruleId, index, patch) =>
+      editScene((scene) =>
+        mapRule(scene, ruleId, (rule) => ({
+          ...rule,
+          conditions: rule.conditions.map((condition, at) =>
+            at === index ? { ...condition, ...patch } : condition,
+          ),
+        })),
+      ),
+
+    removeRuleCondition: (ruleId, index) =>
+      editScene((scene) =>
+        mapRule(scene, ruleId, (rule) => ({
+          ...rule,
+          conditions: rule.conditions.filter((_, at) => at !== index),
+        })),
+      ),
+
+    addRuleAction: (ruleId) =>
+      editScene((scene) =>
+        mapRule(scene, ruleId, (rule) => ({
+          ...rule,
+          do: [...rule.do, { kind: 'restartScene' as const }],
+        })),
+      ),
+
+    updateRuleAction: (ruleId, index, action) =>
+      editScene((scene) =>
+        mapRule(scene, ruleId, (rule) => ({
+          ...rule,
+          do: rule.do.map((existing, at) => (at === index ? action : existing)),
+        })),
+      ),
+
+    removeRuleAction: (ruleId, index) =>
+      editScene((scene) =>
+        mapRule(scene, ruleId, (rule) => ({
+          ...rule,
+          do: rule.do.filter((_, at) => at !== index),
+        })),
+      ),
+
+    moveRuleAction: (ruleId, index, delta) =>
+      editScene((scene) =>
+        mapRule(scene, ruleId, (rule) => {
+          const to = index + delta;
+          if (to < 0 || to >= rule.do.length) return rule;
+          const next = [...rule.do];
+          const [moved] = next.splice(index, 1);
+          next.splice(to, 0, moved);
+          return { ...rule, do: next };
+        }),
+      ),
 
     paintTiles: (nodeId, layerId, cells, tile) =>
       editProject((project) =>

@@ -324,6 +324,58 @@ select {
   text-transform: uppercase;
 }
 
+/*
+ * A subsection heading, one step in from `.panel__section`.
+ *
+ * A rule has two lists inside it — the checks and the actions — and without a
+ * heading each they read as one undifferentiated stack of pickers.
+ */
+.panel__subsection {
+  margin: 10px 0 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+/*
+ * One rule, boxed so that its contents read as belonging to it.
+ *
+ * A rule holds more controls than anything else in this panel — a trigger with
+ * kind-dependent parameters plus two variable-length lists — so without a
+ * border an expanded one is indistinguishable from the rules above and below.
+ */
+.rule {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+/*
+ * The collapsed summary, which is also the expand toggle.
+ *
+ * Full width and left-aligned because it is a line of prose rather than a
+ * label: "When the player touches the coin — 2 actions". 44px minimum height
+ * for the same reason every other touch target here has one.
+ */
+.rule__summary {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 6px 4px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rule__summary:hover {
+  background: var(--bg-elevated);
+}
+
 .hint,
 .empty {
   margin: 4px 0 12px;

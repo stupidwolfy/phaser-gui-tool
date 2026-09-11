@@ -1288,6 +1288,62 @@ export class EditorPage {
     await this.settle();
   }
 
+  // -- rules -----------------------------------------------------------------
+
+  /** Adds a rule from the scene panel, and returns the name it arrived under. */
+  async addRule(): Promise<string> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByTitle('Add a rule to this scene').click();
+    await this.settle();
+    return this.lastRuleName();
+  }
+
+  /** Adds a rule from the selected object's own panel. */
+  async addRuleOnNode(name: string): Promise<string> {
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByTitle(`Add a rule about ${name}`).click();
+    await this.settle();
+    return this.lastRuleName();
+  }
+
+  /** The name of the last rule in whichever panel is open. */
+  private async lastRuleName(): Promise<string> {
+    const titles = await this.panel('inspect')
+      .locator('.rule__summary')
+      .last()
+      .getAttribute('title');
+    return (titles ?? '').replace('Edit ', '');
+  }
+
+  /** How many rules the open panel is listing. */
+  async ruleCount(): Promise<number> {
+    await this.openPanel('inspect');
+    return this.panel('inspect').locator('.rule__summary').count();
+  }
+
+  /** Expands a rule so its fields can be reached. */
+  async openRule(name: string): Promise<void> {
+    await this.openPanel('inspect');
+    const summary = this.panel('inspect').getByTitle(`Edit ${name}`);
+    if (!(await summary.innerText()).startsWith('▾')) await summary.click();
+    await this.settle();
+  }
+
+  /** Deletes a rule by name, from whichever panel is open. */
+  async removeRule(name: string): Promise<void> {
+    await this.openRule(name);
+    await this.panel('inspect').getByTitle(`Delete rule ${name}`).click();
+    await this.settle();
+  }
+
+  /** Points a rule at a different moment. Expands it first. */
+  async setRuleTrigger(name: string, index: number, option: string): Promise<void> {
+    await this.openRule(name);
+    await this.setChoice(`Rule ${index} when`, option);
+    await this.settle();
+  }
+
   /**
    * Discards the project and starts a new one.
    *

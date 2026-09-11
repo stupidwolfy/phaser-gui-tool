@@ -168,3 +168,193 @@ test.describe('the editor runs none of it', () => {
     expect(Math.abs(after.y - before.y)).toBeLessThan(2);
   });
 });
+
+test.describe('rules', () => {
+  test('a rule round-trips, and the editor draws nothing for it', async ({
+    editor,
+  }, testInfo) => {
+    await oneBox(editor);
+    const before = await editor.findDrawn(FILL);
+
+    const name = await editor.addRule();
+    await editor.deselect();
+    await editor.closePanels();
+
+    // Nothing about a rule is drawn: `EditorScene.ts` is untouched by this
+    // whole feature, which is Audio's claim and sharper here — a rule destroys
+    // objects and starts scenes, so a preview would not animate the document,
+    // it would demolish it.
+    const after = await editor.findDrawn(FILL);
+    expect(Math.abs(after.x - before.x)).toBeLessThan(2);
+    expect(after.count).toBeGreaterThan(before.count * 0.9);
+
+    const document = await saved(editor);
+    expect(document.schemaVersion).toBe(SCHEMA);
+    const scene = (document.scenes as { rules?: unknown[] }[])[0];
+    expect(scene.rules).toHaveLength(1);
+
+    const path = testInfo.outputPath('ruled.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.fieldValue('Rule 1 name')).toBe(name);
+  });
+
+  test('a rule made on an object panel shows on the scene panel', async ({ editor }) => {
+    await oneBox(editor);
+
+    // `SceneInspector` renders only with an empty selection, so a rules panel
+    // that lived only there would be off screen for the whole of the time a
+    // person spends building the objects a rule is about. That is the bug
+    // `CollidersSection` shipped with, applied here before it could happen.
+    await editor.selectInTree('Rectangle');
+    await editor.addRuleOnNode('Rectangle');
+    expect(await editor.ruleCount()).toBe(1);
+
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+  });
+
+  test('deleting the node a rule names drops it from the panel and leaves the file alone', async ({
+    editor,
+  }) => {
+    await oneBox(editor);
+    await editor.selectInTree('Rectangle');
+    await editor.addRuleOnNode('Rectangle');
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+
+    await editor.selectInTree('Rectangle');
+    await editor.page.keyboard.press('Delete');
+    await editor.settle();
+
+    // Both readings together, because neither alone can see what is happening:
+    // `rulesOf` drops a rule naming a node that is gone, and **nothing prunes
+    // it** — not `deleteNode`, not undo, not the scene switcher — exactly as
+    // nothing prunes a dangling `followId`, `audioId` or collider row.
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(0);
+
+    const scene = (await saved(editor)).scenes as { rules?: unknown[] }[];
+    expect(scene[0].rules).toHaveLength(1);
+  });
+
+  test('a collide rule makes the collision row, and one undo takes both', async ({
+    editor,
+  }) => {
+    await editor.clearScene();
+    await editor.addObject('Rectangle');
+    await editor.selectInTree('Rectangle');
+    await editor.setPhysics(true);
+    await editor.addObject('Ellipse');
+    await editor.selectInTree('Ellipse');
+    await editor.setPhysics(true);
+    await editor.deselect();
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'two objects touch');
+
+    // Arcade's handler *is* the third argument of the `add.collider` call the
+    // row emits, so a collide rule needs the row to exist — and creating it
+    // here is the first time the write half of "strip on read, refuse on write"
+    // is a construction rather than a refusal.
+    let document = await saved(editor);
+    let scene = (document.scenes as {
+      colliders?: unknown[];
+      rules?: { when: { kind: string } }[];
+    }[])[0];
+    expect(scene.colliders).toHaveLength(1);
+    expect(scene.rules).toHaveLength(1);
+
+    // One step, and this is the claim: the row and the trigger that needs it
+    // were written in one `editScene`, so a single undo takes both. Two steps
+    // would leave a collide rule with no row behind — which is exactly the
+    // state `rulesOf` drops, so the rule would vanish from the panel on the
+    // next read with nothing having said why.
+    await editor.undo();
+    document = await saved(editor);
+    scene = (document.scenes as {
+      colliders?: unknown[];
+      rules?: { when: { kind: string } }[];
+    }[])[0];
+    expect(scene.colliders ?? []).toHaveLength(0);
+    expect(scene.rules?.[0].when.kind).toBe('tap');
+  });
+
+  test('deleting a variable takes the rules that read it, whole', async ({ editor }) => {
+    await oneBox(editor);
+    await editor.addVariable();
+    await editor.setVariable(1, 'Score', 0);
+
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.panel('inspect').getByTitle('Add a check to rule 1').click();
+    await editor.settle();
+
+    expect(await editor.ruleCount()).toBe(1);
+
+    await editor.removeVariable('Score');
+
+    // The whole rule, not just the condition. Dropping the condition would
+    // *widen* what the rule says — `if score >= 1` removed is a rule that now
+    // fires always — and a repair may narrow what the document says and may
+    // never widen it. The store says the same thing `rulesOf` says on read.
+    expect(await editor.ruleCount()).toBe(0);
+    const scene = (await saved(editor)).scenes as { rules?: unknown[] }[];
+    expect(scene[0].rules ?? []).toHaveLength(0);
+  });
+
+  test('a rule survives a duplicated scene pointing at the copy', async ({ editor }) => {
+    await oneBox(editor);
+    await editor.selectInTree('Rectangle');
+    await editor.addRuleOnNode('Rectangle');
+    await editor.deselect();
+
+    await editor.duplicateScene();
+    expect(await editor.ruleCount()).toBe(1);
+
+    // The camera's index trick a third time: the two child lists are the same
+    // list in the same order, so the copy's rule names the copy's node. A rule
+    // left pointing into the scene it was copied from is one `rulesOf` drops on
+    // the next read — a rule silently lost on a duplicate.
+    const scenes = (await saved(editor)).scenes as {
+      children: { id: string }[];
+      rules?: { when: { nodeId?: string } }[];
+    }[];
+    const copy = scenes[1];
+    expect(copy.rules?.[0].when.nodeId).toBe(copy.children[0].id);
+    expect(copy.rules?.[0].when.nodeId).not.toBe(
+      scenes[0].rules?.[0].when.nodeId,
+    );
+  });
+
+  test('a rule puts no preview button on the toolbar', async ({ editor }) => {
+    await oneBox(editor);
+    await editor.addRule();
+    await editor.closePanels();
+
+    // `hasMotionIn`'s sixth refusal, and the one a reader will most expect to
+    // be wrong — a rule is *nothing but* a thing that happens over time. But
+    // that toggle exists so a canvas moving by itself can be stopped, and no
+    // rule in this editor moves anything at all.
+    await expect(
+      editor.page.getByRole('button', { name: 'Preview motion' }),
+    ).toHaveCount(0);
+  });
+
+  test('a project with no rules emits no rule helper at all', async ({ editor }) => {
+    await oneBox(editor);
+
+    // The rule the asset table, the tilemap helper, the prefab factories, the
+    // emitted `update()` and the touch buttons all follow — one gate per
+    // helper, so a project that uses none of them exports byte for byte what
+    // it always did.
+    const exported = (await editor.exportCode('ts')).contents;
+    expect(exported).not.toContain('function onKey');
+    expect(exported).not.toContain('function onTap');
+    expect(exported).not.toContain('function onMatterHit');
+  });
+});
