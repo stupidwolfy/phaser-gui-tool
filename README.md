@@ -109,6 +109,15 @@ on a desktop.
   chips beside it switch between them, and the inspector duplicates or deletes the one
   you are in. Images, sounds, animations and prefabs are shared by all of them; the project
   reopens on the scene you left it on
+- Make the game actually **play**: under Rules in the scene panel — or on any object's own
+  panel — say when something happens and what it does. *When* is the scene starting, two
+  objects touching, an object being tapped, a key being pressed or a timer firing; *what* is
+  removing an object, showing or hiding one, playing a sound or an animation, starting a
+  movement, going to another scene, or changing a number. Declare those numbers under
+  Variables — a score, a lives count — and a rule can check one before it runs (`only if
+  Score is at least 3`). Variables survive a change of scene, so a score carries from level
+  to level. The editor never runs a rule, because a rule deletes things: press Export and
+  play the page it gives you
 - Duplicate, copy and paste objects, keeping their styling
 - Change draw order with the inspector's Arrange buttons, or by dragging rows in the
   scene tree (the first row is the object furthest back; inside a group, the same applies

@@ -367,6 +367,159 @@ export function hostileProject(): Project {
           // Two layers, which cannot collide with each other: neither moves.
           { id: 'col-7', aId: 'l', bId: 'm', kind: 'collide' as const },
         ],
+        // Five rules the export must emit and seven it must not.
+        //
+        // **Every one of them is deliberately at rest**, and that is the
+        // sharpest constraint on this fixture. `NO_MOTION`'s rule and the
+        // at-rest tweens', one feature over: `export.spec`'s colour assertions
+        // on this project would otherwise be racing a `destroy` and a
+        // `setVisible` that are both correct behaviour and neither of which
+        // those assertions are about. So every trigger is one nothing in the
+        // suite presses — a tap, a key, a timer far longer than any test — and
+        // the one `sceneStart` rule touches nothing that is drawn.
+        rules: [
+          // The whole vocabulary in one rule, and the *only* place the emitted
+          // callbacks and registry calls meet `Phaser.Types.Time.TimerEventConfig`,
+          // `ArcadePhysicsCallback`, `Tweens.Tween`, `ScenePlugin.start` and
+          // `DataManager` under `tsc --strict`. The hostile emitter's argument,
+          // five types over. Its name reaches the output as a comment, which is
+          // a surface `</script>` breaks and only `commentText` guards.
+          {
+            id: 'rule-1',
+            name: `Collect ${breakout}`,
+            when: { kind: 'tap' as const, nodeId: 'a' },
+            conditions: [
+              { variableId: 'var-1', op: 'gte' as const, value: 3 },
+              { variableId: 'var-2', op: 'ne' as const, value: 0 },
+            ],
+            do: [
+              { kind: 'destroy' as const, nodeId: 'b' },
+              { kind: 'setVisible' as const, nodeId: 'c', visible: false },
+              { kind: 'playSound' as const, soundId: 'snd-1' },
+              { kind: 'stopSound' as const, soundId: 'snd-3' },
+              // `g` is a *still* sprite, so this is the only thing in the suite
+              // that fails if `constructorFor`'s gate is not widened — and it
+              // fails as a **compile error**, because an `Image` has no `play`.
+              { kind: 'playAnimation' as const, nodeId: 'g', animationId: 'anim-1' },
+              // `a` carries a full tween, so this is the only thing that emits
+              // `paused: true` and a bound handle.
+              { kind: 'startTween' as const, nodeId: 'a' },
+              { kind: 'setVar' as const, variableId: 'var-1', value: 7 },
+              { kind: 'addVar' as const, variableId: 'var-2', by: -1 },
+              { kind: 'startScene' as const, sceneId: 'scene-2' },
+              { kind: 'restartScene' as const },
+            ],
+          },
+          // A key, which is the only thing that exercises `onKey`'s narrowing
+          // of a null keyboard.
+          {
+            id: 'rule-2',
+            name: 'On space',
+            when: { kind: 'keyDown' as const, key: 'SPACE' },
+            conditions: [],
+            do: [{ kind: 'addVar' as const, variableId: 'var-2', by: 1 }],
+          },
+          // A timer, far longer than any test runs, and non-looping so it can
+          // never fire twice even if one did.
+          {
+            id: 'rule-3',
+            name: 'Much later',
+            when: { kind: 'timer' as const, delay: 999_000, loop: false },
+            conditions: [],
+            do: [{ kind: 'addVar' as const, variableId: 'var-1', by: 1 }],
+          },
+          // The one rule that does fire, and it touches nothing drawn.
+          {
+            id: 'rule-4',
+            name: 'On start',
+            when: { kind: 'sceneStart' as const },
+            conditions: [],
+            do: [{ kind: 'setVar' as const, variableId: 'var-1', value: 0 }],
+          },
+          // A collide rule on a pair that *has* a row, so the handler is folded
+          // into `add.collider`'s third argument rather than emitted beside it.
+          {
+            id: 'rule-5',
+            name: 'On hit',
+            when: { kind: 'collide' as const, aId: 'a', bId: 'g' },
+            conditions: [],
+            do: [{ kind: 'addVar' as const, variableId: 'var-2', by: 1 }],
+          },
+
+          // --- and the seven the export must not emit ---
+
+          // A nested node, which has no binding for an action to name — the
+          // top-level rule arriving through the rule table.
+          {
+            id: 'rule-x1',
+            name: 'Nested',
+            when: { kind: 'tap' as const, nodeId: 'e1' },
+            conditions: [],
+            do: [{ kind: 'restartScene' as const }],
+          },
+          // A node inside a prefab definition, which every placement shares —
+          // so an action could not say *which* one.
+          {
+            id: 'rule-x2',
+            name: 'In a prefab',
+            when: { kind: 'tap' as const, nodeId: 'p1' },
+            conditions: [],
+            do: [{ kind: 'restartScene' as const }],
+          },
+          // An Arcade collide rule on a pair with no row. Arcade only separates
+          // two things that have been paired, and the handler *is* that call's
+          // third argument, so there is nowhere for this one to be emitted.
+          {
+            id: 'rule-x3',
+            name: 'Unpaired',
+            when: { kind: 'collide' as const, aId: 'a', bId: 't' },
+            conditions: [],
+            do: [{ kind: 'restartScene' as const }],
+          },
+          // **The most important negative in this file**: a condition naming a
+          // variable the project has not got. Dropping the *condition* would
+          // widen the rule into one that fires always, so the rule goes whole.
+          {
+            id: 'rule-x4',
+            name: 'Gated on nothing',
+            when: { kind: 'sceneStart' as const },
+            conditions: [{ variableId: 'gone', op: 'gte' as const, value: 1 }],
+            do: [{ kind: 'restartScene' as const }],
+          },
+          // A tap on an emitter, which has neither Origin nor ComputedSize — so
+          // Phaser's hit test adds an undefined `displayOriginX` and compares
+          // `NaN`. The recorded reason the emitter is drawn inside a wrapper.
+          {
+            id: 'rule-x5',
+            name: 'Tap an emitter',
+            when: { kind: 'tap' as const, nodeId: 'n' },
+            conditions: [],
+            do: [{ kind: 'restartScene' as const }],
+          },
+          // One action names a node that is gone and the other does not: the
+          // rule survives with one action fewer, because a dropped action
+          // *narrows* what the rule says.
+          {
+            id: 'rule-x6',
+            name: 'Half gone',
+            when: { kind: 'keyDown' as const, key: 'ESC' },
+            conditions: [],
+            do: [
+              { kind: 'destroy' as const, nodeId: 'gone' },
+              { kind: 'addVar' as const, variableId: 'var-2', by: 2 },
+            ],
+          },
+          // And one whose *only* action names something gone, which leaves a
+          // real listener running an empty callback — indistinguishable from
+          // the feature being broken, so the rule goes.
+          {
+            id: 'rule-x7',
+            name: 'All gone',
+            when: { kind: 'keyDown' as const, key: 'ENTER' },
+            conditions: [],
+            do: [{ kind: 'destroy' as const, nodeId: 'gone' }],
+          },
+        ],
         children: [
           {
             id: 'a',
@@ -1071,6 +1224,29 @@ export function hostileProject(): Project {
             visible: true,
             transform: { x: 840, y: 120, rotation: 0, scaleX: 1, scaleY: 1 },
             props: { width: 40, height: 40, fill: '#22d3ee', alpha: 1 },
+            children: [],
+          },
+          {
+            id: 'q2',
+            // The `arcade body` trick a third time, for the rule helpers. Both
+            // names are drawn from the module's identifier set before any
+            // object binding is, so an object called "on tap" must come out as
+            // `onTap2` and the helper must keep `onTap` — otherwise the line
+            // beside it calls a rectangle.
+            name: 'on tap',
+            type: 'rectangle',
+            visible: true,
+            transform: { x: 900, y: 120, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { width: 30, height: 30, fill: '#7ee787', alpha: 1 },
+            children: [],
+          },
+          {
+            id: 'q3',
+            name: 'init variables',
+            type: 'rectangle',
+            visible: true,
+            transform: { x: 900, y: 170, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { width: 30, height: 30, fill: '#7ee787', alpha: 1 },
             children: [],
           },
           {

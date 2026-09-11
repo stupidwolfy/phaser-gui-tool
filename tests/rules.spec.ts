@@ -358,3 +358,99 @@ test.describe('rules', () => {
     expect(exported).not.toContain('function onMatterHit');
   });
 });
+
+test.describe('the emit', () => {
+  test('a tap rule emits a hit area, a listener and the action', async ({ editor }) => {
+    await oneBox(editor);
+    await editor.selectInTree('Rectangle');
+    await editor.addRuleOnNode('Rectangle');
+    await editor.deselect();
+
+    const exported = (await editor.exportCode('ts')).contents;
+
+    // The hit area is built from the object at runtime rather than from
+    // numbers this exporter printed — a text node's size is font-measured and a
+    // nine-slice's box is nothing like its source frame, so one helper reading
+    // `object.width` is right for all six types at once.
+    expect(exported).toContain('function onTap');
+    expect(exported).toContain('new Phaser.Geom.Rectangle(0, 0, object.width, object.height)');
+    expect(exported).toContain("object.on('pointerdown', handler)");
+    expect(exported).toContain('this.scene.restart();');
+  });
+
+  test('a rule fires at a moment Phaser already delivers, never in update()', async ({
+    editor,
+  }) => {
+    await oneBox(editor);
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'a key is pressed');
+
+    const exported = (await editor.exportCode('ts')).contents;
+
+    // `onKey` narrows `scene.input.keyboard`, which is `KeyboardPlugin | null`
+    // under --strict — and the shared `create()` body can carry no cast, so the
+    // narrowing has to live in a module-level helper. `arcadeBody`'s argument.
+    expect(exported).toContain('function onKey');
+    expect(exported).toContain("keyboard.on('keydown-' + key, handler)");
+    expect(exported).toContain('onKey(this, "SPACE", () => {');
+
+    // The line this feature draws: every trigger is a moment Phaser hands over,
+    // so nothing here is polled and `update()` gains nothing at all.
+    expect(exported).not.toContain('update(): void');
+  });
+
+  test('a timer rule emits a TimerEvent with a floor under its delay', async ({
+    editor,
+  }) => {
+    await oneBox(editor);
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'a timer fires');
+    await editor.setField('Rule 1 every', 0);
+    await editor.page.getByLabel('Rule 1 repeats').check();
+    await editor.settle();
+
+    const exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('this.time.addEvent({');
+    expect(exported).toContain('loop: true,');
+    // A looping timer is the only thing in this vocabulary that can run away: a
+    // 0ms delay fires on every step of the game loop. The 1ms floor is the
+    // whole of the protection, and it is a repair rather than a refusal because
+    // a delay is a rate — `tweenOf` repairs a duration for the same reason.
+    expect(exported).toContain('delay: 1,');
+  });
+
+  test('a condition becomes one gate over the whole action list', async ({ editor }) => {
+    await oneBox(editor);
+    await editor.addVariable();
+    await editor.setVariable(1, 'Score', 0);
+
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.panel('inspect').getByTitle('Add a check to rule 1').click();
+    await editor.settle();
+
+    const exported = (await editor.exportCode('ts')).contents;
+    // One `if` around the list, read once at the moment — never a branch inside
+    // it. `registry.get` answers `any`, so the comparison needs no annotation
+    // in a body that cannot carry one.
+    expect(exported).toContain('if (this.registry.get("score") >= 1) {');
+  });
+
+  test('a variable action emits set and inc, not a read-modify-write', async ({
+    editor,
+  }) => {
+    await oneBox(editor);
+    await editor.addVariable();
+    await editor.setVariable(1, 'Score', 0);
+
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Add to a variable');
+    await editor.settle();
+
+    const exported = (await editor.exportCode('ts')).contents;
+    // Phaser's own `inc` treats an unset key as 0, so it cannot disagree with
+    // `initVariables` about what a variable nobody has written holds.
+    expect(exported).toContain('this.registry.inc("score", 1);');
+  });
+});
