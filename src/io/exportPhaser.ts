@@ -1,9 +1,13 @@
 import { activeScene } from '../core/store';
 import {
+  RULE_OPERATOR_JS,
   TARGET_PHASER_VERSION,
-  cameraOf,
+  TWEEN_PHASER_KEY,
+  TWEEN_PROPERTIES,
   atlasDataOf,
   atlasOf,
+  bodyIsTurned,
+  cameraOf,
   collidersOf,
   controlsOf,
   drivenIn,
@@ -15,11 +19,10 @@ import {
   fontFormatOf,
   fontStackOf,
   frameGridOf,
-  resolveFrame,
   isDefaultCamera,
-  bodyIsTurned,
-  type PhysicsEngine,
   physicsOf,
+  resolveFrame,
+  rulesOf,
   scenePhysicsOf,
   sliceInsetsOf,
   soundsOf,
@@ -27,8 +30,6 @@ import {
   tileMapOf,
   touchZonesOf,
   tweenOf,
-  TWEEN_PROPERTIES,
-  TWEEN_PHASER_KEY,
   type AnimationClip,
   type AudioAsset,
   type FontAsset,
@@ -36,9 +37,13 @@ import {
   type ImageAsset,
   type NodeControls,
   type PhysicsBody,
+  type PhysicsEngine,
   type Prefab,
   type Project,
+  type ProjectVariable,
+  type RuleAction,
   type SceneDoc,
+  type SceneRule,
   type TextStyle,
   type TileMap,
   type TouchButton,
@@ -339,6 +344,21 @@ function collectAssets(
   // pass and overwrite each other in the shared literal.
   for (const scene of scenes) {
     for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+    // And the images behind the clips the *rules* name, which no node walk can
+    // reach: a `playAnimation` action can name a clip whose sheet nothing in
+    // the scene draws. Without this the asset has no key, so
+    // `collectAnimations` cannot resolve one and drops the clip — and the
+    // export then plays an animation nothing registered.
+    for (const id of animationsNamedByRules(project, scene)) {
+      const clip = findAnimation(project, id);
+      const asset = clip ? findAsset(project, clip.assetId) : undefined;
+      if (asset && !used.has(asset.id)) {
+        used.set(asset.id, {
+          asset,
+          key: toIdentifier(asset.name.replace(/\.[^.]+$/, ''), keys),
+        });
+      }
+    }
   }
   return used;
 }
@@ -487,6 +507,244 @@ function buildAudioTable(used: Map<string, UsedAudio>, indent: string): string {
     'const AUDIO = {',
     ...[...used.values()].map(({ audio, key }) => `  ${str(key)}: ${str(audio.dataUrl)},`),
     '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * One variable, paired with the registry key it is read and written by.
+ *
+ * `UsedAudio`'s shape and for its reason: the key is *derived here* from free
+ * user text, so a wrapper is what carries the derivation beside the thing.
+ * The keys come out of a set of their own rather than any other table's,
+ * exactly as the sounds' do — a registry key and a texture key live in
+ * different namespaces, so a project holding an image called `score` and a
+ * variable called `score` should get `'score'` twice.
+ */
+interface UsedVariable {
+  variable: ProjectVariable;
+  key: string;
+}
+
+/**
+ * Every variable's registry key, by id — for the panel rows that show the user
+ * what a hand-written line would have to say.
+ *
+ * `audioKeyOf`'s sibling, exported for its reason: the row and the export must
+ * not disagree about it, and a second implementation in the UI would be two
+ * answers to one question.
+ *
+ * **It answers for the whole table where `audioKeyOf` answers for one name, and
+ * that difference is the point rather than an inconsistency.** An audio row can
+ * afford to show an un-de-duplicated key because a key that collides is a
+ * *second sound* that does not play — visibly wrong, and recoverable by
+ * renaming the file. Two variables deriving one registry key is a value
+ * silently shared at runtime: both rows go on showing their own number while
+ * the game keeps one, and the row being edited may not be the one a rule reads.
+ * The suffix is the only thing on screen that can say so, so the panel has to
+ * be shown the de-duplicated answer, which means it has to be shown all of
+ * them at once. `atlasOf`'s uniqueness argument, one table over.
+ */
+export function variableKeysOf(project: Project): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const [id, entry] of collectVariables(project)) keys.set(id, entry.key);
+  return keys;
+}
+
+/**
+ * Every variable the project declares, keyed by id.
+ *
+ * **Unfiltered, where `collectAssets` and `collectAudio` both emit only what a
+ * scene uses** — and that difference is deliberate rather than a missed step,
+ * which is why it says so here. Those two are filtered because bytes are
+ * expensive and an unused image would ship a megabyte for nothing. A variable
+ * is three tokens; and more to the point it exists *so that a hand-written line
+ * can read it*, which is `mass` and `immovable`'s reason for being emitted when
+ * nothing this exporter generates reads them.
+ */
+function collectVariables(project: Project): Map<string, UsedVariable> {
+  const used = new Map<string, UsedVariable>();
+  const keys = new Set<string>();
+  for (const variable of project.variables) {
+    used.set(variable.id, { variable, key: toIdentifier(variable.name, keys) });
+  }
+  return used;
+}
+
+/**
+ * The variable table, `ASSETS`' and `AUDIO`'s sibling and a named const for
+ * their reason: the numbers a reader is most likely to want to change belong in
+ * one object at the top of the file rather than scattered through `create()`.
+ */
+function buildVariableTable(used: Map<string, UsedVariable>, indent: string): string {
+  const lines = [
+    '/**',
+    ' * The numbers the game keeps. Read them anywhere with',
+    " * `this.registry.get('name')`, and change one with `set` or `inc`.",
+    ' */',
+    'const VARIABLES = {',
+    ...[...used.values()].map(({ variable, key }) => `  ${str(key)}: ${num(variable.value)},`),
+    '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * The one function every scene declares its variables through.
+ *
+ * The `has` guard is the whole of it, and it is `anims.exists`' guard and
+ * `this.sound.get(key) ??`'s for the third time: `create()` runs again every
+ * time a scene starts, and `scene.start` is one of the things a rule can do —
+ * so an unguarded `set` would reset the score on every change of level, which
+ * would make the registry (the one store that survives a scene change) do
+ * exactly nothing for the one job it is here for.
+ *
+ * It is also the strictly more expressive choice, which is what settles it
+ * rather than taste. The document can already say "zero this when the level
+ * starts", because `sceneStart -> setVar` is two things it already holds.
+ * Unguarded, there would be no way for it to say *don't* — `wordWrapWidth: 0`'s
+ * "the one target the user could not express", inverted.
+ *
+ * `Object.keys` rather than a printed list of `set` calls, so that a project
+ * with forty variables is one loop rather than forty lines — and so the table
+ * above stays the only place the names appear.
+ */
+function buildVariableHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(scene: Phaser.Scene, values: Record<string, number>): void {`
+    : `function ${fn}(scene, values) {`;
+  const lines = [
+    signature,
+    '  for (const key of Object.keys(values)) {',
+    '    if (!scene.registry.has(key)) scene.registry.set(key, values[key]);',
+    '  }',
+    '}',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * The one function every `keyDown` rule listens through.
+ *
+ * It exists for exactly one reason: `scene.input.keyboard` is
+ * `KeyboardPlugin | null` under `--strict`, and the `create()` body is the same
+ * plain JavaScript in the `.ts`, the `.js` and the runnable page — so it can
+ * carry no `!`, no cast and no annotation. `arcadeBody`'s argument to the
+ * character, one plugin over. The existing narrowing in `buildKeyboardLines`
+ * cannot be reused because it is gated on something being *driven*, and a rule
+ * needs a keyboard whether or not anything has controls.
+ *
+ * The handler takes **no arguments**, and that is not a simplification. Phaser
+ * types `EventEmitter#on`'s second parameter as the bare `Function`, which
+ * provides no contextual typing at all — so a named parameter there is an
+ * implicit `any` and fails the exported `.ts`. Every callback this feature
+ * emits closes over the bindings above it instead, which is also the shape a
+ * rule wants.
+ */
+function buildKeyHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(scene: Phaser.Scene, key: string, handler: () => void): void {`
+    : `function ${fn}(scene, key, handler) {`;
+  const lines = [
+    signature,
+    '  const keyboard = scene.input.keyboard;',
+    "  if (keyboard) keyboard.on('keydown-' + key, handler);",
+    '}',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * The one function every `tap` rule is made pressable by.
+ *
+ * **A hit area built from the object at runtime, never from numbers this file
+ * printed** — `buildFitHelper`'s argument, and it is what makes this a helper
+ * rather than a per-type branch. A `text` node's size is measured against the
+ * font when the game runs and the document does not know it; a nine-slice's and
+ * a tile sprite's box is its own `width`/`height` while its *texture frame* is
+ * something else entirely. One function reading `object.width` is right for all
+ * six types at once, and there is nothing left for a printed number to hold.
+ *
+ * The rectangle is in **top-left-origin space for every type**, which is worth
+ * stating because it looks wrong beside `applyContainerBounds`' half-size
+ * shift. Phaser's `InputManager.pointWithinHitArea` adds `displayOriginX` back
+ * to every point it tests, so a centred object and a top-left one take the same
+ * rectangle. The editor's own `applyHitArea` already does exactly this.
+ *
+ * An ellipse gets a `Geom.Ellipse` rather than a box, so its corners are not
+ * pressable — the editor's call for the same node type, and the difference is
+ * visible on anything round enough to aim at.
+ *
+ * `pointerdown` and never `pointerup`: a finger that slides off an object never
+ * fires `pointerup` on it, which is the touch helper's own recorded trap, and
+ * "tap" is what the document says.
+ */
+function buildTapHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(\n  object: Phaser.GameObjects.Shape | Phaser.GameObjects.Sprite |\n    Phaser.GameObjects.Image | Phaser.GameObjects.Text |\n    Phaser.GameObjects.NineSlice | Phaser.GameObjects.TileSprite,\n  round: boolean,\n  handler: () => void,\n): void {`
+    : `function ${fn}(object, round, handler) {`;
+  const lines = [
+    signature,
+    '  const shape = round',
+    '    ? new Phaser.Geom.Ellipse(object.width / 2, object.height / 2, object.width, object.height)',
+    '    : new Phaser.Geom.Rectangle(0, 0, object.width, object.height);',
+    '  const contains = round ? Phaser.Geom.Ellipse.Contains : Phaser.Geom.Rectangle.Contains;',
+    '  object.setInteractive(shape, contains);',
+    "  object.on('pointerdown', handler);",
+    '}',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * The one function every Matter `collide` rule watches through.
+ *
+ * Matter needs this where Arcade does not, and the reason is the inverse of the
+ * one that makes `collidersOf` answer `[]` for a Matter scene. A collider *row*
+ * is redundant under Matter because Matter already collides everything with
+ * everything, so a row saying "these two meet" says nothing it has not done.
+ * That argument does not transfer by a single word: "when these two touch, *do
+ * this*" is something Matter does not do on its own at all. So this is the one
+ * place a Matter scene needs more emitted code than an Arcade one — and
+ * refusing it would be iteration 26's Controls-panel bug repeated on purpose.
+ *
+ * **Both pair orders are tested, and only a test that drops something can see
+ * it.** Matter orders `bodyA` and `bodyB` by internal body id rather than by
+ * the order anything was added, so a filter written one way round compiles,
+ * runs, emits text that looks right, and fires on roughly half of all projects.
+ * `matterGround`'s recorded lesson, one event over.
+ *
+ * The event parameter is annotated in the `.ts` and bare in the `.js`, which is
+ * the existing `.ts`/`.js` difference — `buildGroundHelper`'s shape exactly —
+ * and the whole reason this is a module-level function rather than an inline
+ * listener: `world.on` is typed with the bare `Function`, so an inline
+ * `(event) => …` inside `create()` is an implicit `any` the shared body has
+ * nowhere to annotate.
+ */
+function buildMatterHitHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(\n  scene: Phaser.Scene,\n  a: Phaser.GameObjects.GameObject,\n  b: Phaser.GameObjects.GameObject,\n  handler: () => void,\n): void {`
+    : `function ${fn}(scene, a, b, handler) {`;
+  const param = typed
+    ? 'event: Phaser.Physics.Matter.Events.CollisionStartEvent'
+    : 'event';
+  const lines = [
+    signature,
+    `  scene.matter.world.on('collisionstart', function (${param}) {`,
+    '    for (const pair of event.pairs) {',
+    '      const first = pair.bodyA.gameObject;',
+    '      const second = pair.bodyB.gameObject;',
+    '      if ((first === a && second === b) || (first === b && second === a)) {',
+    '        handler();',
+    '        return;',
+    '      }',
+    '    }',
+    '  });',
+    '}',
   ];
   return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
 }
@@ -706,11 +964,32 @@ function collectAnimations(
       walk(node.children);
     }
   };
+  // And the clips the rules name, which no node walk can find: a
+  // `playAnimation` action names a clip the sprite itself may never have been
+  // given. Missing this emits `sprite.play('walk')` under a key nothing
+  // registered, which is a warning and a sprite that never moves.
+  const fromRules = (scene: SceneDoc) => {
+    for (const id of animationsNamedByRules(project, scene)) {
+      if (used.has(id)) continue;
+      const clip = findAnimation(project, id);
+      const entry = clip ? assets.get(clip.assetId) : undefined;
+      if (clip && entry) {
+        used.set(clip.id, {
+          clip,
+          key: uniqueKey(clip.name, keys),
+          textureKey: entry.key,
+          named: atlasOf(entry.asset) !== null,
+        });
+      }
+    }
+  };
+
   // Across every scene, so that the key a clip gets is the key it has in the
   // whole file — an animation is registered on the game's manager, which no
   // more belongs to one scene than the texture manager does.
   for (const scene of scenes) {
     for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+    fromRules(scene);
   }
   return used;
 }
@@ -777,6 +1056,21 @@ function usedIn(
   // drawn in a font the page never loaded, which is the failure this whole
   // iteration exists to remove and would look identical to it.
   const fonts = familiesIn(project, scene, prefabs);
+
+  // The other half of `collectAnimations`' rule pass, and both are needed for
+  // the pair's usual reason: that one decides what a clip is *called* across
+  // the file, this decides what *this* scene registers before anything plays
+  // it. A clip registered nowhere makes `anims.play` a warning; a clip
+  // registered over a texture this scene never loaded throws in
+  // `generateFrameNumbers` before a single object is drawn — so the asset goes
+  // in beside it.
+  for (const id of animationsNamedByRules(project, scene)) {
+    const clip = findAnimation(project, id);
+    if (!clip) continue;
+    animations.add(id);
+    assets.add(clip.assetId);
+  }
+
   return { assets, animations, audio, fonts };
 }
 
@@ -1604,6 +1898,57 @@ interface EmitContext {
   /** The grounded tracker a Matter platformer's jump reads. */
   groundFn: string;
   /**
+   * What the variable-declaring helper is called in this module, allocated from
+   * the same identifier set and for the same reason as `tilemapFn`.
+   */
+  initVariablesFn: string;
+  /** The keyboard-listener helper a `keyDown` rule goes through. */
+  keyFn: string;
+  /** The hit-area helper a `tap` rule goes through. */
+  tapFn: string;
+  /** The Matter collision-pair helper a `collide` rule goes through. */
+  matterHitFn: string;
+  /**
+   * What each scene's `super(...)` registers it as, by scene id.
+   *
+   * A `startScene` action names a scene the document holds and has to emit the
+   * key the *file* registered it under — which `collectScenes` de-duplicates,
+   * so it cannot be re-derived from the name here without risking a second
+   * answer.
+   */
+  sceneKeys: ReadonlyMap<string, string>;
+  /**
+   * Node ids a rule in **this scene** plays an animation on.
+   *
+   * Per scene and overwritten in `buildCreateBody` beside `engine`, whose own
+   * comment is the precedent. It exists because `constructorFor` emits
+   * `add.image` for a sprite with no clip of its own, and a
+   * `Phaser.GameObjects.Image` has no `play` and no `anims` — so a node a rule
+   * animates has to be built as a `Sprite` instead. That is a **compile error**
+   * under `--strict` if it is missed, not a runtime surprise, which makes
+   * `export-toolchain.spec.ts` the compiler for a semantic coupling.
+   */
+  ruleAnimated: ReadonlySet<string>;
+  /**
+   * Node id -> the `const` its paused tween is bound to, in **this scene**.
+   *
+   * A tween a rule starts is emitted `paused: true` and has to be named, where
+   * every other tween is emitted as a bare statement. The identifiers are
+   * allocated in the prologue before any object binding, which is
+   * `buildSoundLines`' rule: an object a user called "box tween" must not take
+   * the binding the epilogue is reaching for.
+   */
+  ruleTweens: ReadonlyMap<string, string>;
+  /**
+   * The variable table, file-wide like `assets` and `audio`.
+   *
+   * Keyed by variable id, because that is what a rule names; the registry key
+   * a scene actually reads is the entry's `key`. Unfiltered — see
+   * `collectVariables` — so unlike the three tables above it, its size is the
+   * count of what the *project* declares rather than of what a scene uses.
+   */
+  variables: Map<string, UsedVariable>;
+  /**
    * Which engine the scene being emitted runs. On the context rather than
    * threaded through `emitNode` because a prefab factory's bodies are refused
    * for a different reason entirely (they are container children), so nothing
@@ -1686,7 +2031,19 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
       // question about what it is for. The editor makes the opposite choice and
       // draws every sprite node as a Sprite, because there the node has to be
       // able to start animating the moment the user gives it a clip.
-      if (node.props.animationId && animations.has(node.props.animationId)) {
+      //
+      // A node a *rule* animates counts, and this is the one coupling this
+      // feature forces backwards into the object list. `Phaser.GameObjects.Image`
+      // has no `play` and no `anims` at all, so a `playAnimation` action on a
+      // node built as an image is a **compile error** in the exported `.ts`
+      // rather than a runtime surprise — which makes `export-toolchain.spec.ts`
+      // the compiler for a semantic coupling, where it is usually the compiler
+      // for a shape. `add.sprite` is a strict superset of `add.image`
+      // otherwise, so nothing else about the emit changes.
+      if (
+        (node.props.animationId && animations.has(node.props.animationId)) ||
+        ctx.ruleAnimated.has(node.id)
+      ) {
         return `${receiver}.add.sprite(${num(x)}, ${num(y)}, ${str(entry.key)})`;
       }
       // Frame 0 is `add.image`'s own default, so a plain image emits exactly
@@ -2046,7 +2403,18 @@ function emitNode(
     // exception and are emitted only where they exist, because an absent one is
     // not a default — it is a property this tween is not about, and printing
     // the object's current value would emit a tween that holds it still.
-    lines.push(`${ctx.receiver}.tweens.add({`);
+    // A rule that starts this tween needs a handle to start, and a tween that
+    // waits for one has to be created paused. Both only when a rule names it,
+    // so a project with no `startTween` action emits the bare statement it
+    // always did, character for character.
+    //
+    // `persist: true` goes with `paused: true` rather than being a separate
+    // decision: Phaser destroys a completed tween unless told otherwise, so a
+    // rule that can fire twice would find its handle pointing at a corpse.
+    const started = ctx.ruleTweens.get(node.id);
+    lines.push(
+      started ? `const ${started} = ${ctx.receiver}.tweens.add({` : `${ctx.receiver}.tweens.add({`,
+    );
     lines.push(`  targets: ${targets},`);
     for (const property of properties) lines.push(`  ${property},`);
     lines.push(`  duration: ${num(tween.duration)},`);
@@ -2057,6 +2425,10 @@ function emitNode(
     lines.push(`  yoyo: ${tween.yoyo},`);
     lines.push(`  repeat: ${num(tween.repeat)},`);
     lines.push(`  repeatDelay: ${num(tween.repeatDelay)},`);
+    if (started) {
+      lines.push('  paused: true,');
+      lines.push('  persist: true,');
+    }
     lines.push('});');
   }
 
@@ -2160,14 +2532,13 @@ function buildFactories(
       ctx.bodyFn,
       ctx.touchFn,
       ctx.fitFn,
-    ctx.matterFn,
-    ctx.matterBodyFn,
-    ctx.groundFn,
       ctx.matterFn,
-    ctx.matterBodyFn,
-    ctx.groundFn,
       ctx.matterBodyFn,
       ctx.groundFn,
+      ctx.initVariablesFn,
+      ctx.keyFn,
+      ctx.tapFn,
+      ctx.matterHitFn,
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
@@ -2219,9 +2590,13 @@ function buildSoundLines(
   scene: SceneDoc,
   audio: Map<string, UsedAudio>,
   used: Set<string>,
-): string[] {
+): { lines: string[]; handles: Map<string, string> } {
   const sounds = soundsOf(project, scene);
-  if (sounds.length === 0) return [];
+  // Keyed by the *row's* id rather than the audio file's, because that is what
+  // a `playSound` action names — one file registered twice in a scene is two
+  // rows with two volumes and two handles, and an action has to say which.
+  const handles = new Map<string, string>();
+  if (sounds.length === 0) return { lines: [], handles };
 
   const lines: string[] = [
     '// Sounds from the editor, ready for a line of your own: jumpSound.play().',
@@ -2254,9 +2629,10 @@ function buildSoundLines(
     // a `SoundConfig` key, and an excess property on a fresh object literal
     // would fail the exported `.ts` under `--strict` while the `.js` passed.
     if (sound.autoplay) lines.push(`${id}.play();`);
+    handles.set(sound.id, id);
   }
   lines.push('');
-  return lines;
+  return { lines, handles };
 }
 
 /**
@@ -2406,6 +2782,10 @@ function buildUpdateBody(
     ctx.matterFn,
     ctx.matterBodyFn,
     ctx.groundFn,
+    ctx.initVariablesFn,
+    ctx.keyFn,
+    ctx.tapFn,
+    ctx.matterHitFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
 
@@ -2546,6 +2926,230 @@ interface CreateBody {
 }
 
 /** The body of `create()`, shared verbatim by both outputs. */
+/**
+ * The clips the rules of one scene name.
+ *
+ * Shared by `collectAnimations`, which decides what a clip is *called* across
+ * the file, and by `usedIn`, which decides what *this* scene registers —
+ * `familiesIn`'s shape, and for the pair's usual reason. Missing either is one
+ * of the two failures this file names most often: a key nothing registered, so
+ * `anims.play` warns and the sprite never moves, or a clip registered over a
+ * texture the scene never loaded, which throws in `generateFrameNumbers` before
+ * anything is drawn.
+ */
+function animationsNamedByRules(project: Project, scene: SceneDoc): Set<string> {
+  const named = new Set<string>();
+  for (const rule of rulesOf(project, scene)) {
+    for (const action of rule.do) {
+      if (action.kind === 'playAnimation') named.add(action.animationId);
+    }
+  }
+  return named;
+}
+
+/** One action, as the statements it emits. */
+function ruleActionLines(
+  action: RuleAction,
+  ctx: EmitContext,
+  bindings: Map<string, string[]>,
+  soundHandles: Map<string, string>,
+  animations: Map<string, UsedAnimation>,
+): string[] {
+  switch (action.kind) {
+    case 'restartScene':
+      return ['this.scene.restart();'];
+
+    case 'startScene': {
+      const key = ctx.sceneKeys.get(action.sceneId);
+      return key === undefined ? [] : [`this.scene.start(${str(key)});`];
+    }
+
+    case 'destroy':
+      // Every binding, not the first: a tilemap of several layers is destroyed
+      // whole rather than losing its floor and keeping its walls — the tween's
+      // `targets` argument, one action over.
+      return (bindings.get(action.nodeId) ?? []).map((id) => `${id}.destroy();`);
+
+    case 'setVisible':
+      return (bindings.get(action.nodeId) ?? []).map(
+        (id) => `${id}.setVisible(${action.visible});`,
+      );
+
+    case 'playSound': {
+      const handle = soundHandles.get(action.soundId);
+      return handle === undefined ? [] : [`${handle}.play();`];
+    }
+
+    case 'stopSound': {
+      const handle = soundHandles.get(action.soundId);
+      return handle === undefined ? [] : [`${handle}.stop();`];
+    }
+
+    case 'playAnimation': {
+      const id = bindings.get(action.nodeId)?.[0];
+      const entry = animations.get(action.animationId);
+      // The node is built as a `Sprite` rather than an `Image` precisely
+      // because of this line — see `EmitContext.ruleAnimated`.
+      return id === undefined || entry === undefined ? [] : [`${id}.play(${str(entry.key)});`];
+    }
+
+    case 'startTween': {
+      const handle = ctx.ruleTweens.get(action.nodeId);
+      // `play()` rather than `resume()` or `restart()`: it is the one verb that
+      // works from every state a tween can be in — it clears the pause flag and
+      // seeks back to the start if the tween has already finished, where
+      // `resume` does neither and `restart` always rewinds.
+      return handle === undefined ? [] : [`${handle}.play();`];
+    }
+
+    case 'setVar': {
+      const key = ctx.variables.get(action.variableId)?.key;
+      return key === undefined ? [] : [`this.registry.set(${str(key)}, ${num(action.value)});`];
+    }
+
+    case 'addVar': {
+      const key = ctx.variables.get(action.variableId)?.key;
+      // `inc` rather than a read-modify-write, and it is Phaser's own: it
+      // treats an unset key as 0, so it cannot disagree with `initVariables`
+      // about what a variable that has never been written holds.
+      return key === undefined ? [] : [`this.registry.inc(${str(key)}, ${num(action.by)});`];
+    }
+  }
+}
+
+/**
+ * One rule's body: its actions, behind its conditions.
+ *
+ * The conditions are **one gate on the whole list**, read once at the moment,
+ * rather than a branch inside it — which is the half of this feature's line
+ * that refuses OR, nesting and everything that would make a rule a program.
+ * They are joined with `&&` because there is no OR: an OR is two rules.
+ *
+ * `registry.get` answers `any`, so the comparison compiles under `--strict`
+ * with no annotation at all — which is the single most convenient thing about
+ * building conditions on the registry rather than on fields of our own.
+ */
+function ruleBodyLines(
+  rule: SceneRule,
+  ctx: EmitContext,
+  bindings: Map<string, string[]>,
+  soundHandles: Map<string, string>,
+  animations: Map<string, UsedAnimation>,
+): string[] {
+  const body = rule.do.flatMap((action) =>
+    ruleActionLines(action, ctx, bindings, soundHandles, animations),
+  );
+  if (body.length === 0) return [];
+  if (rule.conditions.length === 0) return body;
+
+  const tests = rule.conditions.map((condition) => {
+    const key = ctx.variables.get(condition.variableId)?.key ?? '';
+    // `RULE_OPERATOR_JS`, never the document's own word: one is what a person
+    // reads off a row and one is the language, and conflating them emits a
+    // comparison that does not parse.
+    return `this.registry.get(${str(key)}) ${RULE_OPERATOR_JS[condition.op]} ${num(condition.value)}`;
+  });
+  return [`if (${tests.join(' && ')}) {`, ...body.map((line) => `  ${line}`), '}'];
+}
+
+/**
+ * The rules of one scene, as the fourth thing emitted after the object list.
+ *
+ * After the objects because every rule names a binding the list has just made
+ * — the reason `startFollow`, the collider rows and the driven `this.<field>`
+ * assignments are already there. The epilogue then reads "where the camera
+ * looks, what meets what, what the player drives, and what happens", which is
+ * the right last paragraph.
+ *
+ * **`update()` gains nothing**, and that is the definition of this feature's
+ * line rather than an implementation detail: every trigger here is a moment
+ * Phaser already delivers, and not one of them is polled.
+ *
+ * Collide rules are **not** emitted here under Arcade — they are the third
+ * argument of the `add.collider` call the collider loop above already writes,
+ * because a rule changes that line rather than adding one. Under Matter they
+ * are, through `matterHit`, because there is no row there to change.
+ */
+function buildRuleLines(
+  project: Project,
+  scene: SceneDoc,
+  ctx: EmitContext,
+  bindings: Map<string, string[]>,
+  soundHandles: Map<string, string>,
+): string[] {
+  const lines: string[] = [];
+  for (const rule of rulesOf(project, scene)) {
+    const when = rule.when;
+    // The Arcade collide case is written by the collider loop; a Matter one is
+    // written here because Matter has no row to hang it on.
+    if (when.kind === 'collide' && ctx.engine !== 'matter') continue;
+
+    const body = ruleBodyLines(rule, ctx, bindings, soundHandles, ctx.animations);
+    // A rule whose every action named something that did not reach the output
+    // emits a comment rather than an empty listener — `missingReason`'s
+    // treatment, and the camera follow's.
+    if (body.length === 0) {
+      lines.push(`// ${commentText(rule.name)}: nothing it does could be emitted.`);
+      continue;
+    }
+
+    // The rule's own name above its block, because a wall of anonymous
+    // listeners is unreadable and the name is the one thing that says which
+    // row in the editor each one came from. Through `commentText`, which is the
+    // only guard a comment has against a `</script>` in a project name.
+    lines.push(`// ${commentText(rule.name)}`);
+
+    switch (when.kind) {
+      case 'sceneStart':
+        lines.push(...body);
+        break;
+
+      case 'timer':
+        lines.push(`this.time.addEvent({`);
+        lines.push(`  delay: ${num(when.delay)},`);
+        lines.push(`  loop: ${when.loop},`);
+        lines.push('  callback: () => {');
+        lines.push(...body.map((line) => `    ${line}`));
+        lines.push('  },');
+        lines.push('});');
+        break;
+
+      case 'keyDown':
+        lines.push(`${ctx.keyFn}(this, ${str(when.key)}, () => {`);
+        lines.push(...body.map((line) => `  ${line}`));
+        lines.push('});');
+        break;
+
+      case 'tap': {
+        const id = bindings.get(when.nodeId)?.[0];
+        const node = scene.children.find((child) => child.id === when.nodeId);
+        if (id === undefined || node === undefined) {
+          lines.push('// A rule taps an object that could not be added.');
+          break;
+        }
+        lines.push(`${ctx.tapFn}(${id}, ${node.type === 'ellipse'}, () => {`);
+        lines.push(...body.map((line) => `  ${line}`));
+        lines.push('});');
+        break;
+      }
+
+      case 'collide': {
+        const a = bindings.get(when.aId)?.[0];
+        const b = bindings.get(when.bId)?.[0];
+        if (a === undefined || b === undefined) {
+          lines.push('// A rule watches two objects, one of which could not be added.');
+          break;
+        }
+        lines.push(`${ctx.matterHitFn}(this, ${a}, ${b}, () => {`);
+        lines.push(...body.map((line) => `  ${line}`));
+        lines.push('});');
+        break;
+      }
+    }
+  }
+  return lines;
+}
+
 function buildCreateBody(
   project: Project,
   scene: SceneDoc,
@@ -2556,7 +3160,25 @@ function buildCreateBody(
   // the context handed in is file-wide. Every emit below reads it from here, so
   // a two-scene project with one world of each kind emits each scene the way
   // its own world runs.
-  const ctx: EmitContext = { ...outer, engine: scenePhysicsOf(scene).engine };
+  // Read once, at the top, because three separate things below need it: the
+  // collider loop folds a rule into its own call, `constructorFor` has to know
+  // which sprites a rule animates *before* the object list runs, and the
+  // epilogue emits the rest.
+  const rules = rulesOf(project, scene);
+  const ruleAnimated = new Set<string>();
+  const ruleTweens = new Map<string, string>();
+  for (const rule of rules) {
+    for (const action of rule.do) {
+      if (action.kind === 'playAnimation') ruleAnimated.add(action.nodeId);
+      if (action.kind === 'startTween') ruleTweens.set(action.nodeId, '');
+    }
+  }
+  const ctx: EmitContext = {
+    ...outer,
+    engine: scenePhysicsOf(scene).engine,
+    ruleAnimated,
+    ruleTweens,
+  };
   const { animations } = ctx;
   // Seeded with the factory names as well as `this`: the instance calls are in
   // this scope, so an object named "create coin" bound here would shadow the
@@ -2570,6 +3192,10 @@ function buildCreateBody(
     ctx.matterFn,
     ctx.matterBodyFn,
     ctx.groundFn,
+    ctx.initVariablesFn,
+    ctx.keyFn,
+    ctx.tapFn,
+    ctx.matterHitFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
   const lines: string[] = [
@@ -2671,10 +3297,39 @@ function buildCreateBody(
   // identifier set — these handles are allocated out of `used` before any
   // object binding is, so an object named "jump" cannot take a name a
   // hand-written line elsewhere is reaching for.
-  const sounds = buildSoundLines(project, scene, ctx.audio, used);
-  if (sounds.length > 0) {
+  // Before the sound handles and after everything about the world, because it
+  // is the same kind of thing as both: a fact this scene starts with. It names
+  // no binding, so unlike the camera's `startFollow` and the collider rows it
+  // has no reason to wait for the object list — and a `sceneStart` rule in the
+  // epilogue may add to a variable immediately, so it must not.
+  //
+  // Gated on the project declaring one, the rule the asset table, the tilemap
+  // helper, the prefab factories, the emitted `update()` and the touch buttons
+  // all follow: a project that predates variables emits this line nowhere and
+  // exports byte for byte what it always did.
+  if (ctx.variables.size > 0) {
     if (lines.at(-1) !== '') lines.push('');
-    lines.push(...sounds);
+    lines.push(`${ctx.initVariablesFn}(this, VARIABLES);`);
+  }
+
+  const { lines: soundLines, handles: soundHandles } = buildSoundLines(
+    project,
+    scene,
+    ctx.audio,
+    used,
+  );
+  if (soundLines.length > 0) {
+    if (lines.at(-1) !== '') lines.push('');
+    lines.push(...soundLines);
+  }
+
+  // The paused tweens' bindings, out of `create()`'s own set and before any
+  // object binding draws from it — `buildSoundLines`' rule exactly. An object a
+  // user named "box tween" must not take the name the epilogue is reaching for.
+  // Nothing is emitted here; `emitNode` reads the map for the name it must bind.
+  for (const nodeId of [...ruleTweens.keys()]) {
+    const node = scene.children.find((child) => child.id === nodeId);
+    ruleTweens.set(nodeId, toIdentifier(`${node?.name ?? 'object'} tween`, used));
   }
 
   // The keys, last in the prologue and for the sound handles' reason: the
@@ -2776,8 +3431,38 @@ function buildCreateBody(
       // tilemaps, so at most one side is ever longer than one and this is a
       // loop rather than a product in practice.
       const fn = collider.kind === 'overlap' ? 'overlap' : 'collider';
+      // Every rule that fires on this pair, in document order, as this call's
+      // **third argument** rather than as a second call beside it. Two
+      // `add.collider` calls on one pair would separate the two objects twice.
+      //
+      // The callback takes no parameters, and that is a decision as well as a
+      // convenience: `ArcadePhysicsCallback` is properly typed, so parameters
+      // *would* compile — but they are a four-way union including `Tile` with
+      // no usable shape in common, so reading `o1.x` off one is TS2339. Closing
+      // over the bindings is the plain-JavaScript form that works in all three
+      // outputs, and it is why "which object hit which" is a refusal rather
+      // than a hole: the moment the handler wants to know, it needs two
+      // parameters with two types the shared `create()` body cannot hold.
+      const onPair = rules.flatMap((rule) => {
+        const when = rule.when;
+        if (when.kind !== 'collide') return [];
+        const names =
+          (when.aId === collider.aId && when.bId === collider.bId) ||
+          (when.aId === collider.bId && when.bId === collider.aId);
+        if (!names) return [];
+        const body = ruleBodyLines(rule, ctx, bindings, soundHandles, animations);
+        return body.length === 0 ? [] : [`// ${commentText(rule.name)}`, ...body];
+      });
       for (const left of a) {
-        for (const right of b) lines.push(`this.physics.add.${fn}(${left}, ${right});`);
+        for (const right of b) {
+          if (onPair.length === 0) {
+            lines.push(`this.physics.add.${fn}(${left}, ${right});`);
+            continue;
+          }
+          lines.push(`this.physics.add.${fn}(${left}, ${right}, () => {`);
+          for (const line of onPair) lines.push(`  ${line}`);
+          lines.push('});');
+        }
       }
     }
   }
@@ -2817,6 +3502,17 @@ function buildCreateBody(
         );
       }
     }
+  }
+
+  // The fourth thing emitted after the object list, and for the first three's
+  // reason: every rule names a binding the list has just made. Last of the
+  // four, because it is the one that reads the other three's work — a rule
+  // destroys the objects the list built, plays the sounds the prologue bound
+  // and starts the tweens `emitNode` left paused.
+  const ruleLines = buildRuleLines(project, scene, ctx, bindings, soundHandles);
+  if (ruleLines.length > 0) {
+    if (lines.at(-1) !== '') lines.push('');
+    lines.push(...ruleLines);
   }
 
   while (lines.at(-1) === '') lines.pop();
@@ -2973,6 +3669,8 @@ interface Emission {
    * exports byte for byte what it always did.
    */
   touch: boolean;
+  /** Which rule helpers this file needs, each gated like every table above. */
+  rules: { keys: boolean; taps: boolean; matterHits: boolean };
 }
 
 function prepare(project: Project): Emission {
@@ -2995,10 +3693,27 @@ function prepare(project: Project): Emission {
   const matterFn = toIdentifier('matter body', moduleNames);
   const matterBodyFn = toIdentifier('matter body of', moduleNames);
   const groundFn = toIdentifier('matter ground', moduleNames);
+  // And a ninth, by that same rule. After all eight above it rather than beside
+  // the table it reads, for `fitFn`'s reason: drawing earlier would move the
+  // suffix a clash gives one of the others, and four of those are asserted by
+  // name in the suite.
+  const initVariablesFn = toIdentifier('init variables', moduleNames);
+  // And a tenth, eleventh and twelfth, by that same rule and in this order.
+  // Nothing above them moves, which matters: four of the earlier names are
+  // asserted by name in the suite, and drawing a new one earlier would move the
+  // numeric suffix a clash gives one of them.
+  const keyFn = toIdentifier('on key', moduleNames);
+  const tapFn = toIdentifier('on tap', moduleNames);
+  const matterHitFn = toIdentifier('on matter hit', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
   const audio = collectAudio(project, project.scenes);
+  // Takes the project alone, where every other collector takes the scenes as
+  // well: a variable belongs to no scene, so there is nothing here to filter by
+  // one. That absence reads exactly like a forgotten argument, which is why
+  // `collectVariables` says so at length.
+  const variables = collectVariables(project);
   const fonts = collectFonts(project, project.scenes, prefabs);
   const animations = collectAnimations(project, project.scenes, assets, prefabs);
   const tilemaps = collectTilemaps(project, project.scenes, prefabs, assets);
@@ -3019,6 +3734,17 @@ function prepare(project: Project): Emission {
       matterFn,
       matterBodyFn,
       groundFn,
+      initVariablesFn,
+      keyFn,
+      tapFn,
+      matterHitFn,
+      variables,
+      sceneKeys: new Map(scenes.map((entry) => [entry.scene.id, entry.key])),
+      // Placeholders the per-scene context overwrites, exactly as `engine` is:
+      // a rule belongs to one scene and this object is file-wide, so
+      // `buildCreateBody` is the only place that can answer either.
+      ruleAnimated: new Set<string>(),
+      ruleTweens: new Map<string, string>(),
       fonts,
       receiver: 'this',
       // A placeholder the per-scene context overwrites. The engine is a
@@ -3036,6 +3762,23 @@ function prepare(project: Project): Emission {
       grounded: worlds.some((world) => world.grounded),
     },
     touch: project.scenes.some((scene) => touchZonesOf(scene).length > 0),
+    // One flag per helper, each gated on a rule that actually uses it — the
+    // rule the asset table, the tilemap helper, the prefab factories, the
+    // emitted `update()` and the touch buttons all follow: a project that
+    // predates a feature exports byte for byte what it always did.
+    rules: {
+      keys: project.scenes.some((scene) =>
+        rulesOf(project, scene).some((rule) => rule.when.kind === 'keyDown'),
+      ),
+      taps: project.scenes.some((scene) =>
+        rulesOf(project, scene).some((rule) => rule.when.kind === 'tap'),
+      ),
+      matterHits: project.scenes.some(
+        (scene) =>
+          scenePhysicsOf(scene).engine === 'matter' &&
+          rulesOf(project, scene).some((rule) => rule.when.kind === 'collide'),
+      ),
+    },
   };
 }
 
@@ -3144,7 +3887,7 @@ ${created.body}
  * outputs cover the three real cases without overlapping.
  */
 export function generateScene(project: Project, language: SceneLanguage = 'ts'): string {
-  const { scenes, ctx, boot, physics, touch } = prepare(project);
+  const { scenes, ctx, boot, physics, touch, rules } = prepare(project);
 
   // A project with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
@@ -3160,6 +3903,15 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // byte-for-byte property every table before it has kept.
   const atlases = hasAtlasIn(ctx.assets) ? `\n${buildAtlasTable(ctx.assets, '')}\n` : '';
   const fonts = ctx.fonts.size > 0 ? `\n${buildFontTable(ctx.fonts, '')}\n` : '';
+  // The table and its helper as one block, exactly as `TILEMAPS` is followed by
+  // the function that reads it — because here too the helper is the table's
+  // only reader, and splitting them puts a `for` loop a screen away from the
+  // object it walks.
+  const variables =
+    ctx.variables.size > 0
+      ? `\n${buildVariableTable(ctx.variables, '')}\n` +
+        `\n${buildVariableHelper(ctx.initVariablesFn, language, '')}\n`
+      : '';
   // Same rule again: no tilemaps, no table and no helper, so every project that
   // predates them exports byte for byte what it always did.
   const tiles =
@@ -3194,13 +3946,20 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // Same rule again: no on-screen buttons, no helper, so every project that
   // predates them exports byte for byte what it always did.
   const buttons = touch ? `\n${buildTouchHelper(ctx.touchFn, language, '')}\n` : '';
+  // Same rule again, once per helper: a project with no rule of that kind
+  // emits nothing at all for it.
+  const keyFn = rules.keys ? `\n${buildKeyHelper(ctx.keyFn, language, '')}\n` : '';
+  const tapFn = rules.taps ? `\n${buildTapHelper(ctx.tapFn, language, '')}\n` : '';
+  const matterHitFn = rules.matterHits
+    ? `\n${buildMatterHitHelper(ctx.matterHitFn, language, '')}\n`
+    : '';
   const classes = scenes
     .map((entry) => buildSceneClass(project, entry, ctx, language, true))
     .join('\n\n');
 
   return `${header(project)}${physicsNote(physics.arcade)}
 import Phaser from 'phaser';
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${factories}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -3213,7 +3972,7 @@ export default ${boot.className};
  * the Phaser it was built for.
  */
 export function generateRunnableHtml(project: Project): string {
-  const { scenes, ctx, boot, physics, touch } = prepare(project);
+  const { scenes, ctx, boot, physics, touch, rules } = prepare(project);
   // phaserVersion comes from the project file, so it is not trustworthy input
   // for a URL. Anything that is not a plain version falls back to the version
   // this editor targets.
@@ -3231,6 +3990,11 @@ export function generateRunnableHtml(project: Project): string {
     : '';
   const fonts =
     ctx.fonts.size > 0 ? `${buildFontTable(ctx.fonts, '      ')}\n\n` : '';
+  const variables =
+    ctx.variables.size > 0
+      ? `${buildVariableTable(ctx.variables, '      ')}\n\n` +
+        `${buildVariableHelper(ctx.initVariablesFn, 'js', '      ')}\n\n`
+      : '';
   const tiles =
     ctx.tilemaps.size > 0
       ? `${buildTilemapTable(ctx.tilemaps, '      ')}\n\n` +
@@ -3254,6 +4018,11 @@ export function generateRunnableHtml(project: Project): string {
     ? `${buildGroundHelper(ctx.groundFn, 'js', '      ')}\n\n`
     : '';
   const buttons = touch ? `${buildTouchHelper(ctx.touchFn, 'js', '      ')}\n\n` : '';
+  const keyFn = rules.keys ? `${buildKeyHelper(ctx.keyFn, 'js', '      ')}\n\n` : '';
+  const tapFn = rules.taps ? `${buildTapHelper(ctx.tapFn, 'js', '      ')}\n\n` : '';
+  const matterHitFn = rules.matterHits
+    ? `${buildMatterHitHelper(ctx.matterHitFn, 'js', '      ')}\n\n`
+    : '';
   const classes = scenes
     .map((entry) =>
       buildSceneClass(project, entry, ctx, 'js', false).replace(/^(?!$)/gm, '      '),
@@ -3285,7 +4054,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${atlases}${fonts}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

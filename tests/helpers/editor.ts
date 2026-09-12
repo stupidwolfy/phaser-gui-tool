@@ -1245,6 +1245,106 @@ export class EditorPage {
   }
 
   /**
+   * Declares a variable in the scene panel and returns the key it reads as.
+   *
+   * Deselects first, because `VariablesSection` lives in `SceneInspector`,
+   * which renders only with an empty selection — `addSceneSound`'s reason.
+   */
+  async addVariable(): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByTitle('Declare a number the game keeps').click();
+    await this.settle();
+  }
+
+  /** Renames a declared variable and sets what it starts at. */
+  async setVariable(index: number, name: string, value: number): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.setField(`Variable ${index} name`, name);
+    await this.setField(`Variable ${index} starts at`, value);
+    await this.settle();
+  }
+
+  /**
+   * What the panel says a variable reads as in exported code.
+   *
+   * By index, like every other variable field, because the text of this row
+   * *is* the derived key — so the thing being read cannot also be the thing
+   * that locates it.
+   */
+  async variableKey(index: number): Promise<string> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    const hint = this.panel('inspect').getByTitle(`Variable ${index} key`);
+    return (await hint.innerText()).replace('reads as ', '').trim();
+  }
+
+  /** Deletes a declared variable by name. */
+  async removeVariable(name: string): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByTitle(`Delete variable ${name}`).click();
+    await this.settle();
+  }
+
+  // -- rules -----------------------------------------------------------------
+
+  /** Adds a rule from the scene panel, and returns the name it arrived under. */
+  async addRule(): Promise<string> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByTitle('Add a rule to this scene').click();
+    await this.settle();
+    return this.lastRuleName();
+  }
+
+  /** Adds a rule from the selected object's own panel. */
+  async addRuleOnNode(name: string): Promise<string> {
+    await this.openPanel('inspect');
+    await this.panel('inspect').getByTitle(`Add a rule about ${name}`).click();
+    await this.settle();
+    return this.lastRuleName();
+  }
+
+  /** The name of the last rule in whichever panel is open. */
+  private async lastRuleName(): Promise<string> {
+    const titles = await this.panel('inspect')
+      .locator('.rule__summary')
+      .last()
+      .getAttribute('title');
+    return (titles ?? '').replace('Edit ', '');
+  }
+
+  /** How many rules the open panel is listing. */
+  async ruleCount(): Promise<number> {
+    await this.openPanel('inspect');
+    return this.panel('inspect').locator('.rule__summary').count();
+  }
+
+  /** Expands a rule so its fields can be reached. */
+  async openRule(name: string): Promise<void> {
+    await this.openPanel('inspect');
+    const summary = this.panel('inspect').getByTitle(`Edit ${name}`);
+    if (!(await summary.innerText()).startsWith('▾')) await summary.click();
+    await this.settle();
+  }
+
+  /** Deletes a rule by name, from whichever panel is open. */
+  async removeRule(name: string): Promise<void> {
+    await this.openRule(name);
+    await this.panel('inspect').getByTitle(`Delete rule ${name}`).click();
+    await this.settle();
+  }
+
+  /** Points a rule at a different moment. Expands it first. */
+  async setRuleTrigger(name: string, index: number, option: string): Promise<void> {
+    await this.openRule(name);
+    await this.setChoice(`Rule ${index} when`, option);
+    await this.settle();
+  }
+
+  /**
    * Discards the project and starts a new one.
    *
    * The confirm has to be accepted, and without that this method **silently

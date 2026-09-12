@@ -336,7 +336,15 @@ test('a tilemap exports as one helper, a data table and one call per map', async
   expect(exported.contents.split('createTilemapLayer(this, ')).toHaveLength(4);
   // A hidden layer is still built and still collides; visibility is about
   // drawing, exactly as it is for a hidden node whose body is emitted anyway.
-  expect(exported.contents.match(/\.setVisible\(false\);$/gm) ?? []).toHaveLength(1);
+  //
+  // Matched against the *layer bindings* rather than against the whole file,
+  // which is the "a whole-file assertion is a shared resource" rule this suite
+  // already records once: a rule that hides an object emits its own
+  // `.setVisible(false);`, which is correct output and has nothing to do with
+  // this claim. Scope it to the region whose behaviour it is about.
+  expect(
+    exported.contents.match(/^\s*\w*HiddenDetail\.setVisible\(false\);$/gm) ?? [],
+  ).toHaveLength(1);
   // And the other is called out rather than silently dropped, the way a sprite
   // with no image and a dangling instance already are.
   expect(exported.contents).toContain('no tileset chosen in the editor');
@@ -940,6 +948,188 @@ test('a Matter floor collides at the angle it is drawn, not at the box round it'
   // above cannot tell the two apart and this one can. The bar runs from its
   // upper-left end to its lower-right, so downhill is to the right.
   expect(dropped.x).toBeGreaterThan(before.x + 20 * scale);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('the exported page destroys what a tap rule names', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The only test the hit area exists at all.** Nothing about the emitted
+  // text or the `tsc --strict` pass can see it: a `setInteractive()` that
+  // produces no hit area renders perfectly, reads perfectly, and can never be
+  // pressed. That trap has now been paid for twice in this file — once by the
+  // touch buttons' `Geom.Circle`, and once here.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Coin');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 270);
+  await editor.setField('Width', 200);
+  await editor.setField('Height', 200);
+  await editor.addRuleOnNode('Coin');
+  await editor.openRule('Rule 1');
+  await editor.setChoice('Rule 1 do 1', 'Remove an object');
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(page.context(), testInfo.outputPath('tap'), exported.contents);
+
+  const before = await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL);
+  expect(before.count).toBeGreaterThan(100);
+
+  const box = (await run.page.locator('canvas').boundingBox()) as {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  await run.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+  await reaches(
+    async () => (await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL)).count,
+    (count) => count < 20,
+  );
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('a Matter collision runs its rule, whichever way round the pair arrives', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The only test that can see the pair filter is the right way round.**
+  // Matter orders `bodyA` and `bodyB` by internal body id rather than by the
+  // order anything was added, so a filter written one way round compiles, runs,
+  // emits text that looks correct, and fires on roughly half of all projects.
+  // `matterGround`'s recorded lesson, one event over — and the reason this is
+  // its own test rather than a line in the Arcade one.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Floor');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 480);
+  await editor.setField('Width', 900);
+  await editor.setField('Height', 40);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body', 'Static — never moves');
+  await editor.deselect();
+
+  await editor.setGravity(0, 900);
+  await editor.setSceneEngine('matter');
+
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Faller');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 180);
+  await editor.setField('Width', 80);
+  await editor.setField('Height', 80);
+  await editor.setPhysics(true);
+  await editor.deselect();
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'two objects touch');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Remove an object');
+  await editor.setChoice('Rule 1 do 1 object', 'Faller');
+
+  const exported = await editor.exportCode('html');
+  // A Matter collide rule needs no collider row, and the reason is the inverse
+  // of the one that makes `collidersOf` answer [] here: a row is redundant
+  // because Matter already collides everything, but a *rule* is not, because
+  // "do this when they touch" is something Matter does not do on its own.
+  expect(exported.contents).toContain('function onMatterHit');
+  expect(exported.contents).not.toContain('physics.add.collider');
+  // **Both orders, asserted in the text**, because the runtime claim below can
+  // only catch a one-way filter when the pair happens to arrive the other way
+  // round — and which way that is depends on internal body ids. The text
+  // assertion is the deterministic half of the same claim.
+  expect(exported.contents).toContain(
+    '(first === a && second === b) || (first === b && second === a)',
+  );
+
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('matter-rule'),
+    exported.contents,
+  );
+
+  const before = await findColor(
+    run.page,
+    await run.page.locator('canvas').screenshot(),
+    ELLIPSE_FILL,
+  );
+  expect(before.count).toBeGreaterThan(100);
+
+  // It falls, it lands, and landing is what removes it. Backwards, the handler
+  // never fires and the ellipse simply sits on the floor for ever.
+  await reaches(
+    async () =>
+      (await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL))
+        .count,
+    (count) => count < 20,
+  );
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('the exported page keeps a variable across a change of scene', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The one claim that justifies `project.variables` being project-level and
+  // emitted through the registry rather than being a field on a scene.**
+  // Nothing else in the suite makes it, and a scene-level store would pass
+  // every other test in this file.
+  await editor.clearScene();
+  await editor.addVariable();
+  await editor.setVariable(1, 'Score', 0);
+
+  // The second scene: a box that is hidden unless the score arrived with it.
+  await editor.addScene();
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Prize');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 270);
+  await editor.setField('Width', 300);
+  await editor.setField('Height', 300);
+  await editor.selectInTree('Prize');
+  await editor.setField('Alpha', 0);
+  await editor.deselect();
+
+  const second = await editor.addRule();
+  await editor.setRuleTrigger(second, 1, 'the scene starts');
+  await editor.openRule(second);
+  await editor.panel('inspect').getByTitle('Add a check to rule 1').click();
+  await editor.setChoice('Rule 1 check 1 is', 'is at least');
+  await editor.setField('Rule 1 check 1 value', 3);
+  await editor.setChoice('Rule 1 do 1', 'Show or hide an object');
+  await editor.setChoice('Rule 1 do 1 to', 'Show');
+
+  // Back to the first scene, which counts to three and then leaves.
+  await editor.switchToScene('MainScene');
+  const first = await editor.addRule();
+  await editor.setRuleTrigger(first, 1, 'the scene starts');
+  await editor.openRule(first);
+  await editor.setChoice('Rule 1 do 1', 'Set a variable');
+  await editor.setField('Rule 1 do 1 to', 3);
+  await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+  await editor.setChoice('Rule 1 do 2', 'Go to a scene');
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(page.context(), testInfo.outputPath('carry'), exported.contents);
+
+  // The prize is drawn at full alpha only if the second scene's condition read
+  // a score the first scene set — which only survives `scene.start` because it
+  // lives in the game-wide registry.
+  await reaches(
+    async () => (await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL)).count,
+    (count) => count > 200,
+  );
   expect(run.errors).toEqual([]);
 
   await run.close();

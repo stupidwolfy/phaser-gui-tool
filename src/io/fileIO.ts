@@ -11,6 +11,7 @@ import {
   type ImageAsset,
   type Prefab,
   type Project,
+  type ProjectVariable,
 } from '../core/schema';
 
 /**
@@ -364,6 +365,50 @@ function parseAudio(raw: unknown): AudioAsset[] {
 }
 
 /**
+ * The variable table, rebuilt field by field like every project table above it.
+ *
+ * There is deliberately no `variablesOf` beside `rulesOf` in `schema.ts`, and
+ * the asymmetry is this file's rather than an oversight. Scene state gets a
+ * read-site validator — `guidesOf`, `soundsOf`, `collidersOf`, `cameraOf` —
+ * because `scenes` is the one part of an opened file that is *not* rebuilt
+ * field by field, so a `?? []` at each call site would be trusting a string
+ * from disk five times over. A project table is rebuilt here instead, once,
+ * which is exactly why adding one bumps `SCHEMA_VERSION` and adding a scene
+ * field does not.
+ *
+ * A row is dropped rather than repaired when it has no usable id, because a
+ * rule names a variable by id and an invented one would name nothing. The
+ * *name* is repaired, because it is free text with a sensible fallback and
+ * `variableKeyOf` turns whatever survives into an identifier anyway. A
+ * non-finite `value` becomes 0 rather than costing the row: it is the number
+ * the game starts on, and every condition still works against zero.
+ */
+function parseVariables(raw: unknown): ProjectVariable[] {
+  if (!Array.isArray(raw)) return [];
+
+  const table: ProjectVariable[] = [];
+  const seen = new Set<string>();
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const variable = candidate as Partial<ProjectVariable>;
+    if (typeof variable.id !== 'string' || !variable.id) continue;
+    // A repeated id would have `findVariable` answer with whichever it reached
+    // first, so two rules naming what looks like two variables would share one
+    // — `parseAssets`' concern, and `tileMapOf`'s layer ids.
+    if (seen.has(variable.id)) continue;
+    seen.add(variable.id);
+
+    const value = Number(variable.value);
+    table.push({
+      id: variable.id,
+      name: typeof variable.name === 'string' ? variable.name : 'variable',
+      value: Number.isFinite(value) ? value : 0,
+    });
+  }
+  return table;
+}
+
+/**
  * The font table, rebuilt field by field like the two tables above it.
  *
  * Two things are dropped rather than repaired, and the second is the one worth
@@ -553,6 +598,13 @@ export function parseProject(contents: string): Project {
     animations: parseAnimations(candidate.animations, assets),
     // Absent before v5, which is a valid project that uses no prefabs.
     prefabs: parsePrefabs(candidate.prefabs),
+    // Absent before v13, which is a valid project that counts nothing. This is
+    // the line the v13 bump is about, and it is the audio and font case for a
+    // third time: a v12 build reaching here drops the table and re-saves
+    // without it, leaving every rule in the file naming variables that are no
+    // longer declared — so `rulesOf` drops the rules as well, and the project
+    // goes on opening and drawing while quietly no longer being a game.
+    variables: parseVariables(candidate.variables),
     scenes,
     activeSceneId,
   };

@@ -10,7 +10,14 @@ import {
 import {
   DEFAULT_CAMERA,
   EMPTY_TILE,
+  RULE_ACTION_KINDS,
+  RULE_KEYS,
+  RULE_OPERATORS,
+  RULE_OPERATOR_LABEL,
+  RULE_TRIGGER_KINDS,
+  TWEEN_EASES,
   cameraOf,
+  canBeTapped,
   canHavePhysics,
   collidableNodes,
   collidersNaming,
@@ -19,6 +26,7 @@ import {
   containsNode,
   controlsOf,
   findAsset,
+  findAudio,
   findParent,
   frameCountOf,
   frameGridOf,
@@ -26,20 +34,29 @@ import {
   guidesOf,
   isDefaultCamera,
   physicsOf,
+  rulesNaming,
+  rulesOf,
   scenePhysicsOf,
   siblingsOf,
+  soundsOf,
   tileLayerOf,
   tileMapOf,
   tweenOf,
-  TWEEN_EASES,
-  type TweenProperty,
-  type TileMap,
   type GameObjectNode,
   type NineSliceProps,
   type ParticlesProps,
+  type Project,
+  type RuleAction,
+  type RuleOperator,
+  type RuleTrigger,
+  type SceneDoc,
+  type SceneRule,
   type TextProps,
+  type TileMap,
   type TileSpriteProps,
+  type TweenProperty,
 } from '../core/schema';
+import { variableKeysOf } from '../io/exportPhaser';
 import { AssetPicker, AssetSummary, SheetSection } from './AssetPicker';
 import { AudioSection } from './AudioPicker';
 import { FontPicker } from './FontPicker';
@@ -339,9 +356,801 @@ function SceneInspector() {
           fields, the gravity and the guides, which is what it is one of. */}
       <AudioSection />
 
+      {/* With the sounds and for their reason: a variable is declared and tuned
+          a handful of times in a project's life, and it names no node. It sits
+          below the audio rather than above it because a sound is a thing the
+          scene has and a variable is a thing the *project* has, so it reads as
+          the last and widest of the scene panel's settings. */}
+      <VariablesSection />
+
+      {/* Last of the scene's own settings, because it is the one that reads
+          every other: a rule names the objects in the tree, the sounds the
+          panel above registers and the variables the panel above that
+          declares. */}
+      <RulesSection />
+
       <SnappingSection />
     </div>
   );
+}
+
+/**
+ * The numbers the game keeps.
+ *
+ * Project state shown on the scene panel, which is the one thing here that is
+ * not what it looks like — `AudioSection` above it edits the *scene's* list of
+ * sounds while the table of files is the project's, and this edits the project
+ * outright. It is here because `SceneInspector` is where every setting that is
+ * about the game rather than about one object already lives, and because the
+ * alternative (a fourth mobile tab) costs a `MobileTab`, a sheet, a
+ * `SHEET_TITLE` and a quarter of a 390px tab bar.
+ *
+ * Each row shows the registry key it derives, the way an audio row shows the
+ * key it plays as — `variableKeyOf` is exported from the exporter so the row
+ * and the output cannot disagree about it. It shows the *de-duplicated* key,
+ * because two variables deriving one key is a value silently shared at runtime,
+ * and the suffix is the only thing on screen that says so.
+ */
+function VariablesSection() {
+  const project = useEditorStore((s) => s.project);
+  const variables = project.variables;
+  const addVariable = useEditorStore((s) => s.addVariable);
+  const updateVariable = useEditorStore((s) => s.updateVariable);
+  const removeVariable = useEditorStore((s) => s.removeVariable);
+
+  // The exporter's own answer rather than a second walk, so the key a row shows
+  // is the key the export writes. Derived here rather than in a selector
+  // because it builds a fresh Map every call — the `tileMapOf` trap, and the
+  // reason every reader in `schema.ts` carries that warning.
+  const keys = variableKeysOf(project);
+
+  return (
+    <>
+      <div className="panel__section">Variables</div>
+
+      {variables.length === 0 ? (
+        <p className="hint">
+          Nothing here counts anything yet. A variable is a number the game keeps — a
+          score, a lives count — and it survives a change of scene.
+        </p>
+      ) : null}
+
+      {variables.map((variable, index) => (
+        <div key={variable.id}>
+          <div className="field-row">
+            <TextField
+              label={`Variable ${index + 1} name`}
+              value={variable.name}
+              onChange={(name) => updateVariable(variable.id, { name })}
+            />
+            {/* "starts at", not "Value": it is the number the game *begins*
+                with, set once per game rather than once per scene, and a row
+                labelled Value would say the opposite of what the helper does.
+                The "Animation name, not Name" rule, arriving by a sixth route. */}
+            <NumberField
+              label={`Variable ${index + 1} starts at`}
+              value={variable.value}
+              onChange={(value) => updateVariable(variable.id, { value })}
+            />
+          </div>
+          <div className="field-row">
+            {/* By title as well as text, the way an audio row is found: the
+                text is the derived key, which is the very thing a caller is
+                trying to read, so it cannot also be what locates the row. */}
+            <p className="hint" title={`Variable ${index + 1} key`}>
+              reads as {keys.get(variable.id)}
+            </p>
+            <button
+              className="icon-btn icon-btn--danger"
+              onClick={() => removeVariable(variable.id)}
+              title={`Delete variable ${variable.name}`}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      ))}
+
+      <button
+        className="btn btn--add"
+        onClick={addVariable}
+        title="Declare a number the game keeps"
+      >
+        + Variable
+      </button>
+      <p className="hint">
+        Exported code declares these once and keeps them in Phaser&apos;s registry, so
+        they survive a change of scene. Read one anywhere with{' '}
+        <code>this.registry.get(&apos;name&apos;)</code>.
+      </p>
+    </>
+  );
+}
+
+
+/* -------------------------------------------------------------------------- */
+/*  Rules                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** How each trigger kind reads on a picker. */
+const TRIGGER_LABEL: Record<RuleTrigger['kind'], string> = {
+  sceneStart: 'the scene starts',
+  collide: 'two objects touch',
+  tap: 'an object is tapped',
+  keyDown: 'a key is pressed',
+  timer: 'a timer fires',
+};
+
+/** How each action kind reads on a picker. */
+const ACTION_LABEL: Record<RuleAction['kind'], string> = {
+  destroy: 'Remove an object',
+  setVisible: 'Show or hide an object',
+  playSound: 'Play a sound',
+  stopSound: 'Stop a sound',
+  playAnimation: 'Play an animation',
+  startTween: 'Start a movement',
+  setVar: 'Set a variable',
+  addVar: 'Add to a variable',
+  startScene: 'Go to a scene',
+  restartScene: 'Restart this scene',
+};
+
+/** One `{ value, label }` per top-level node, for the node pickers. */
+function nodeOptions(scene: SceneDoc, only?: (node: GameObjectNode) => boolean) {
+  return scene.children
+    .filter((node) => (only ? only(node) : true))
+    .map((node) => ({ value: node.id, label: node.name || node.type }));
+}
+
+/**
+ * What a rule says, in one line, for the collapsed row.
+ *
+ * A summary rather than the rule's own name, because the name is free text and
+ * a list of rules called "Rule 1".."Rule 6" is a list nobody can navigate. The
+ * name is still what the expand toggle is *titled* by, since a title has to be
+ * stable for a test locator and a summary changes as the rule is edited.
+ */
+function ruleSummary(rule: SceneRule, scene: SceneDoc): string {
+  const name = (id: string) =>
+    scene.children.find((node) => node.id === id)?.name ?? 'something';
+  const when = rule.when;
+  const trigger =
+    when.kind === 'collide'
+      ? `${name(when.aId)} touches ${name(when.bId)}`
+      : when.kind === 'tap'
+        ? `${name(when.nodeId)} is tapped`
+        : when.kind === 'keyDown'
+          ? `${when.key} is pressed`
+          : when.kind === 'timer'
+            ? `every ${when.delay}ms`
+            : 'the scene starts';
+  const count = rule.do.length;
+  return `When ${trigger} — ${count} ${count === 1 ? 'action' : 'actions'}`;
+}
+
+/**
+ * The rules of the scene being edited.
+ *
+ * Shown in two places, and that is the whole point rather than a duplication:
+ * the scene-wide list is here, and `NodeRulesSection` shows the same rules
+ * filtered to one object on that object's own panel. `CollidersSection`
+ * recorded why — `SceneInspector` renders only with an **empty selection**, so
+ * a panel that only lives here is off screen for the whole of the time a person
+ * spends building the objects a rule is about, and *a panel that is right and
+ * cannot be reached reads to a user exactly like a feature that does not
+ * exist.* This feature applies that lesson before the bug rather than after it.
+ *
+ * Both write through the same `addRule` / `updateRule` / `removeRule`, so this
+ * is one field with two controls — the tile eraser's rule and the emitter
+ * marker's — never two notions of what the scene does.
+ */
+function RulesSection() {
+  const project = useEditorStore((s) => s.project);
+  const scene = useActiveScene();
+  const addRule = useEditorStore((s) => s.addRule);
+  // Derived outside the selector: `rulesOf` builds a fresh array every call, so
+  // selecting it directly is React error #185 — the `tileMapOf` trap.
+  const rules = rulesOf(project, scene);
+  const tappable = scene.children.filter((node) => canBeTapped(node.type));
+
+  return (
+    <>
+      <div className="panel__section">Rules</div>
+
+      {rules.length === 0 ? (
+        <p className="hint">Nothing happens on its own yet.</p>
+      ) : null}
+
+      {rules.map((rule, index) => (
+        <RuleCard key={rule.id} rule={rule} index={index + 1} />
+      ))}
+
+      <button
+        className="btn btn--add"
+        onClick={() =>
+          addRule(
+            // Seeded with something that can actually fire, `defaultTween`'s
+            // rule: a tap when there is anything tappable, and the one trigger
+            // that names nothing at all when there is not.
+            tappable.length > 0
+              ? { kind: 'tap', nodeId: tappable[0].id }
+              : { kind: 'sceneStart' },
+          )
+        }
+        title="Add a rule to this scene"
+      >
+        + Rule
+      </button>
+      <p className="hint">
+        A rule is a moment, an optional check, and a list of things to do. The editor
+        never runs one — press Export to play what they build.
+      </p>
+    </>
+  );
+}
+
+/**
+ * The rules that name the selected object, on its own panel.
+ *
+ * `collidersNaming`'s shape one feature over, and built on `rulesNaming` rather
+ * than on a second read of `scene.rules`, so a rule the scene panel has dropped
+ * cannot come back to life here.
+ */
+function NodeRulesSection({ node }: { node: GameObjectNode }) {
+  const project = useEditorStore((s) => s.project);
+  const scene = useActiveScene();
+  const addRule = useEditorStore((s) => s.addRule);
+  const rules = rulesNaming(project, scene, node.id);
+  const topLevel = scene.children.some((child) => child.id === node.id);
+  const tappable = canBeTapped(node.type);
+
+  // A rule names top-level nodes only — see `rulesOf`. Said rather than left
+  // silently absent, which is the failure this file records twice.
+  if (!topLevel) {
+    return (
+      <>
+        <div className="panel__section">Rules</div>
+        <p className="hint">
+          Rules name objects at the top level of the scene. Drag this one out of its
+          group to give it one.
+        </p>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="panel__section">Rules</div>
+
+      {rules.length === 0 ? (
+        <p className="hint">Nothing happens to this object on its own yet.</p>
+      ) : null}
+
+      {rules.map((rule, index) => (
+        <RuleCard key={rule.id} rule={rule} index={index + 1} />
+      ))}
+
+      <button
+        className="btn btn--add"
+        onClick={() =>
+          addRule(tappable ? { kind: 'tap', nodeId: node.id } : { kind: 'sceneStart' })
+        }
+        title={`Add a rule about ${node.name}`}
+      >
+        + Add a rule
+      </button>
+
+      {!tappable ? (
+        <p className="hint">
+          A tap needs an object Phaser can build a hit area for. A group, a prefab, a
+          tilemap and an emitter each have no box of their own to press, so a rule about
+          one of those starts from another moment.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * One rule, collapsed to a summary until it is opened.
+ *
+ * A rule carries a trigger with kind-dependent parameters, a variable-length
+ * list of checks and a variable-length list of actions, which is far too much
+ * for one row on a 390px sheet. Collapsing is the scene tree's idea borrowed,
+ * and the expand toggle is titled `Edit <name>` rather than carrying the bare
+ * name — the scene chips' `Switch to ` rule, arriving a fifth time, and it
+ * matters here because nothing stops a user calling a rule "Scene".
+ *
+ * Never more than two controls in a `field-row`: at 390px a third is about 85px
+ * and truncates every object name in a picker to nothing, which is the reason
+ * `CollidersSection` splits four controls into two rows of two.
+ */
+function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
+  const [open, setOpen] = useState(false);
+  const project = useEditorStore((s) => s.project);
+  const scene = useActiveScene();
+  const updateRule = useEditorStore((s) => s.updateRule);
+  const removeRule = useEditorStore((s) => s.removeRule);
+  const addRuleCondition = useEditorStore((s) => s.addRuleCondition);
+  const updateRuleCondition = useEditorStore((s) => s.updateRuleCondition);
+  const removeRuleCondition = useEditorStore((s) => s.removeRuleCondition);
+  const addRuleAction = useEditorStore((s) => s.addRuleAction);
+  const updateRuleAction = useEditorStore((s) => s.updateRuleAction);
+  const removeRuleAction = useEditorStore((s) => s.removeRuleAction);
+  const moveRuleAction = useEditorStore((s) => s.moveRuleAction);
+
+  const variables = project.variables;
+  const matter = scenePhysicsOf(scene).engine === 'matter';
+
+  return (
+    <div className="rule">
+      <button
+        className="rule__summary"
+        onClick={() => setOpen(!open)}
+        title={`Edit ${rule.name}`}
+      >
+        {open ? '▾' : '▸'} {ruleSummary(rule, scene)}
+      </button>
+
+      {open ? (
+        <>
+          <TextField
+            label={`Rule ${index} name`}
+            value={rule.name}
+            onChange={(name) => updateRule(rule.id, { name })}
+          />
+
+          <SelectField
+            label={`Rule ${index} when`}
+            value={rule.when.kind}
+            options={RULE_TRIGGER_KINDS.map((kind) => ({
+              value: kind,
+              label: TRIGGER_LABEL[kind],
+            }))}
+            onChange={(kind) =>
+              updateRule(rule.id, { when: defaultTrigger(kind as RuleTrigger['kind'], scene) })
+            }
+          />
+
+          <TriggerFields
+            rule={rule}
+            index={index}
+            scene={scene}
+            onChange={(when) => updateRule(rule.id, { when })}
+          />
+
+          {rule.when.kind === 'collide' ? (
+            <p className="hint">
+              {matter
+                ? 'This scene runs Matter, so the two do not need to be paired first — the rule watches for the touch itself.'
+                : 'Arcade only separates two objects that have been paired, so this rule adds that pairing under Collisions.'}
+            </p>
+          ) : null}
+
+          <div className="panel__subsection">Only if</div>
+          {rule.conditions.length === 0 ? (
+            <p className="hint">
+              {variables.length === 0
+                ? 'Declare a variable under Variables to check one here.'
+                : 'No check — this rule always runs.'}
+            </p>
+          ) : null}
+          {rule.conditions.map((condition, at) => (
+            <div key={`${rule.id}:c${at}`}>
+              <div className="field-row">
+                <SelectField
+                  label={`Rule ${index} check ${at + 1}`}
+                  value={condition.variableId}
+                  options={variables.map((variable) => ({
+                    value: variable.id,
+                    label: variable.name,
+                  }))}
+                  onChange={(variableId) =>
+                    updateRuleCondition(rule.id, at, { variableId })
+                  }
+                />
+                <SelectField
+                  label={`Rule ${index} check ${at + 1} is`}
+                  value={condition.op}
+                  options={RULE_OPERATORS.map((op) => ({
+                    value: op,
+                    label: RULE_OPERATOR_LABEL[op],
+                  }))}
+                  onChange={(op) =>
+                    updateRuleCondition(rule.id, at, { op: op as RuleOperator })
+                  }
+                />
+              </div>
+              <div className="field-row">
+                <NumberField
+                  label={`Rule ${index} check ${at + 1} value`}
+                  value={condition.value}
+                  onChange={(value) => updateRuleCondition(rule.id, at, { value })}
+                />
+                <button
+                  className="icon-btn icon-btn--danger"
+                  onClick={() => removeRuleCondition(rule.id, at)}
+                  title={`Remove check ${at + 1} of rule ${index}`}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          ))}
+          <button
+            className="btn btn--add"
+            disabled={variables.length === 0}
+            onClick={() => addRuleCondition(rule.id)}
+            title={`Add a check to rule ${index}`}
+          >
+            + Check
+          </button>
+
+          <div className="panel__subsection">Then</div>
+          {rule.do.map((action, at) => (
+            <div key={`${rule.id}:a${at}`}>
+              <SelectField
+                label={`Rule ${index} do ${at + 1}`}
+                value={action.kind}
+                options={RULE_ACTION_KINDS.map((kind) => ({
+                  value: kind,
+                  label: ACTION_LABEL[kind],
+                }))}
+                onChange={(kind) =>
+                  updateRuleAction(
+                    rule.id,
+                    at,
+                    defaultAction(kind as RuleAction['kind'], scene, project),
+                  )
+                }
+              />
+              <ActionFields
+                action={action}
+                label={`Rule ${index} do ${at + 1}`}
+                scene={scene}
+                project={project}
+                onChange={(next) => updateRuleAction(rule.id, at, next)}
+              />
+              <div className="field-row">
+                <button
+                  className="icon-btn"
+                  disabled={at === 0}
+                  onClick={() => moveRuleAction(rule.id, at, -1)}
+                  title={`Move action ${at + 1} of rule ${index} up`}
+                >
+                  ↑
+                </button>
+                <button
+                  className="icon-btn icon-btn--danger"
+                  onClick={() => removeRuleAction(rule.id, at)}
+                  title={`Remove action ${at + 1} of rule ${index}`}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          ))}
+          <button
+            className="btn btn--add"
+            onClick={() => addRuleAction(rule.id)}
+            title={`Add an action to rule ${index}`}
+          >
+            + Action
+          </button>
+
+          <button
+            className="btn btn--danger"
+            onClick={() => removeRule(rule.id)}
+            title={`Delete rule ${rule.name}`}
+          >
+            Delete rule
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** A trigger of the given kind, already naming something this scene holds. */
+function defaultTrigger(kind: RuleTrigger['kind'], scene: SceneDoc): RuleTrigger {
+  const tappable = scene.children.filter((node) => canBeTapped(node.type));
+  switch (kind) {
+    case 'collide': {
+      const pair = scene.children.filter((node) => canHavePhysics(node.type));
+      return pair.length > 1
+        ? { kind: 'collide', aId: pair[0].id, bId: pair[1].id }
+        : { kind: 'sceneStart' };
+    }
+    case 'tap':
+      return tappable.length > 0
+        ? { kind: 'tap', nodeId: tappable[0].id }
+        : { kind: 'sceneStart' };
+    case 'keyDown':
+      return { kind: 'keyDown', key: 'SPACE' };
+    case 'timer':
+      return { kind: 'timer', delay: 1000, loop: false };
+    default:
+      return { kind: 'sceneStart' };
+  }
+}
+
+/** An action of the given kind, already naming something that exists. */
+function defaultAction(
+  kind: RuleAction['kind'],
+  scene: SceneDoc,
+  project: Project,
+): RuleAction {
+  const first = scene.children[0];
+  const variable = project.variables[0];
+  const sound = soundsOf(project, scene)[0];
+  switch (kind) {
+    case 'destroy':
+      return first ? { kind: 'destroy', nodeId: first.id } : { kind: 'restartScene' };
+    case 'setVisible':
+      return first
+        ? { kind: 'setVisible', nodeId: first.id, visible: false }
+        : { kind: 'restartScene' };
+    case 'playSound':
+    case 'stopSound':
+      return sound ? { kind, soundId: sound.id } : { kind: 'restartScene' };
+    case 'playAnimation': {
+      const sprite = scene.children.find((node) => node.type === 'sprite');
+      const clip = project.animations[0];
+      return sprite && clip
+        ? { kind: 'playAnimation', nodeId: sprite.id, animationId: clip.id }
+        : { kind: 'restartScene' };
+    }
+    case 'startTween': {
+      const tweened = scene.children.find((node) => tweenOf(node) !== null);
+      return tweened
+        ? { kind: 'startTween', nodeId: tweened.id }
+        : { kind: 'restartScene' };
+    }
+    case 'setVar':
+      return variable
+        ? { kind: 'setVar', variableId: variable.id, value: 0 }
+        : { kind: 'restartScene' };
+    case 'addVar':
+      return variable
+        ? { kind: 'addVar', variableId: variable.id, by: 1 }
+        : { kind: 'restartScene' };
+    case 'startScene': {
+      const other = project.scenes.find((entry) => entry.id !== scene.id);
+      return other
+        ? { kind: 'startScene', sceneId: other.id }
+        : { kind: 'restartScene' };
+    }
+    default:
+      return { kind: 'restartScene' };
+  }
+}
+
+/** The parameters one trigger kind needs, or nothing for the two that need none. */
+function TriggerFields({
+  rule,
+  index,
+  scene,
+  onChange,
+}: {
+  rule: SceneRule;
+  index: number;
+  scene: SceneDoc;
+  onChange: (when: RuleTrigger) => void;
+}) {
+  const when = rule.when;
+
+  if (when.kind === 'collide') {
+    const options = nodeOptions(scene, (node) => canHavePhysics(node.type) || node.type === 'tilemap');
+    return (
+      <div className="field-row">
+        <SelectField
+          label={`Rule ${index} hits`}
+          value={when.aId}
+          options={options}
+          onChange={(aId) => onChange({ ...when, aId })}
+        />
+        <SelectField
+          label={`Rule ${index} and`}
+          value={when.bId}
+          options={options}
+          onChange={(bId) => onChange({ ...when, bId })}
+        />
+      </div>
+    );
+  }
+
+  if (when.kind === 'tap') {
+    return (
+      <SelectField
+        label={`Rule ${index} tap on`}
+        value={when.nodeId}
+        options={nodeOptions(scene, (node) => canBeTapped(node.type))}
+        onChange={(nodeId) => onChange({ ...when, nodeId })}
+      />
+    );
+  }
+
+  if (when.kind === 'keyDown') {
+    return (
+      <SelectField
+        label={`Rule ${index} key`}
+        value={when.key}
+        // A picker rather than a text field, and the argument is not injection:
+        // `keyboard.on('keydown-BANANA')` is a listener nothing ever emits to.
+        options={RULE_KEYS.map((key) => ({ value: key, label: key }))}
+        onChange={(key) => onChange({ ...when, key })}
+      />
+    );
+  }
+
+  if (when.kind === 'timer') {
+    return (
+      <div className="field-row">
+        <NumberField
+          label={`Rule ${index} every`}
+          value={when.delay}
+          min={1}
+          onChange={(delay) => onChange({ ...when, delay })}
+        />
+        <CheckboxField
+          label={`Rule ${index} repeats`}
+          value={when.loop}
+          onChange={(loop) => onChange({ ...when, loop })}
+        />
+      </div>
+    );
+  }
+
+  return null;
+}
+
+/** The parameters one action kind needs, or nothing for `restartScene`. */
+function ActionFields({
+  action,
+  label,
+  scene,
+  project,
+  onChange,
+}: {
+  action: RuleAction;
+  label: string;
+  scene: SceneDoc;
+  project: Project;
+  onChange: (action: RuleAction) => void;
+}) {
+  switch (action.kind) {
+    case 'destroy':
+      return (
+        <SelectField
+          label={`${label} object`}
+          value={action.nodeId}
+          options={nodeOptions(scene)}
+          onChange={(nodeId) => onChange({ ...action, nodeId })}
+        />
+      );
+
+    case 'setVisible':
+      return (
+        <div className="field-row">
+          <SelectField
+            label={`${label} object`}
+            value={action.nodeId}
+            options={nodeOptions(scene)}
+            onChange={(nodeId) => onChange({ ...action, nodeId })}
+          />
+          <SelectField
+            label={`${label} to`}
+            value={action.visible ? 'show' : 'hide'}
+            options={[
+              { value: 'show', label: 'Show' },
+              { value: 'hide', label: 'Hide' },
+            ]}
+            onChange={(to) => onChange({ ...action, visible: to === 'show' })}
+          />
+        </div>
+      );
+
+    case 'playSound':
+    case 'stopSound':
+      return (
+        <SelectField
+          label={`${label} sound`}
+          value={action.soundId}
+          options={soundsOf(project, scene).map((sound) => ({
+            value: sound.id,
+            label: findAudio(project, sound.audioId)?.name ?? 'sound',
+          }))}
+          onChange={(soundId) => onChange({ ...action, soundId })}
+        />
+      );
+
+    case 'playAnimation':
+      return (
+        <div className="field-row">
+          <SelectField
+            label={`${label} object`}
+            value={action.nodeId}
+            options={nodeOptions(scene, (node) => node.type === 'sprite')}
+            onChange={(nodeId) => onChange({ ...action, nodeId })}
+          />
+          <SelectField
+            label={`${label} animation`}
+            value={action.animationId}
+            options={project.animations.map((clip) => ({
+              value: clip.id,
+              label: clip.name,
+            }))}
+            onChange={(animationId) => onChange({ ...action, animationId })}
+          />
+        </div>
+      );
+
+    case 'startTween':
+      return (
+        <SelectField
+          label={`${label} object`}
+          value={action.nodeId}
+          options={nodeOptions(scene, (node) => tweenOf(node) !== null)}
+          onChange={(nodeId) => onChange({ ...action, nodeId })}
+        />
+      );
+
+    case 'setVar':
+      return (
+        <div className="field-row">
+          <SelectField
+            label={`${label} variable`}
+            value={action.variableId}
+            options={project.variables.map((variable) => ({
+              value: variable.id,
+              label: variable.name,
+            }))}
+            onChange={(variableId) => onChange({ ...action, variableId })}
+          />
+          <NumberField
+            label={`${label} to`}
+            value={action.value}
+            onChange={(value) => onChange({ ...action, value })}
+          />
+        </div>
+      );
+
+    case 'addVar':
+      return (
+        <div className="field-row">
+          <SelectField
+            label={`${label} variable`}
+            value={action.variableId}
+            options={project.variables.map((variable) => ({
+              value: variable.id,
+              label: variable.name,
+            }))}
+            onChange={(variableId) => onChange({ ...action, variableId })}
+          />
+          <NumberField
+            label={`${label} by`}
+            value={action.by}
+            onChange={(by) => onChange({ ...action, by })}
+          />
+        </div>
+      );
+
+    case 'startScene':
+      return (
+        <SelectField
+          label={`${label} scene`}
+          value={action.sceneId}
+          options={project.scenes.map((entry) => ({
+            value: entry.id,
+            label: entry.name,
+          }))}
+          onChange={(sceneId) => onChange({ ...action, sceneId })}
+        />
+      );
+
+    default:
+      return null;
+  }
 }
 
 /**
@@ -2119,6 +2928,12 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
       <PhysicsSection node={node} />
 
       <TweenSection node={node} />
+
+      {/* Last, and on this panel at all for `NodeCollisionsSection`'s reason:
+          the scene-wide list lives in `SceneInspector`, which renders only with
+          an empty selection — so it is off screen for the whole of the time a
+          person spends building the objects a rule is about. */}
+      <NodeRulesSection node={node} />
     </div>
   );
 }
