@@ -47,6 +47,7 @@ import {
   type TextStyle,
   type TileMap,
   type TouchButton,
+  type VariableValue,
 } from '../core/schema';
 
 /**
@@ -115,6 +116,19 @@ const str = (value: string): string => JSON.stringify(value);
 
 /** Trims trailing zeroes so the output reads 480 rather than 480.0000001. */
 const num = (value: number): string => String(Number(value.toFixed(4)));
+
+/**
+ * A variable-shaped value as a literal: a bare number, or a quoted string.
+ *
+ * One helper rather than the same ternary at the three places a
+ * `VariableValue` is printed — the table, a `setVar` and a condition's
+ * comparand — for `frameArg`'s reason one type over: getting it wrong is not an
+ * error in the emitted code. `registry.set("score", "7")` compiles, runs, and
+ * puts a string where every comparison below it expects a number, which is the
+ * one sort of mistake nobody sees until the game is in their hand.
+ */
+const variableLiteral = (value: VariableValue): string =>
+  typeof value === 'number' ? num(value) : str(value);
 
 /**
  * A frame as an argument: a quoted name for an atlas, a bare number for a grid.
@@ -579,14 +593,21 @@ function collectVariables(project: Project): Map<string, UsedVariable> {
 function buildVariableTable(used: Map<string, UsedVariable>, indent: string): string {
   const lines = [
     '/**',
-    ' * The numbers the game keeps. Read them anywhere with',
+    ' * The numbers and the text the game keeps. Read one anywhere with',
     " * `this.registry.get('name')`, and change one with `set` or `inc`.",
     ' */',
     'const VARIABLES = {',
-    ...[...used.values()].map(({ variable, key }) => `  ${str(key)}: ${num(variable.value)},`),
+    ...[...used.values()].map(
+      ({ variable, key }) => `  ${str(key)}: ${variableLiteral(variable.value)},`,
+    ),
     '};',
   ];
   return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/** Whether any variable in the table holds text, which widens the `.ts` signature. */
+function textedVariables(used: Map<string, UsedVariable>): boolean {
+  return [...used.values()].some(({ variable }) => typeof variable.value === 'string');
 }
 
 /**
@@ -608,11 +629,24 @@ function buildVariableTable(used: Map<string, UsedVariable>, indent: string): st
  * `Object.keys` rather than a printed list of `set` calls, so that a project
  * with forty variables is one loop rather than forty lines — and so the table
  * above stays the only place the names appear.
+ *
+ * The `.ts` signature widens to `number | string` **only when something in the
+ * table is text**, which is the byte-for-byte rule the asset table, the tilemap
+ * helper and the prefab factories all follow: a project written before a
+ * variable could hold text exports the line it always exported. It is not a
+ * question of what compiles — the wider type accepts both — but of a diff
+ * nobody asked for.
  */
-function buildVariableHelper(fn: string, language: SceneLanguage, indent: string): string {
+function buildVariableHelper(
+  fn: string,
+  language: SceneLanguage,
+  indent: string,
+  texted: boolean,
+): string {
   const typed = language === 'ts';
+  const type = texted ? 'Record<string, number | string>' : 'Record<string, number>';
   const signature = typed
-    ? `function ${fn}(scene: Phaser.Scene, values: Record<string, number>): void {`
+    ? `function ${fn}(scene: Phaser.Scene, values: ${type}): void {`
     : `function ${fn}(scene, values) {`;
   const lines = [
     signature,
@@ -2975,6 +3009,23 @@ function ruleActionLines(
         (id) => `${id}.setVisible(${action.visible});`,
       );
 
+    case 'setText': {
+      const key = action.variableId ? ctx.variables.get(action.variableId)?.key : undefined;
+      // `str()` and a `+`, never a template the emit has to assemble: the
+      // caption is a string literal and the value is one read, so the whole
+      // expression is two terms a reader can see the shape of. `registry.get`
+      // answers `any`, so the concatenation needs no annotation in a body that
+      // cannot carry one — the convenience the conditions already rest on.
+      const value =
+        key === undefined
+          ? str(action.text)
+          : `${str(action.text)} + this.registry.get(${str(key)})`;
+      // `constructorFor`'s `'text'` case needed no edit for this, unlike
+      // `playAnimation`'s (which widens an `Image` to a `Sprite`) and
+      // `startTween`'s (which binds a handle): a `Text` is already a `Text`.
+      return (bindings.get(action.nodeId) ?? []).map((id) => `${id}.setText(${value});`);
+    }
+
     case 'playSound': {
       const handle = soundHandles.get(action.soundId);
       return handle === undefined ? [] : [`${handle}.play();`];
@@ -3004,7 +3055,9 @@ function ruleActionLines(
 
     case 'setVar': {
       const key = ctx.variables.get(action.variableId)?.key;
-      return key === undefined ? [] : [`this.registry.set(${str(key)}, ${num(action.value)});`];
+      return key === undefined
+        ? []
+        : [`this.registry.set(${str(key)}, ${variableLiteral(action.value)});`];
     }
 
     case 'addVar': {
@@ -3047,7 +3100,10 @@ function ruleBodyLines(
     // `RULE_OPERATOR_JS`, never the document's own word: one is what a person
     // reads off a row and one is the language, and conflating them emits a
     // comparison that does not parse.
-    return `this.registry.get(${str(key)}) ${RULE_OPERATOR_JS[condition.op]} ${num(condition.value)}`;
+    return (
+      `this.registry.get(${str(key)}) ${RULE_OPERATOR_JS[condition.op]} ` +
+      variableLiteral(condition.value)
+    );
   });
   return [`if (${tests.join(' && ')}) {`, ...body.map((line) => `  ${line}`), '}'];
 }
@@ -3907,10 +3963,11 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // the function that reads it — because here too the helper is the table's
   // only reader, and splitting them puts a `for` loop a screen away from the
   // object it walks.
+  const texted = textedVariables(ctx.variables);
   const variables =
     ctx.variables.size > 0
       ? `\n${buildVariableTable(ctx.variables, '')}\n` +
-        `\n${buildVariableHelper(ctx.initVariablesFn, language, '')}\n`
+        `\n${buildVariableHelper(ctx.initVariablesFn, language, '', texted)}\n`
       : '';
   // Same rule again: no tilemaps, no table and no helper, so every project that
   // predates them exports byte for byte what it always did.
@@ -3990,10 +4047,11 @@ export function generateRunnableHtml(project: Project): string {
     : '';
   const fonts =
     ctx.fonts.size > 0 ? `${buildFontTable(ctx.fonts, '      ')}\n\n` : '';
+  const texted = textedVariables(ctx.variables);
   const variables =
     ctx.variables.size > 0
       ? `${buildVariableTable(ctx.variables, '      ')}\n\n` +
-        `${buildVariableHelper(ctx.initVariablesFn, 'js', '      ')}\n\n`
+        `${buildVariableHelper(ctx.initVariablesFn, 'js', '      ', texted)}\n\n`
       : '';
   const tiles =
     ctx.tilemaps.size > 0

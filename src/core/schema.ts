@@ -153,8 +153,26 @@
  * noise; a game that loses its variables still runs, and stops being the game.
  * `rules.spec.ts` asserts the 13 in the saved artefact, as sixteen other specs
  * now assert their own version, which is what makes a bump a deliberate act.
+ *
+ * **v14 is a variable that holds text, and it is the silent-data-loss half of
+ * the rule with no crash half at all — the v13 case one turn of the screw
+ * further.** No new `NodeType`, so a v13 build has a `createDisplayObject` case
+ * for everything in the file and draws it exactly as this one does. The
+ * `setText` action would not have bumped anything on its own: it rides in on
+ * `scenes`, the one part of a file `parseProject` passes through verbatim, so an
+ * old build drops it from the *emit* and carries it back out on a re-save
+ * untouched. What bumps this is `parseVariables`, which rebuilds the project
+ * table field by field and coerces every value with `Number(...)` — so a v13
+ * build reads `value: 'ready'` as `NaN`, repairs that to `0`, and writes the
+ * file back with a variable that still has its name and its id and holds the
+ * wrong kind. Then `rulesOf` drops every rule whose condition or `setVar` named
+ * it, because a number variable cannot be compared with text. v13 lost the
+ * declarations and the rules went with them, which at least left the panel
+ * empty; this one leaves the declarations on screen *looking right* while the
+ * rules that were the point of the file quietly go. `rules.spec.ts` asserts the
+ * 14 in the saved artefact, as seventeen other specs now assert their own.
  */
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -2758,6 +2776,17 @@ export const RULE_OPERATORS: readonly RuleOperator[] = [
 ];
 
 /**
+ * The comparisons that mean anything about text.
+ *
+ * Read by the panel's operator picker and matched by `ruleConditionsOf`'s
+ * refusal, so the control and the reader cannot disagree about which tests a
+ * text variable may carry — `RULE_OPERATOR_JS`'s one-builder rule, applied to
+ * the *set* rather than to the spelling. `'won' > 'lost'` is a comparison
+ * JavaScript performs happily, on code points, and nobody asks for.
+ */
+export const TEXT_OPERATORS: readonly RuleOperator[] = ['eq', 'ne'];
+
+/**
  * What each comparison is written as in JavaScript.
  *
  * The one builder for it, read by the panel's label and by the emit —
@@ -2807,7 +2836,14 @@ export const RULE_OPERATOR_LABEL: Record<RuleOperator, string> = {
 export interface RuleCondition {
   variableId: string;
   op: RuleOperator;
-  value: number;
+  /**
+   * What the variable is compared against, in the variable's own kind.
+   *
+   * A text variable may only be tested with `eq` or `ne`: `'won' > 'lost'` is a
+   * comparison JavaScript performs and nobody asks for, and an ordering test on
+   * text is therefore refused on read rather than repaired — see `rulesOf`.
+   */
+  value: VariableValue;
 }
 
 /**
@@ -2815,9 +2851,18 @@ export interface RuleCondition {
  *
  * A closed union of verbs, each naming a thing the document already holds — a
  * node in this scene, a scene in this project, a sound this scene registers, a
- * clip, a variable. Nothing here is free text, nothing is parsed, and nothing
- * is interpolated as code. That is the whole of what makes a rule data rather
- * than a program.
+ * clip, a variable. Nothing here is parsed and nothing is interpolated as code.
+ * That is the whole of what makes a rule data rather than a program.
+ *
+ * `setText` is the one verb carrying **free user text**, and that is a narrower
+ * thing than it sounds: the string is a caption, printed through `str()` into a
+ * string literal exactly as an object's name and a text node's own content
+ * already are. What it is not is a *template* — there is no syntax inside it, so
+ * nothing reads it and nothing can be hidden in it. A variable's value is
+ * appended by naming the variable in a field of its own, which is why the
+ * document holds a `variableId` beside the text rather than a `{score}` a parser
+ * would have to find. One value, after the caption: two variables in one caption
+ * is an expression, which is the line this vocabulary does not cross.
  *
  * `playSound` names a **`SceneSound` row**, not an `audioId`, and that is the
  * one choice here worth defending. `buildSoundLines` already binds one
@@ -2837,17 +2882,20 @@ export type RuleAction =
   | { kind: 'restartScene' }
   | { kind: 'destroy'; nodeId: string }
   | { kind: 'setVisible'; nodeId: string; visible: boolean }
+  | { kind: 'setText'; nodeId: string; text: string; variableId?: string }
   | { kind: 'playSound'; soundId: string }
   | { kind: 'stopSound'; soundId: string }
   | { kind: 'playAnimation'; nodeId: string; animationId: string }
   | { kind: 'startTween'; nodeId: string }
-  | { kind: 'setVar'; variableId: string; value: number }
+  /** The value is in the variable's own kind; `addVar` below stays arithmetic. */
+  | { kind: 'setVar'; variableId: string; value: VariableValue }
   | { kind: 'addVar'; variableId: string; by: number };
 
 /** Every action kind, for the inspector's picker. */
 export const RULE_ACTION_KINDS: readonly RuleAction['kind'][] = [
   'destroy',
   'setVisible',
+  'setText',
   'playSound',
   'stopSound',
   'playAnimation',
@@ -2924,6 +2972,15 @@ const MIN_TIMER_DELAY = 1;
  * names that *another rule reads*: drop an `addVar` and every condition
  * elsewhere in the project goes on testing a number that was supposed to have
  * moved, silently. `destroy` has no such reach, so it goes alone.
+ *
+ * **A variable's kind is read the same way, and that is the same sentence a
+ * third time.** A condition comparing text with `>`, a condition whose comparand
+ * is not the kind the variable holds, a `setVar` writing a number into a piece of
+ * text, an `addVar` on one: every one costs the whole rule. None of them is
+ * repairable — coercing `"3"` to `3` *invents* a comparison, and dropping a
+ * `setVar` leaves the project testing a value nothing writes. A `setText` is the
+ * other side of it: its node costs only the action, because a node reaches
+ * nothing outside the rule, while its variable costs the rule.
  *
  * The trigger/action asymmetry follows from what each one *is*: a trigger is a
  * moment and there is exactly one, so an unknown kind leaves nothing to attach
@@ -3092,14 +3149,30 @@ function ruleConditionsOf(raw: unknown, project: Project): RuleCondition[] | nul
   for (const candidate of raw) {
     if (typeof candidate !== 'object' || candidate === null) return null;
     const row = candidate as Partial<RuleCondition>;
-    const value = Number(row.value);
     // Every one of these costs the whole rule rather than the condition,
     // because dropping a condition *widens* what the rule says — see `rulesOf`.
     if (typeof row.variableId !== 'string') return null;
-    if (findVariable(project, row.variableId) === undefined) return null;
+    const variable = findVariable(project, row.variableId);
+    if (variable === undefined) return null;
     if (row.op === undefined || !RULE_OPERATORS.includes(row.op)) return null;
-    if (!Number.isFinite(value)) return null;
-    conditions.push({ variableId: row.variableId, op: row.op, value });
+
+    // The comparand is read in the variable's own kind, and a mismatch costs the
+    // rule for the widening reason again: `"3" >= 3` is a test JavaScript will
+    // happily perform and nobody wrote, and dropping the gate instead would have
+    // the rule fire always. Coercing is refused for the same reason — a repair
+    // that *invents* a comparison is a repair that widens.
+    const kind = variableKindOf(variable);
+    if (kind === 'text') {
+      if (typeof row.value !== 'string') return null;
+      // Only equality means anything about text. An ordering operator is
+      // refused rather than repaired to `eq`, because `eq` is a different test
+      // from the one on the row and nobody asked for it.
+      if (row.op !== 'eq' && row.op !== 'ne') return null;
+      conditions.push({ variableId: row.variableId, op: row.op, value: row.value });
+      continue;
+    }
+    if (typeof row.value !== 'number' || !Number.isFinite(row.value)) return null;
+    conditions.push({ variableId: row.variableId, op: row.op, value: row.value });
   }
   return conditions;
 }
@@ -3143,6 +3216,35 @@ function ruleActionsOf(
         }
         break;
 
+      case 'setText': {
+        // Only a `Text` has `setText`, which is a fact about Phaser rather than
+        // a list that can go stale — `playAnimation`'s sprite check to the
+        // character, and the reason there is no `TEXT_TYPES` beside
+        // `TAPPABLE_TYPES` for one entry.
+        if (byId.get(nodeId)?.type !== 'text') break;
+        // Free text with nothing to repair it to, so a non-string costs the
+        // action. A node has no reach beyond the rule that names it.
+        if (typeof row.text !== 'string') break;
+        // **Absent and empty are one state — "just this caption" — and the test
+        // has to come before `findVariable`.** The `variableId` local above
+        // reads a missing field as `''`, which `findVariable` answers
+        // `undefined` for; reusing it here would take the whole rule with every
+        // plain label in the project. The trap is invisible on a document the
+        // editor writes, because the panel writes `undefined`.
+        if (variableId === '') {
+          actions.push({ kind: 'setText', nodeId, text: row.text });
+          break;
+        }
+        // A dangling variable costs the whole *rule*, `setVar`'s rule and for
+        // its reason: a variable is the one thing a rule names that another
+        // rule reads — and this is the first action that *reads* one, so a
+        // caption whose value is gone goes on claiming to show a number the
+        // project has not got.
+        if (findVariable(project, variableId) === undefined) return [];
+        actions.push({ kind: 'setText', nodeId, text: row.text, variableId });
+        break;
+      }
+
       case 'playSound':
       case 'stopSound': {
         const soundId = typeof row.soundId === 'string' ? row.soundId : '';
@@ -3170,18 +3272,37 @@ function ruleActionsOf(
 
       case 'setVar':
       case 'addVar': {
-        const amount = Number(row.kind === 'setVar' ? row.value : row.by);
         // A dangling variable costs the whole *rule*, not the action — see
         // `rulesOf`. Answered by returning an empty list so the caller drops it.
-        if (findVariable(project, variableId) === undefined) return [];
+        const variable = findVariable(project, variableId);
+        if (variable === undefined) return [];
+        const text = variableKindOf(variable) === 'text';
+
+        if (row.kind === 'addVar') {
+          // `registry.inc` on a piece of text is arithmetic on text, so adding
+          // to a text variable is refused — and it costs the whole rule, by the
+          // reach argument above: an `addVar` dropped on its own leaves every
+          // condition in the project testing a value that was supposed to have
+          // moved.
+          if (text) return [];
+          if (typeof row.by !== 'number' || !Number.isFinite(row.by)) break;
+          actions.push({ kind: 'addVar', variableId, by: row.by });
+          break;
+        }
+
+        // A value of the wrong kind is the same reach again: setting a score to
+        // `"ten"` is not a thing to repair, and dropping the action alone would
+        // leave the rest of the project testing a number nothing writes.
+        if (text) {
+          if (typeof row.value !== 'string') return [];
+          actions.push({ kind: 'setVar', variableId, value: row.value });
+          break;
+        }
+        if (typeof row.value !== 'number') return [];
         // A non-finite number costs the action, because a repair to zero is an
         // action that quietly does nothing.
-        if (!Number.isFinite(amount)) break;
-        actions.push(
-          row.kind === 'setVar'
-            ? { kind: 'setVar', variableId, value: amount }
-            : { kind: 'addVar', variableId, by: amount },
-        );
+        if (!Number.isFinite(row.value)) break;
+        actions.push({ kind: 'setVar', variableId, value: row.value });
         break;
       }
 
@@ -3234,7 +3355,8 @@ export function ruleUsesVariable(rule: SceneRule, variableId: string): boolean {
 }
 
 /**
- * A number the game keeps, declared once and shared by every scene.
+ * A number or a piece of text the game keeps, declared once and shared by every
+ * scene.
  *
  * Project-level for the reason `animations` and `prefabs` are, with one
  * addition that settles it on its own: a variable has to survive
@@ -3260,13 +3382,64 @@ export function ruleUsesVariable(rule: SceneRule, variableId: string): boolean {
  * a family *is* the link, so it must be stable for the life of the project,
  * while nothing in this document ever names a registry key. Conditions and
  * actions name `id`. That is what keeps renaming free.
+ *
+ * **A variable holds a number or a piece of text, and its kind is the *type of
+ * its value* rather than a field beside it.** One field, for the reason a sprite
+ * has no width of its own and a tilemap no tile size: two fields answering one
+ * question is how they come to disagree, and a `kind: 'text'` over a `value: 0`
+ * is a variable the panel and the emit would describe differently. `atlasOf`'s
+ * tie-break needed a rule because an image can be cut two ways at once; a value
+ * cannot be two types at once, so there is nothing here to break a tie between.
+ *
+ * Text arrives with `setText` rather than before it, which is the sequencing
+ * CLAUDE.md already argued: the only thing anybody wants a text variable for is
+ * a name to *show*, and a variable nothing can display is a variable with no use.
  */
 export interface ProjectVariable {
   id: string;
   /** Free user text. `variableKeyOf` derives the registry key from it. */
   name: string;
   /** The value the game starts with, set once rather than once per scene. */
-  value: number;
+  value: VariableValue;
+}
+
+/** What a variable, a condition's comparand and a `setVar`'s target all hold. */
+export type VariableValue = number | string;
+
+/** Which of the two a variable holds, derived from the value and never stored. */
+export type VariableKind = 'number' | 'text';
+
+/** Both kinds, for the panel's picker. */
+export const VARIABLE_KINDS: readonly VariableKind[] = ['number', 'text'];
+
+/**
+ * Which kind a variable holds.
+ *
+ * The only reader of a value's *type*, so the panel, the condition's field, the
+ * reader's refusals and the emit cannot disagree about what a variable is — the
+ * `guidesOf` / `frameGridOf` / `tweenOf` family's argument for a one-line
+ * function. It answers `'number'` for anything that is not a string, which is
+ * also what a hand-edited file holding `null` should read as: `parseVariables`
+ * has already repaired that to `0` on the way in.
+ */
+export function variableKindOf(variable: ProjectVariable): VariableKind {
+  return typeof variable.value === 'string' ? 'text' : 'number';
+}
+
+/**
+ * One value, read as the other kind.
+ *
+ * The one converter, read by the variables row, a condition's variable picker
+ * and a `setVar`'s — so switching a kind means one thing everywhere. A number
+ * that a piece of text does not describe lands on `0` rather than on `NaN`,
+ * which is `parseVariables`' own repair and for its reason: `NaN` is a value
+ * every comparison answers false to, with nothing saying why.
+ */
+export function coerceVariableValue(value: VariableValue, kind: VariableKind): VariableValue {
+  if (kind === 'text') return typeof value === 'string' ? value : String(value);
+  if (typeof value === 'number') return value;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export interface Project {

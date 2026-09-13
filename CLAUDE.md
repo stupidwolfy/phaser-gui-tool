@@ -71,7 +71,11 @@ invariant, because it is also the first that can be stopped without the document
 moved. Iteration 28 (shipped) crossed the line iteration 20 drew and let the document
 say what *happens*: a rule table on the scene, numbers the game keeps on the project, and an
 export that emits real listeners — on a canvas that runs none of it, because a rule does not
-merely animate the document, it destroys objects and starts other scenes.
+merely animate the document, it destroys objects and starts other scenes. Iteration 29
+(shipped) let the game say what it counts: a variable may now hold text as well as a number,
+and a rule may set an object's text — with a variable's value on the end, which is how a
+score gets on screen. The first iteration whose whole subject is a hole the previous one
+left, and the third to leave `EditorScene.ts` untouched.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -2239,9 +2243,10 @@ reason: not per-type, so not in `props`.
 
 Three things the document may now say that it could not before: **when** something
 happens, **whether** it happens, and **what** happens. `SceneDoc.rules: SceneRule[]` holds
-them and `project.variables: ProjectVariable[]` holds the numbers they test. It is the
-first iteration to cross a line this file has been drawing since iteration 20, which is
-why most of what follows is about where the new line falls rather than about the code.
+them and `project.variables: ProjectVariable[]` holds the numbers — and, since iteration 29,
+the text — they test. It is the first iteration to cross a line this file has been drawing
+since iteration 20, which is why most of what follows is about where the new line falls
+rather than about the code.
 
 - **The line moved, and this is the sentence that replaces iteration 20's.** That one said
   the document may state standing facts about the world but not a sequence of events. This
@@ -2444,6 +2449,121 @@ why most of what follows is about where the new line falls rather than about the
   showing a suffixed key. A *rename* is deliberately not de-duplicated, for `renamePrefab`'s
   reason: forcing uniqueness on every keystroke fights the user halfway through a word, and
   `collectVariables`' own set is the backstop that keeps the export correct regardless.
+
+### Showing one: text variables and `setText`
+
+Iteration 29 closes the hole iteration 28 left open. A rule could count a score, test it and
+carry it across a `scene.start`, and **nothing in a project could show it to a player** — a
+text node's string is a document field, so the number the game kept was one nobody playing
+could ever see. Two additions, which arrive together because neither is worth anything alone:
+a variable may hold **text**, and a rule may **set an object's text**.
+
+- **The line iteration 28 drew does not move, and that is the first thing to check.** Every
+  trigger is still a moment Phaser already delivers; `setText` is one more verb in a list run
+  at one of them, so `update()` still gains nothing. And the canvas still runs no rule:
+  **`EditorScene.ts` is untouched by this whole feature**, for the third time after Audio and
+  Rules, and this is the sharpest version of it — a caption is the first action whose result
+  *would be visible on the canvas* if anything ran it. What the canvas draws is `props.text`,
+  so the document stays the only thing that can change what is on screen, and `hasMotionIn`
+  records the refusal in as many words, because a caption is the one result of a rule that
+  *would* be visible here.
+- **A variable's kind is the type of its value, never a field beside it.** One field, for the
+  reason a sprite has no width of its own and a tilemap no tile size: two fields answering one
+  question is how they come to disagree, and a `kind: 'text'` over a `value: 0` is a variable
+  the panel and the emit would describe differently. `variableKindOf` is the only reader of
+  that type and `coerceVariableValue` the only converter, so the row, a condition's field, a
+  `setVar`'s field and the reader's refusals cannot disagree about what switching a kind does.
+  `atlasOf` needed a tie-break because an image can be cut two ways at once; a value cannot be
+  two types at once, so there is nothing here to break a tie between.
+- **Text arrives with `setText` rather than before it**, which is the sequencing this file
+  already argued and the reason iteration 28 refused it: the only thing anybody wants a text
+  variable for is a name to show, and a variable nothing can display is a variable with no use.
+- **The reader's new refusals are all the same sentence twice over.** *A repair may narrow what
+  the document says; it may never widen it*, and *a variable is the one thing a rule names that
+  another rule reads*. So: a condition comparing text with `>`, a condition whose comparand is
+  not the kind the variable holds, a `setVar` writing a number into text, an `addVar` on text —
+  every one costs the **whole rule**. None is repairable, and the two halves of why are worth
+  keeping apart: coercing `"3"` to `3` *invents* a comparison, where dropping a `setVar` leaves
+  every condition in the project testing a value nothing writes. A `setText` is the other side
+  of it: its node costs only the **action**, because a node reaches nothing outside the rule
+  that names it, while its variable costs the rule.
+- **`TEXT_OPERATORS` is a set rather than a spelling, and it exists for `TWEEN_EASES`' reason.**
+  `'won' > 'lost'` is a comparison JavaScript performs happily, on code points, and nobody asks
+  for — so the panel offers two operators for text and the reader refuses the other four, from
+  one list. It is also why the operator picker narrows rather than the value field coercing.
+- **`setText`'s variable is optional, and absent and empty are one state.** The commonest shape
+  is a fixed caption, and an optional field is the only way to say that without a sentinel. It
+  put the one real trap in this iteration: `ruleActionsOf` reads a missing `variableId` as
+  `''`, and `findVariable(project, '')` answers `undefined` — which in `setVar`'s branch means
+  *drop the whole rule*. A `setText` reusing that local would have taken every plain caption in
+  the project with it, invisibly, because the panel writes `undefined` and only a reader test
+  could see it.
+- **The caption is free user text, and that is narrower than it sounds.** It is printed through
+  `str()` into a string literal exactly as an object's name and a text node's own content
+  already are. What it is *not* is a template: there is no syntax inside it, so nothing parses
+  it and nothing can hide in it. One variable goes on the end, named in a field of its own,
+  which is why the document holds a `variableId` beside the text rather than a `{score}` a
+  parser would have to find. Two variables in one caption is an expression, and that is the
+  line this vocabulary does not cross.
+- **`setVariableKind` is a store action of its own, and that is the other half of the reader.**
+  Switching a kind reaches every rule in the project that reads or writes the variable, so it
+  converts each condition's comparand, pulls an ordering operator back to `eq`, converts each
+  `setVar` and drops each `addVar` — one undo step, `removeAsset`'s rule one table over: **the
+  document may never hold a mismatch by any action in the editor**, so `rulesOf`'s refusals
+  only ever fire on a file the editor did not write. Strip on read, repair on write, for the
+  fourth time. Without it the refusals above are a trap rather than a guard: flipping a score
+  to text would make every rule that sets it vanish from the panel with nothing having said so.
+  It is the one place a repair *narrows* a condition deliberately, and that is allowed here
+  precisely because the user is in the act of changing the kind — a consequence they asked for
+  rather than one the reader invented behind them.
+- **`variableLiteral` is the one printer for a variable-shaped value**, read by the table, by
+  `setVar` and by a condition's comparand — `frameArg`'s argument one type over, and for its
+  reason: `registry.set("score", "7")` compiles, runs, and puts a string where every comparison
+  below it expects a number.
+- **The emit is a literal and one read, joined with `+`.** Never a template the exporter
+  assembles, and never `setText(registry.get(key))` — which would hand `Text` whatever was last
+  written to the registry rather than a string. `registry.get` answers `any`, so the
+  concatenation needs no annotation in a body that cannot carry one, which is the convenience
+  the conditions already rest on. `constructorFor`'s `'text'` case needed **no edit at all**,
+  unlike `playAnimation`'s (which widens an `Image` to a `Sprite`) and `startTween`'s (which
+  binds a handle): a `Text` is already a `Text`, so there is no `EmitContext` field and no
+  pre-pass — which on that checklist reads exactly like a missed step.
+- **`buildVariableHelper`'s signature widens only when something in the table is text.** A
+  project written before a variable could hold text emits the line it always emitted, which is
+  the byte-for-byte rule the asset table, the tilemap helper and the prefab factories follow.
+  Not a question of what compiles — the wider type accepts both — but of a diff nobody asked
+  for.
+- **`SCHEMA_VERSION` bumped to 14, on the silent-data-loss half and only that half — the v13
+  case one turn of the screw further.** No new `NodeType`, so a v13 `createDisplayObject` has a
+  case for everything in the file. `setText` would not have bumped anything: it rides in on
+  `scenes`, verbatim, so an old build drops it from the emit and carries it back out on a
+  re-save. What bumps this is `parseVariables`, which rebuilds the project table field by field
+  and coerced every value with `Number(...)` — so a v13 build reads `value: 'ready'` as `NaN`,
+  repairs that to `0`, and writes back a variable that keeps its name and its id and holds the
+  wrong kind. Then `rulesOf` drops every rule whose condition or `setVar` named it. v13 lost
+  the declarations and the rules went with them, which at least left the panel empty; this one
+  leaves the declarations on screen *looking right* while the rules that were the point of the
+  file quietly go.
+- **The panel's value field is one label for both kinds**, because it is one question — a
+  `TextField` or a `NumberField` under `Variable N starts at`, with `Variable N holds` beside
+  the name as the only new label. Three rows per variable rather than three controls in one:
+  at 390px a third control is ~85px. And `addVar`'s picker offers only number variables while
+  `setVar`'s field follows the variable it names, so the panel cannot build what the reader
+  refuses — `CollidersSection`' rule, and the reason every empty state here is a sentence.
+- **The suite's instrument is an extent, and the positive claim can only live in
+  `export.spec.ts`.** Text is the same colour however much of it there is, so the only thing a
+  screenshot can say about a string is how wide it is drawn — `fonts.spec.ts`' reading,
+  measuring the string rather than the face. A label that reads `.` until the game starts and
+  `Score: 3` afterwards is the whole claim, and it also proves the actions are a list *in
+  order*: the value is set and then read inside one callback. `rules.spec.ts` carries the
+  negative half — the canvas keeps the text the document states — because the editor runs none
+  of it.
+- **The hostile project gained a variable whose *value* is hostile**, which is a different set
+  of `str()` call sites from its hostile *name*: an object-literal value, a `registry.set`
+  argument, a condition's right-hand side and a `setText` argument. Its `setText` on a
+  *rectangle* is the sharpest negative in the file — without the reader's `type !== 'text'`
+  refusal that is not a wrong picture but a **compile error** in the emitted `.ts`, which only
+  `export-toolchain.spec.ts` could find.
 
 ## Touch controls
 
@@ -3344,6 +3464,8 @@ tests/
                             controls that survive the engine change
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
+  rules.spec.ts             a variable declared, a rule built and refused, a caption
+                            written — and a canvas that runs none of it
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
   camera.spec.ts            a camera drawn, clamped, followed, saved and exported
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
@@ -3620,6 +3742,29 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
+Text variables and `setText` shipped in iteration 29, which closed the first hole iteration
+28 left — and it is worth reading the prediction beside the work, because the prediction was
+right about the sequencing and wrong about the cost. It said a string variable was "a
+loosening in shape", and the *shape* was indeed one field's type. What it did not name is
+the half that carried all the risk: a kind is a thing every rule naming the variable has to
+agree with, so the work was four new refusals in `rulesOf` and a store action that migrates
+the document when a kind is switched — **strip on read, repair on write** — without which the
+refusals are a trap rather than a guard. The emit was mechanical, as predicted. Five holes
+left. **No template in a caption** — `Score: {score}` would be a syntax inside a field, so
+nothing parses the text and one variable goes on the end instead; two in one caption is an
+expression, which is the line this vocabulary does not cross, and the shape a loosening would
+take is a *list* of parts rather than a parser. **No number formatting** — no zero padding, no
+decimal places, no thousands separator: each is a field on the action and a pure loosening,
+and `"Score: " + 3` is what a hand-written line would have said anyway. **No label that
+follows a variable on its own** — a caption that updates whenever the score does is
+`registry.on('changedata-score')`, which *is* a moment Phaser delivers, so it is a genuine
+loosening rather than a refusal; what it needs is a field on the node rather than an action,
+and that is a different question from this one ("what does this label show" rather than "what
+happens at this moment"). **No text on a type that has no `setText`** — a `BitmapText` is the
+obvious second one and it does not exist yet; everything else in the union has no text at all,
+which is Phaser's limit and is said in the panel. And **no concatenating two variables**,
+which is the expression tree again and is refused rather than deferred.
+
 Rules shipped in iteration 28, and what they refuse divides cleanly into things that are a
 pure loosening later and things the feature exists to say no to.
 
@@ -3629,10 +3774,9 @@ What would *not* be a loosening is a condition **tree**, which is a second docum
 inside a field. **No arithmetic beyond set and add** — `addVar{by: -1}` is subtraction, and
 multiply, min and clamp are one `op` field; it is refused because the request after multiply
 is `score = score + lives`, which is a second operand *naming a variable*, which is an
-expression tree and therefore code in the document. **No string variables**, which is a
-loosening in shape and is refused for a reason of sequencing: the only thing anyone wants one
-for is a name to *show*, which is `setText` — the first action that would write free text into
-a running game — and it should arrive with that action rather than before it. **No collision
+expression tree and therefore code in the document. **String variables** were the third, and
+they are the one entry on this list that has shipped — in iteration 29, with the `setText`
+they were being sequenced behind; see above for what that cost and what it left. **No collision
 callback parameters** (which object hit which), and this one is mechanical as well as
 principled: the emitted callback takes zero parameters, which is assignable to
 `ArcadePhysicsCallback` with nothing to annotate, and the moment it wants two it needs two

@@ -22,13 +22,23 @@ import type { EditorPage } from './helpers/editor';
  * What is left here is the document, the panels, and the one thing only the near
  * side can see: that pressing ▶ over a rule that would delete everything changes
  * nothing whatsoever.
+ *
+ * Iteration 29 added text variables and `setText` and did not change that shape
+ * by a line. The caption claims here are the document's, the panel's and the
+ * emitted text's, plus one negative the far side cannot make: a canvas that goes
+ * on drawing `props.text` while a rule says it should read something else. The
+ * positive half — a label that reads what the game counted — is in
+ * `export.spec.ts`, where anything that has to actually run belongs.
  */
 
 /** The default rectangle fill, which a plain new rectangle draws in. */
 const FILL = '#4f8cff';
 
-/** The version a saved file must carry now that `project.variables` exists. */
-const SCHEMA = 13;
+/**
+ * The version a saved file must carry now that `project.variables` exists and a
+ * variable may hold text — v13 for the table, v14 for the kind.
+ */
+const SCHEMA = 14;
 
 /** One rectangle, alone, so a colour reading has exactly one source. */
 async function oneBox(editor: EditorPage): Promise<void> {
@@ -109,6 +119,63 @@ test.describe('variables', () => {
     // per-row derivation the way an audio row is.
     expect(await editor.variableKey(1)).toBe('lives');
     expect(await editor.variableKey(2)).toBe('lives2');
+  });
+
+  test('a variable holds text, and the kind is the type of its value', async ({
+    editor,
+  }, testInfo) => {
+    await oneBox(editor);
+
+    await editor.addVariable();
+    await editor.setVariableKind(1, 'Text');
+    await editor.setVariable(1, 'Status', 'ready');
+
+    // The key is derived from the *name*, so it is the same question it was for
+    // a number — nothing about text reaches `variableKeyOf`.
+    expect(await editor.variableKey(1)).toBe('status');
+
+    const document = await saved(editor);
+    // v14, and the whole reason for it: a v13 `parseVariables` coerces this
+    // value with `Number(...)`, so it would open as 0 and carry the rules that
+    // name it away with it.
+    expect(document.schemaVersion).toBe(SCHEMA);
+    expect(document.variables).toEqual([
+      { id: expect.any(String), name: 'Status', value: 'ready' },
+    ]);
+
+    const path = testInfo.outputPath('texted.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+
+    // The open is the half only a round trip can see: `parseVariables` rebuilds
+    // this table field by field, so a string surviving it is a claim about that
+    // function rather than about the store.
+    await editor.deselect();
+    await editor.openPanel('inspect');
+    expect(await editor.fieldValue('Variable 1 starts at')).toBe('ready');
+    expect(await editor.selectValue('Variable 1 holds')).toBe('text');
+  });
+
+  test('switching a kind converts the value rather than losing it', async ({ editor }) => {
+    await oneBox(editor);
+
+    await editor.addVariable();
+    await editor.setVariable(1, 'Score', 7);
+    await editor.setVariableKind(1, 'Text');
+
+    // A conversion rather than a reset, because the value on screen is what the
+    // user typed — and `0` for text that is not a number is `parseVariables`'
+    // own repair, so the panel and the opener agree.
+    expect((await saved(editor)).variables).toEqual([
+      { id: expect.any(String), name: 'Score', value: '7' },
+    ]);
+
+    await editor.setVariable(1, 'Score', 'abc');
+    await editor.setVariableKind(1, 'Number');
+    expect((await saved(editor)).variables).toEqual([
+      { id: expect.any(String), name: 'Score', value: 0 },
+    ]);
   });
 
   test('a variable can be deleted', async ({ editor }) => {
@@ -359,6 +426,141 @@ test.describe('rules', () => {
   });
 });
 
+test.describe('text on an object', () => {
+  /** One text object, alone, and one variable for a rule to show. */
+  async function oneLabel(editor: EditorPage): Promise<void> {
+    await editor.clearScene();
+    await editor.addObject('Text');
+    await editor.setField('Name', 'Label');
+    await editor.deselect();
+    await editor.addVariable();
+    await editor.setVariable(1, 'Score', 0);
+  }
+
+  test('a setText rule round-trips, and the editor writes none of it', async ({
+    editor,
+  }, testInfo) => {
+    await oneLabel(editor);
+
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', "Set an object's text");
+    await editor.setField('Rule 1 do 1 text', 'Score: ');
+    await editor.setChoice('Rule 1 do 1 then shows', 'Score');
+
+    const document = await saved(editor);
+    expect(document.schemaVersion).toBe(SCHEMA);
+    const scene = (document.scenes as { rules?: { do: unknown[] }[] }[])[0];
+    expect(scene.rules?.[0].do).toEqual([
+      {
+        kind: 'setText',
+        nodeId: expect.any(String),
+        text: 'Score: ',
+        variableId: expect.any(String),
+      },
+    ]);
+
+    const path = testInfo.outputPath('captioned.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.fieldValue('Rule 1 do 1 text')).toBe('Score: ');
+  });
+
+  test('the canvas keeps the text the document states, preview or not', async ({
+    editor,
+  }) => {
+    await oneLabel(editor);
+    await editor.selectInTree('Label');
+    await editor.setField('Content', 'unchanged');
+    await editor.deselect();
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', "Set an object's text");
+    await editor.setField('Rule 1 do 1 text', 'rewritten');
+    await editor.closePanels();
+
+    // `EditorScene.ts` is untouched by this whole feature, which is Audio's
+    // claim and Rules' — and sharpest here, because this is the first action
+    // whose result would be *visible* on the canvas if anything ran it. The
+    // canvas draws `props.text`, so the document is the only thing that can
+    // change what is on screen.
+    await editor.selectInTree('Label');
+    expect(await editor.fieldValue('Content')).toBe('unchanged');
+  });
+
+  test('a text check offers only equality, and keeps its rule when the kind switches', async ({
+    editor,
+  }) => {
+    await oneLabel(editor);
+
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.panel('inspect').getByTitle('Add a check to rule 1').click();
+    await editor.settle();
+    await editor.setChoice('Rule 1 check 1 is', 'is at least');
+    await editor.setField('Rule 1 check 1 value', 3);
+
+    // Switching the variable the check reads is the one edit that can leave a
+    // condition of the wrong kind behind — and a condition the reader refuses
+    // costs the *whole rule*, so the rule would vanish from the panel rather
+    // than merely losing its gate. The store moves the op and the value with
+    // the kind, in one step.
+    await editor.setVariableKind(1, 'Text');
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+
+    await editor.openRule(name);
+    // Only `is` and `is not` mean anything about text: `'won' > 'lost'` is legal
+    // JavaScript on code points and nobody asks for it.
+    await expect(editor.choice('Rule 1 check 1 is').locator('option')).toHaveCount(2);
+    expect(await editor.selectValue('Rule 1 check 1 is')).toBe('eq');
+    expect(await editor.fieldValue('Rule 1 check 1 value')).toBe('3');
+
+    await editor.setField('Rule 1 check 1 value', 'won');
+    const exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('if (this.registry.get("score") === "won") {');
+  });
+
+  test('an ordering check on a text variable costs the whole rule', async ({
+    editor,
+  }, testInfo) => {
+    await oneLabel(editor);
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.panel('inspect').getByTitle('Add a check to rule 1').click();
+    await editor.settle();
+    await editor.setChoice('Rule 1 check 1 is', 'is over');
+
+    // Only a hand-edited file can hold this, because the panel converts both
+    // halves when a kind is switched — so the document is edited on disk, with
+    // the variable made text under a gate the editor would never have written.
+    const document = await saved(editor);
+    const variables = document.variables as { value: unknown }[];
+    variables[0].value = 'a';
+    const path = testInfo.outputPath('ordered-text.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+
+    // Dropping the *condition* would widen the rule into one that fires always,
+    // and repairing `is over` to `is` would state a test nobody wrote — so the
+    // rule goes whole, and the file keeps it, exactly as a rule naming a deleted
+    // node is treated.
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(0);
+    const scene = (await saved(editor)).scenes as { rules?: unknown[] }[];
+    expect(scene[0].rules).toHaveLength(1);
+    expect(name).toBeTruthy();
+  });
+});
+
 test.describe('the emit', () => {
   test('a tap rule emits a hit area, a listener and the action', async ({ editor }) => {
     await oneBox(editor);
@@ -434,6 +636,52 @@ test.describe('the emit', () => {
     // it. `registry.get` answers `any`, so the comparison needs no annotation
     // in a body that cannot carry one.
     expect(exported).toContain('if (this.registry.get("score") >= 1) {');
+  });
+
+  test('a setText action emits a caption, and a variable after it', async ({ editor }) => {
+    await editor.clearScene();
+    await editor.addObject('Text');
+    await editor.setField('Name', 'Label');
+    await editor.deselect();
+    await editor.addVariable();
+    await editor.setVariable(1, 'Score', 0);
+
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', "Set an object's text");
+    await editor.setField('Rule 1 do 1 text', 'Score: ');
+
+    // With no variable it is the caption alone, which is the commonest shape —
+    // and the one an empty `variableId` would have cost the whole rule.
+    let exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('label.setText("Score: ");');
+
+    await editor.setChoice('Rule 1 do 1 then shows', 'Score');
+    exported = (await editor.exportCode('ts')).contents;
+    // A literal and one read, joined — never a template the emit assembles, and
+    // never `setText(registry.get(k))`, which would hand `Text` a number.
+    expect(exported).toContain('label.setText("Score: " + this.registry.get("score"));');
+  });
+
+  test('a text variable is emitted quoted, and widens the helper it is read by', async ({
+    editor,
+  }) => {
+    await oneBox(editor);
+    await editor.addVariable();
+    await editor.setVariable(1, 'Score', 7);
+
+    // A number-only project emits the signature it always emitted: the
+    // byte-for-byte rule the asset table, the tilemap helper and the prefab
+    // factories all follow.
+    let exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('values: Record<string, number>');
+    expect(exported).toContain('"score": 7,');
+
+    await editor.setVariableKind(1, 'Text');
+    await editor.setVariable(1, 'Score', 'ready');
+    exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('values: Record<string, number | string>');
+    expect(exported).toContain('"score": "ready",');
   });
 
   test('a variable action emits set and inc, not a read-modify-write', async ({

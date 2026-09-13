@@ -382,6 +382,14 @@ function parseAudio(raw: unknown): AudioAsset[] {
  * `variableKeyOf` turns whatever survives into an identifier anyway. A
  * non-finite `value` becomes 0 rather than costing the row: it is the number
  * the game starts on, and every condition still works against zero.
+ *
+ * **A string `value` is kept as a string, and that is the whole of v14 on this
+ * side.** A variable's kind is the type of its value, so coercing here is not a
+ * repair but a change of kind — and a change of kind the rules naming it cannot
+ * survive, since `rulesOf` refuses a condition comparing a number with text. It
+ * is also what a v13 build does to a v14 file, which is what `SCHEMA_VERSION`'s
+ * comment is about. Anything that is neither a string nor a finite number is
+ * still the existing `0`.
  */
 function parseVariables(raw: unknown): ProjectVariable[] {
   if (!Array.isArray(raw)) return [];
@@ -398,11 +406,16 @@ function parseVariables(raw: unknown): ProjectVariable[] {
     if (seen.has(variable.id)) continue;
     seen.add(variable.id);
 
-    const value = Number(variable.value);
+    const number = Number(variable.value);
     table.push({
       id: variable.id,
       name: typeof variable.name === 'string' ? variable.name : 'variable',
-      value: Number.isFinite(value) ? value : 0,
+      value:
+        typeof variable.value === 'string'
+          ? variable.value
+          : Number.isFinite(number)
+            ? number
+            : 0,
     });
   }
   return table;

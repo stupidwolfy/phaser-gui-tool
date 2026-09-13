@@ -226,7 +226,7 @@ test('a body and the scene gravity survive a save and an open, at schema 12', as
   // predates it opens this file and draws it identically. It reads 10 because
   // audio, then the two stretchable types, then fonts bumped it; physics still
   // did not.
-  expect(project.schemaVersion).toBe(13);
+  expect(project.schemaVersion).toBe(14);
   // The engine rides here beside the gravity, and an Arcade scene says so
   // explicitly once anything has written the field — which is what makes
   // "absent means Arcade" a rule about *older files* rather than about this one.

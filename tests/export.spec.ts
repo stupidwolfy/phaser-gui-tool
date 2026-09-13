@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserContext, Page } from '@playwright/test';
 import { expect, test } from './helpers/fixtures';
-import { findColor } from './helpers/pixels';
+import { findColor, findColorBox } from './helpers/pixels';
 import { serveDirectory } from './helpers/server';
 import { hostileProject } from './helpers/hostile';
 
@@ -15,6 +15,13 @@ import { hostileProject } from './helpers/hostile';
 const PHASER_DIST = 'node_modules/phaser/dist/phaser.min.js';
 const RECT_FILL = '#4f8cff';
 const ELLIPSE_FILL = '#ffb84f';
+/**
+ * The colour of the label the caption test reads, picked to clear every other
+ * fixture colour and the scene background by far more than `findColor`'s
+ * tolerance on at least one channel — the azure trap, which is how a colour that
+ * looks obviously different comes to count somebody else's rectangle.
+ */
+const LABEL_FILL = '#ff2ec4';
 /** The fill of the rectangle nested in the hostile project's group. */
 const NESTED_FILL = '#22d3ee';
 /** The fill of the rectangle inside the hostile project's prefab. */
@@ -1135,6 +1142,65 @@ test('the exported page keeps a variable across a change of scene', async ({
   await run.close();
 });
 
+test('the exported page shows a number it was told to count', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The positive claim for `setText`, and the only place it can be made.** The
+  // editor runs no rule, so nothing on the near side of the export can see a
+  // caption change — `rules.spec.ts` asserts the opposite, that the canvas keeps
+  // the text the document states. This is the other half: a label that reads one
+  // character until the game starts and then reads what the game counted.
+  await editor.clearScene();
+  await editor.addObject('Text');
+  await editor.setField('Name', 'Label');
+  // One full stop, in a colour nothing else in the fixture draws and a size big
+  // enough for a pixel reader to measure. The instrument is the **extent** of
+  // that colour: text is the same colour however much of it there is, so the
+  // only thing a screenshot can say about a string is how wide it is drawn —
+  // `fonts.spec.ts`' reading, here measuring the string rather than the face.
+  await editor.setField('Content', '.');
+  await editor.setField('Font size', 64);
+  await editor.setField('Text colour', LABEL_FILL);
+  await editor.setField('X', 480);
+  await editor.setField('Y', 270);
+  await editor.deselect();
+
+  await editor.addVariable();
+  await editor.setVariable(1, 'Score', 0);
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'the scene starts');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Set a variable');
+  await editor.setField('Rule 1 do 1 to', 3);
+  await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+  await editor.setChoice('Rule 1 do 2', "Set an object's text");
+  await editor.setField('Rule 1 do 2 text', 'Score: ');
+  await editor.setChoice('Rule 1 do 2 then shows', 'Score');
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('caption'),
+    exported.contents,
+  );
+
+  // The actions are a *list, in order*: the value is set and then read, inside
+  // one callback, so the caption can only read 3 if both lines ran and ran that
+  // way round. A full stop at 64px inks some 20 pixels across; "Score: 3" inks
+  // well over a hundred.
+  const box = await reaches(
+    async () =>
+      findColorBox(run.page, await run.page.locator('canvas').screenshot(), LABEL_FILL),
+    (reading) => reading.width > 100,
+  );
+  expect(box.width).toBeGreaterThan(100);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
 test('the exported page plays the object it was given controls', async ({
   editor,
   page,
@@ -1308,6 +1374,23 @@ test('a hostile project emits its solid tiles and only the collisions it can', a
   // One `update()` per scene that drives something, and the third scene has
   // nothing driven and so no method at all.
   expect(exported.contents.match(/update\(\): void \{/g) ?? []).toHaveLength(2);
+
+  // **Two captions and no more.** The fixture holds four `setText` actions: two
+  // on its text node, one on a *rectangle* — which has no such method, so the
+  // action goes and the rule keeps its other one — and one more that would have
+  // ridden on a rule `rulesOf` drops whole for comparing text with `>`. Without
+  // the reader's `type !== 'text'` refusal the third is not a wrong picture but a
+  // **compile error** in the emitted `.ts`, which is why it is asserted by count
+  // here as well as by `export-toolchain.spec.ts` passing at all.
+  expect(exported.contents.match(/\.setText\(/g) ?? []).toHaveLength(2);
+  // A text variable is a quoted value in the table and a quoted comparand in the
+  // gate, which are two `str()` call sites a number never reaches.
+  expect(exported.contents).toContain('"message": "hi ');
+  expect(exported.contents).toContain('this.registry.get("message") === "hi ');
+  // And arithmetic on text is refused whole, as is writing a number into it:
+  // the fixture holds a rule for each and neither may leave a line behind.
+  expect(exported.contents).not.toContain('this.registry.inc("message"');
+  expect(exported.contents).not.toContain('this.registry.set("message", 3)');
 });
 
 test('sounds are tabled once, loaded per scene, and named without collision', async ({
