@@ -197,7 +197,7 @@ test('the map survives a save and an open, at schema 12', async ({ editor, page 
   // where audio took it to 8 and fonts to 10 over a table an older build
   // silently drops. Layers took it to 12 on that second half, and worse: an old
   // build finds no `data`, draws an empty map and re-saves it that way.
-  expect(parsed.schemaVersion).toBe(13);
+  expect(parsed.schemaVersion).toBe(14);
 
   const map = parsed.scenes[0].children.find(
     (node: { name: string }) => node.name === 'Ground',

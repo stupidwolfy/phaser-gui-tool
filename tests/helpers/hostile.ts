@@ -280,10 +280,18 @@ export function hostileProject(): Project {
     // de-duplication in `collectVariables` actually runs. Two variables sharing
     // one registry key is a *silently shared value at runtime*, which is worse
     // than two sounds sharing a key, so the suffix is the thing being asserted.
+    //
+    // The fourth holds hostile text in its **value**, which is a different set
+    // of `str()` call sites from the first's hostile *name*: an object-literal
+    // value in `VARIABLES`, a `registry.set` argument, a condition's right-hand
+    // side and a `setText` argument. It is also the only place the widened
+    // `Record<string, number | string>` signature meets a string under
+    // `tsc --strict`.
     variables: [
       { id: 'var-1', name: `score ${breakout}`, value: 0 },
       { id: 'var-2', name: 'lives', value: 3 },
       { id: 'var-3', name: 'Lives', value: 99 },
+      { id: 'var-4', name: 'message', value: `hi ${breakout}` },
     ],
     activeSceneId: 'scene-1',
     scenes: [
@@ -391,6 +399,10 @@ export function hostileProject(): Project {
             conditions: [
               { variableId: 'var-1', op: 'gte' as const, value: 3 },
               { variableId: 'var-2', op: 'ne' as const, value: 0 },
+              // A text comparison, which is the only place a quoted right-hand
+              // side reaches the emitted `if` — and the only place a hostile
+              // string does.
+              { variableId: 'var-4', op: 'eq' as const, value: `hi ${breakout}` },
             ],
             do: [
               { kind: 'destroy' as const, nodeId: 'b' },
@@ -406,6 +418,21 @@ export function hostileProject(): Project {
               { kind: 'startTween' as const, nodeId: 'a' },
               { kind: 'setVar' as const, variableId: 'var-1', value: 7 },
               { kind: 'addVar' as const, variableId: 'var-2', by: -1 },
+              // Text into a text variable, and a caption onto the one text node
+              // in the scene. `d` is the only `setText` target here, and the
+              // only thing anywhere that puts `Text.setText` in front of
+              // `tsc --strict` — an `Image` has not got one, which is what the
+              // reader's `type !== 'text'` refusal is protecting.
+              { kind: 'setVar' as const, variableId: 'var-4', value: `done ${breakout}` },
+              {
+                kind: 'setText' as const,
+                nodeId: 'd',
+                text: `Score ${breakout}`,
+                variableId: 'var-1',
+              },
+              // The same action with no variable, which is the commonest shape
+              // and the one that must not take the whole rule with it.
+              { kind: 'setText' as const, nodeId: 'd', text: `over ${breakout}` },
               { kind: 'startScene' as const, sceneId: 'scene-2' },
               { kind: 'restartScene' as const },
             ],
@@ -518,6 +545,49 @@ export function hostileProject(): Project {
             when: { kind: 'keyDown' as const, key: 'ENTER' },
             conditions: [],
             do: [{ kind: 'destroy' as const, nodeId: 'gone' }],
+          },
+          // A caption on a rectangle. Only a `Text` has `setText`, so this is a
+          // dropped *action* rather than a dropped rule — and it is the one
+          // negative here whose absence would be a **compile error** in the
+          // exported `.ts` rather than a wrong picture, since `Rectangle` has no
+          // such method. `rule-x6`'s shape, one method over.
+          {
+            id: 'rule-x8',
+            name: 'Write on a box',
+            when: { kind: 'keyDown' as const, key: 'TAB' },
+            conditions: [],
+            do: [
+              { kind: 'setText' as const, nodeId: 'a', text: `nope ${breakout}` },
+              { kind: 'addVar' as const, variableId: 'var-2', by: 5 },
+            ],
+          },
+          // Arithmetic on text, and a number written into it: both cost the
+          // whole rule, because a write dropped on its own leaves every
+          // condition in the project testing a value nothing moves. Only a
+          // hand-edited file can hold either — the panel offers neither.
+          {
+            id: 'rule-x9',
+            name: 'Count a message',
+            when: { kind: 'keyDown' as const, key: 'SHIFT' },
+            conditions: [],
+            do: [{ kind: 'addVar' as const, variableId: 'var-4', by: 1 }],
+          },
+          {
+            id: 'rule-x10',
+            name: 'Number into text',
+            when: { kind: 'keyDown' as const, key: 'ALT' },
+            conditions: [],
+            do: [{ kind: 'setVar' as const, variableId: 'var-4', value: 3 }],
+          },
+          // An ordering test on text, which `'won' > 'lost'` makes legal
+          // JavaScript and nonsense — refused rather than repaired to `eq`,
+          // because a repaired gate is a gate nobody wrote.
+          {
+            id: 'rule-x11',
+            name: 'Text in order',
+            when: { kind: 'sceneStart' as const },
+            conditions: [{ variableId: 'var-4', op: 'gt' as const, value: 'a' }],
+            do: [{ kind: 'restartScene' as const }],
           },
         ],
         children: [

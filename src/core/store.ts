@@ -25,6 +25,7 @@ import {
   canHavePhysics,
   atlasOf,
   type AtlasFrame,
+  coerceVariableValue,
   collidersOf,
   composeTransform,
   containsInstance,
@@ -36,6 +37,7 @@ import {
   findNode,
   findParent,
   findPrefab,
+  findVariable,
   frameCountOf,
   frameGridOf,
   frameNamesOf,
@@ -51,6 +53,7 @@ import {
   rulesOf,
   scenePhysicsOf,
   tweenOf,
+  variableKindOf,
   worldTransformOf,
   type AnimationClip,
   type AudioAsset,
@@ -85,6 +88,7 @@ import {
   type TileMap,
   type TilemapProps,
   type Transform,
+  type VariableKind,
 } from './schema';
 
 const HISTORY_LIMIT = 100;
@@ -445,6 +449,13 @@ export interface EditorState {
    */
   addVariable: () => void;
   updateVariable: (id: string, patch: Partial<Omit<ProjectVariable, 'id'>>) => void;
+  /**
+   * Switches what kind of value a variable holds, converting the value and
+   * every rule in the project that reads or writes it in the same step. Not an
+   * `updateVariable` patch, because the kind *is* the value's type and changing
+   * it reaches further than the row — see the implementation.
+   */
+  setVariableKind: (id: string, kind: VariableKind) => void;
   /** Removes a variable. */
   removeVariable: (id: string) => void;
 
@@ -1451,6 +1462,50 @@ function unusedVariableName(project: Project): string {
 }
 
 /**
+ * One rule, with everything it says about this variable read in the new kind.
+ *
+ * `setVariableKind`'s half of "the document may never hold a mismatch by any
+ * action in the editor". Three things can say something about a variable:
+ *
+ * - a **condition**, whose comparand is converted and whose operator is pulled
+ *   back to `eq` when it was an ordering one, since only equality means anything
+ *   about text. That is the one place this repairs rather than refuses, and it is
+ *   allowed here for the reason it is refused in `rulesOf`: the user is in the
+ *   act of changing the kind, so a narrowed test is a consequence they asked for
+ *   rather than one the reader invented behind them.
+ * - a **`setVar`**, whose value is converted.
+ * - an **`addVar`**, which is arithmetic and so cannot survive a switch to text:
+ *   the action goes, and a rule left with nothing to do goes with it in the
+ *   caller.
+ *
+ * A `setText` naming the variable needs no migration at all — it shows whatever
+ * the value is, which is the whole point of it.
+ *
+ * Returns the rule *by identity* when nothing about it mentions the variable, so
+ * `editProject`'s "nothing happened, no undo step" contract holds.
+ */
+function migrateRuleToKind(rule: SceneRule, id: string, kind: VariableKind): SceneRule {
+  if (!ruleUsesVariable(rule, id)) return rule;
+
+  const conditions = rule.conditions.map((condition) => {
+    if (condition.variableId !== id) return condition;
+    const ordering = condition.op !== 'eq' && condition.op !== 'ne';
+    const op = kind === 'text' && ordering ? 'eq' : condition.op;
+    return { ...condition, op, value: coerceVariableValue(condition.value, kind) };
+  });
+
+  const actions = rule.do.flatMap((action): RuleAction[] => {
+    if (action.kind === 'setVar' && action.variableId === id) {
+      return [{ ...action, value: coerceVariableValue(action.value, kind) }];
+    }
+    if (action.kind === 'addVar' && action.variableId === id && kind === 'text') return [];
+    return [action];
+  });
+
+  return { ...rule, conditions, do: actions };
+}
+
+/**
  * A rule name nothing in this scene has taken yet.
  *
  * `unusedSceneName`'s and `unusedVariableName`'s sibling. A rule's name is not
@@ -2170,6 +2225,45 @@ export const useEditorStore = create<EditorState>((set, get) => {
         ),
       })),
 
+    // Switching a kind is its own action rather than an `updateVariable` patch,
+    // because the kind is the *type of the value* and changing it reaches every
+    // rule in the project that reads or writes this variable. `removeAsset`'s
+    // rule, one table over: **the document may never hold a mismatch by any
+    // action in the editor**, so `rulesOf`'s refusals only ever fire on a file
+    // the editor did not write. Without this, switching a score to text would
+    // leave every rule that sets it holding a number the reader refuses, and
+    // those rules would vanish from the panel with nothing having said so —
+    // strip on read, repair on write, and one undo step for both halves.
+    setVariableKind: (id, kind) =>
+      editProject((project) => {
+        const variable = findVariable(project, id);
+        if (variable === undefined || variableKindOf(variable) === kind) return project;
+        return {
+          ...project,
+          variables: project.variables.map((entry) =>
+            entry.id === id
+              ? { ...entry, value: coerceVariableValue(entry.value, kind) }
+              : entry,
+          ),
+          scenes: project.scenes.map((scene) => {
+            const rules = scene.rules;
+            if (rules === undefined) return scene;
+            let touched = false;
+            const next: SceneRule[] = [];
+            for (const rule of rules) {
+              const migrated = migrateRuleToKind(rule, id, kind);
+              if (migrated !== rule) touched = true;
+              // A rule whose every action was arithmetic on what is now text is
+              // a rule with nothing left to do, which is one `rulesOf` drops on
+              // the next read anyway. Dropping it here keeps the document and
+              // the reader saying one thing.
+              if (migrated.do.length > 0) next.push(migrated);
+            }
+            return touched ? { ...scene, rules: next } : scene;
+          }),
+        };
+      }),
+
     removeVariable: (id) =>
       editProject((project) => ({
         ...project,
@@ -2871,11 +2965,17 @@ export const useEditorStore = create<EditorState>((set, get) => {
         // variables yet — and a condition naming nothing would cost the whole
         // rule on the next read rather than just itself.
         if (variable === undefined) return scene;
+        // Seeded in the variable's own kind, by the same rule: a check on a text
+        // variable with `is at least 1` is one `rulesOf` drops on the next read,
+        // so the row would vanish the moment it was added.
+        const text = variableKindOf(variable) === 'text';
         return mapRule(scene, ruleId, (rule) => ({
           ...rule,
           conditions: [
             ...rule.conditions,
-            { variableId: variable.id, op: 'gte' as const, value: 1 },
+            text
+              ? { variableId: variable.id, op: 'eq' as const, value: '' }
+              : { variableId: variable.id, op: 'gte' as const, value: 1 },
           ],
         }));
       }),
@@ -3278,6 +3378,13 @@ export function countFontUses(project: Project, family: string): number {
  * simulates a body, and the buttons `touchZonesOf` puts on the canvas are
  * drawn rather than pressed: rings the editor never reads. Neither is a canvas
  * moving by itself, so neither is something a ▶ could stop.
+ *
+ * Blind to rules, which is the refusal a reader will most expect to be wrong
+ * now that one of them writes a **caption**: `setText` is the first action whose
+ * result would be visible on this canvas if anything ran it. Nothing does. A
+ * rule destroys objects and starts scenes, so a preview would not animate the
+ * document the way a tween does — it would demolish it, and there would be
+ * nothing for a second press of ▶ to put back.
  */
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;

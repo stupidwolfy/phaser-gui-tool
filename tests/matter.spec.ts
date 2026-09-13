@@ -132,7 +132,7 @@ test('the engine, the Matter dials and the rows they hide survive a save', async
   // one part of a file `parseProject` passes through verbatim — so this is the
   // guides case and the version does not move. Asserted so a future bump is a
   // deliberate act rather than a surprise.
-  expect(saved.schemaVersion).toBe(13);
+  expect(saved.schemaVersion).toBe(14);
 
   const path = testInfo.outputPath('matter.phaser.json');
   await fs.writeFile(path, file.contents, 'utf8');

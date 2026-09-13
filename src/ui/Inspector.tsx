@@ -15,10 +15,14 @@ import {
   RULE_OPERATORS,
   RULE_OPERATOR_LABEL,
   RULE_TRIGGER_KINDS,
+  TEXT_OPERATORS,
   TWEEN_EASES,
+  VARIABLE_KINDS,
+  type VariableKind,
   cameraOf,
   canBeTapped,
   canHavePhysics,
+  coerceVariableValue,
   collidableNodes,
   collidersNaming,
   collidersOf,
@@ -28,6 +32,7 @@ import {
   findAsset,
   findAudio,
   findParent,
+  findVariable,
   frameCountOf,
   frameGridOf,
   frameNamesOf,
@@ -42,6 +47,7 @@ import {
   tileLayerOf,
   tileMapOf,
   tweenOf,
+  variableKindOf,
   type GameObjectNode,
   type NineSliceProps,
   type ParticlesProps,
@@ -396,6 +402,7 @@ function VariablesSection() {
   const variables = project.variables;
   const addVariable = useEditorStore((s) => s.addVariable);
   const updateVariable = useEditorStore((s) => s.updateVariable);
+  const setVariableKind = useEditorStore((s) => s.setVariableKind);
   const removeVariable = useEditorStore((s) => s.removeVariable);
 
   // The exporter's own answer rather than a second walk, so the key a row shows
@@ -410,58 +417,86 @@ function VariablesSection() {
 
       {variables.length === 0 ? (
         <p className="hint">
-          Nothing here counts anything yet. A variable is a number the game keeps — a
-          score, a lives count — and it survives a change of scene.
+          Nothing here counts anything yet. A variable is a number or a line of text the
+          game keeps — a score, a lives count, a message to show — and it survives a
+          change of scene.
         </p>
       ) : null}
 
-      {variables.map((variable, index) => (
-        <div key={variable.id}>
-          <div className="field-row">
-            <TextField
-              label={`Variable ${index + 1} name`}
-              value={variable.name}
-              onChange={(name) => updateVariable(variable.id, { name })}
-            />
-            {/* "starts at", not "Value": it is the number the game *begins*
+      {variables.map((variable, index) => {
+        const kind = variableKindOf(variable);
+        return (
+          <div key={variable.id}>
+            <div className="field-row">
+              <TextField
+                label={`Variable ${index + 1} name`}
+                value={variable.name}
+                onChange={(name) => updateVariable(variable.id, { name })}
+              />
+              {/* The kind is the *type of the value*, so this writes the value
+                  rather than a field of its own — and it goes through
+                  `setVariableKind` rather than `updateVariable`, because every
+                  rule in the project that reads or writes this variable has to
+                  move with it. See the store. */}
+              <SelectField
+                label={`Variable ${index + 1} holds`}
+                value={kind}
+                options={VARIABLE_KINDS.map((option) => ({
+                  value: option,
+                  label: option === 'text' ? 'Text' : 'Number',
+                }))}
+                onChange={(next) => setVariableKind(variable.id, next as VariableKind)}
+              />
+            </div>
+            {/* "starts at", not "Value": it is the value the game *begins*
                 with, set once per game rather than once per scene, and a row
                 labelled Value would say the opposite of what the helper does.
-                The "Animation name, not Name" rule, arriving by a sixth route. */}
-            <NumberField
-              label={`Variable ${index + 1} starts at`}
-              value={variable.value}
-              onChange={(value) => updateVariable(variable.id, { value })}
-            />
-          </div>
-          <div className="field-row">
+                The "Animation name, not Name" rule, arriving by a sixth route.
+                One label for both kinds, because it is one question. */}
+            <div className="field-row">
+              {kind === 'text' ? (
+                <TextField
+                  label={`Variable ${index + 1} starts at`}
+                  value={String(variable.value)}
+                  onChange={(value) => updateVariable(variable.id, { value })}
+                />
+              ) : (
+                <NumberField
+                  label={`Variable ${index + 1} starts at`}
+                  value={Number(variable.value)}
+                  onChange={(value) => updateVariable(variable.id, { value })}
+                />
+              )}
+              <button
+                className="icon-btn icon-btn--danger"
+                onClick={() => removeVariable(variable.id)}
+                title={`Delete variable ${variable.name}`}
+              >
+                ✕
+              </button>
+            </div>
             {/* By title as well as text, the way an audio row is found: the
                 text is the derived key, which is the very thing a caller is
                 trying to read, so it cannot also be what locates the row. */}
             <p className="hint" title={`Variable ${index + 1} key`}>
               reads as {keys.get(variable.id)}
             </p>
-            <button
-              className="icon-btn icon-btn--danger"
-              onClick={() => removeVariable(variable.id)}
-              title={`Delete variable ${variable.name}`}
-            >
-              ✕
-            </button>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       <button
         className="btn btn--add"
         onClick={addVariable}
-        title="Declare a number the game keeps"
+        title="Declare a number or a line of text the game keeps"
       >
         + Variable
       </button>
       <p className="hint">
         Exported code declares these once and keeps them in Phaser&apos;s registry, so
         they survive a change of scene. Read one anywhere with{' '}
-        <code>this.registry.get(&apos;name&apos;)</code>.
+        <code>this.registry.get(&apos;name&apos;)</code>, or show one to the player with a
+        rule that sets an object&apos;s text.
       </p>
     </>
   );
@@ -485,6 +520,7 @@ const TRIGGER_LABEL: Record<RuleTrigger['kind'], string> = {
 const ACTION_LABEL: Record<RuleAction['kind'], string> = {
   destroy: 'Remove an object',
   setVisible: 'Show or hide an object',
+  setText: "Set an object's text",
   playSound: 'Play a sound',
   stopSound: 'Stop a sound',
   playAnimation: 'Play an animation',
@@ -735,48 +771,80 @@ function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
                 : 'No check — this rule always runs.'}
             </p>
           ) : null}
-          {rule.conditions.map((condition, at) => (
-            <div key={`${rule.id}:c${at}`}>
-              <div className="field-row">
-                <SelectField
-                  label={`Rule ${index} check ${at + 1}`}
-                  value={condition.variableId}
-                  options={variables.map((variable) => ({
-                    value: variable.id,
-                    label: variable.name,
-                  }))}
-                  onChange={(variableId) =>
-                    updateRuleCondition(rule.id, at, { variableId })
-                  }
-                />
-                <SelectField
-                  label={`Rule ${index} check ${at + 1} is`}
-                  value={condition.op}
-                  options={RULE_OPERATORS.map((op) => ({
-                    value: op,
-                    label: RULE_OPERATOR_LABEL[op],
-                  }))}
-                  onChange={(op) =>
-                    updateRuleCondition(rule.id, at, { op: op as RuleOperator })
-                  }
-                />
+          {rule.conditions.map((condition, at) => {
+            // A text variable can only be tested for equality, and the
+            // comparand is read in its kind — both of which `rulesOf` refuses
+            // rather than repairs, so the panel must not be able to build one.
+            const checked = findVariable(project, condition.variableId);
+            const text = checked !== undefined && variableKindOf(checked) === 'text';
+            return (
+              <div key={`${rule.id}:c${at}`}>
+                <div className="field-row">
+                  <SelectField
+                    label={`Rule ${index} check ${at + 1}`}
+                    value={condition.variableId}
+                    options={variables.map((variable) => ({
+                      value: variable.id,
+                      label: variable.name,
+                    }))}
+                    // The op and the value move with the variable, in one
+                    // patch: a check switched onto a variable of the other kind
+                    // would otherwise be one the reader drops — and it would
+                    // take the whole rule with it.
+                    onChange={(variableId) => {
+                      const next = findVariable(project, variableId);
+                      const nextText = next !== undefined && variableKindOf(next) === 'text';
+                      updateRuleCondition(rule.id, at, {
+                        variableId,
+                        op:
+                          nextText && condition.op !== 'eq' && condition.op !== 'ne'
+                            ? 'eq'
+                            : condition.op,
+                        value: coerceVariableValue(
+                          condition.value,
+                          nextText ? 'text' : 'number',
+                        ),
+                      });
+                    }}
+                  />
+                  <SelectField
+                    label={`Rule ${index} check ${at + 1} is`}
+                    value={condition.op}
+                    options={(text ? TEXT_OPERATORS : RULE_OPERATORS).map((op) => ({
+                      value: op,
+                      label: RULE_OPERATOR_LABEL[op],
+                    }))}
+                    onChange={(op) =>
+                      updateRuleCondition(rule.id, at, { op: op as RuleOperator })
+                    }
+                  />
+                </div>
+                <div className="field-row">
+                  {/* One label for both kinds, because it is one question. */}
+                  {text ? (
+                    <TextField
+                      label={`Rule ${index} check ${at + 1} value`}
+                      value={String(condition.value)}
+                      onChange={(value) => updateRuleCondition(rule.id, at, { value })}
+                    />
+                  ) : (
+                    <NumberField
+                      label={`Rule ${index} check ${at + 1} value`}
+                      value={Number(condition.value)}
+                      onChange={(value) => updateRuleCondition(rule.id, at, { value })}
+                    />
+                  )}
+                  <button
+                    className="icon-btn icon-btn--danger"
+                    onClick={() => removeRuleCondition(rule.id, at)}
+                    title={`Remove check ${at + 1} of rule ${index}`}
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
-              <div className="field-row">
-                <NumberField
-                  label={`Rule ${index} check ${at + 1} value`}
-                  value={condition.value}
-                  onChange={(value) => updateRuleCondition(rule.id, at, { value })}
-                />
-                <button
-                  className="icon-btn icon-btn--danger"
-                  onClick={() => removeRuleCondition(rule.id, at)}
-                  title={`Remove check ${at + 1} of rule ${index}`}
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           <button
             className="btn btn--add"
             disabled={variables.length === 0}
@@ -906,14 +974,34 @@ function defaultAction(
         ? { kind: 'startTween', nodeId: tweened.id }
         : { kind: 'restartScene' };
     }
+    case 'setText': {
+      // Seeded with the label's own current text and **no variable**, so the
+      // action arrives saying what is already on screen and cannot dangle
+      // whatever the project holds — `restartScene`'s property, on an action
+      // that names something.
+      const label = scene.children.find((node) => node.type === 'text');
+      return label
+        ? { kind: 'setText', nodeId: label.id, text: String(label.props.text ?? '') }
+        : { kind: 'restartScene' };
+    }
     case 'setVar':
+      // In the variable's own kind, for `addRuleCondition`'s reason: a number
+      // written into a text variable is an action `rulesOf` refuses, so the row
+      // would vanish the moment it was added.
       return variable
-        ? { kind: 'setVar', variableId: variable.id, value: 0 }
+        ? {
+            kind: 'setVar',
+            variableId: variable.id,
+            value: variableKindOf(variable) === 'text' ? '' : 0,
+          }
         : { kind: 'restartScene' };
-    case 'addVar':
-      return variable
-        ? { kind: 'addVar', variableId: variable.id, by: 1 }
+    case 'addVar': {
+      // Arithmetic, so only a number variable can carry one at all.
+      const counter = project.variables.find((entry) => variableKindOf(entry) !== 'text');
+      return counter
+        ? { kind: 'addVar', variableId: counter.id, by: 1 }
         : { kind: 'restartScene' };
+    }
     case 'startScene': {
       const other = project.scenes.find((entry) => entry.id !== scene.id);
       return other
@@ -1050,6 +1138,59 @@ function ActionFields({
         </div>
       );
 
+    case 'setText': {
+      const labels = nodeOptions(scene, (node) => node.type === 'text');
+      if (labels.length === 0) {
+        // A sentence rather than an absence: `AlignSection`'s rule, and here it
+        // is the one thing that explains why the picker above chose something
+        // else — only a text object has text to set.
+        return (
+          <p className="hint">
+            Add a text object to this scene to write on. Only a text object has text
+            to set.
+          </p>
+        );
+      }
+      return (
+        <>
+          <div className="field-row">
+            <SelectField
+              label={`${label} object`}
+              value={action.nodeId}
+              options={labels}
+              onChange={(nodeId) => onChange({ ...action, nodeId })}
+            />
+            <TextField
+              label={`${label} text`}
+              value={action.text}
+              onChange={(text) => onChange({ ...action, text })}
+            />
+          </div>
+          {/* `'' -> undefined`, never `''` in the document: an empty id is one
+              `findVariable` answers nothing for, and an action that names a
+              variable it has not got costs the whole rule. */}
+          <SelectField
+            label={`${label} then shows`}
+            value={action.variableId ?? ''}
+            options={[
+              { value: '', label: 'Nothing' },
+              ...project.variables.map((variable) => ({
+                value: variable.id,
+                label: variable.name,
+              })),
+            ]}
+            onChange={(variableId) =>
+              onChange({ ...action, variableId: variableId || undefined })
+            }
+          />
+          <p className="hint">
+            The variable&apos;s value goes on the end, so a label reads{' '}
+            <code>Score: 10</code>.
+          </p>
+        </>
+      );
+    }
+
     case 'playSound':
     case 'stopSound':
       return (
@@ -1095,7 +1236,9 @@ function ActionFields({
         />
       );
 
-    case 'setVar':
+    case 'setVar': {
+      const written = findVariable(project, action.variableId);
+      const text = written !== undefined && variableKindOf(written) === 'text';
       return (
         <div className="field-row">
           <SelectField
@@ -1105,23 +1248,55 @@ function ActionFields({
               value: variable.id,
               label: variable.name,
             }))}
-            onChange={(variableId) => onChange({ ...action, variableId })}
+            // The value moves with the variable in one patch, the condition
+            // picker's rule: a number written into a text variable is an action
+            // `rulesOf` refuses, and it refuses the whole rule with it.
+            onChange={(variableId) => {
+              const next = findVariable(project, variableId);
+              const nextText = next !== undefined && variableKindOf(next) === 'text';
+              onChange({
+                ...action,
+                variableId,
+                value: coerceVariableValue(action.value, nextText ? 'text' : 'number'),
+              });
+            }}
           />
-          <NumberField
-            label={`${label} to`}
-            value={action.value}
-            onChange={(value) => onChange({ ...action, value })}
-          />
+          {text ? (
+            <TextField
+              label={`${label} to`}
+              value={String(action.value)}
+              onChange={(value) => onChange({ ...action, value })}
+            />
+          ) : (
+            <NumberField
+              label={`${label} to`}
+              value={Number(action.value)}
+              onChange={(value) => onChange({ ...action, value })}
+            />
+          )}
         </div>
       );
+    }
 
-    case 'addVar':
+    case 'addVar': {
+      // Only a number variable, because `registry.inc` on text is arithmetic on
+      // text — the panel cannot build what the reader refuses.
+      const counters = project.variables.filter(
+        (variable) => variableKindOf(variable) !== 'text',
+      );
+      if (counters.length === 0) {
+        return (
+          <p className="hint">
+            Declare a variable that holds a number to add to. Text cannot be counted.
+          </p>
+        );
+      }
       return (
         <div className="field-row">
           <SelectField
             label={`${label} variable`}
             value={action.variableId}
-            options={project.variables.map((variable) => ({
+            options={counters.map((variable) => ({
               value: variable.id,
               label: variable.name,
             }))}
@@ -1134,6 +1309,7 @@ function ActionFields({
           />
         </div>
       );
+    }
 
     case 'startScene':
       return (

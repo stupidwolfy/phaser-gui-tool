@@ -1253,12 +1253,34 @@ export class EditorPage {
   async addVariable(): Promise<void> {
     await this.deselect();
     await this.openPanel('inspect');
-    await this.panel('inspect').getByTitle('Declare a number the game keeps').click();
+    await this.panel('inspect')
+      .getByTitle('Declare a number or a line of text the game keeps')
+      .click();
     await this.settle();
   }
 
-  /** Renames a declared variable and sets what it starts at. */
-  async setVariable(index: number, name: string, value: number): Promise<void> {
+  /**
+   * Switches what kind of value a variable holds.
+   *
+   * A document edit rather than a display toggle: the store converts the value
+   * and every rule that reads or writes the variable in the same step, so a
+   * caller switching a kind mid-test is asserting that migration too.
+   */
+  async setVariableKind(index: number, kind: 'Number' | 'Text'): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    await this.setChoice(`Variable ${index} holds`, kind);
+    await this.settle();
+  }
+
+  /**
+   * Renames a declared variable and sets what it starts at.
+   *
+   * `value` takes either kind, because the field is one question under one
+   * label and only its input type changes — a text variable is set by passing a
+   * string, after `setVariableKind`.
+   */
+  async setVariable(index: number, name: string, value: number | string): Promise<void> {
     await this.deselect();
     await this.openPanel('inspect');
     await this.setField(`Variable ${index} name`, name);
