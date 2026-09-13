@@ -19,8 +19,10 @@ import {
   findParent,
   EMPTY_TILE,
   bodyShapeOf,
+  formatVariable,
   frameGridOf,
   guidesOf,
+  labelOf,
   resolveFrame,
   isDefaultCamera,
   physicsOf,
@@ -3892,7 +3894,8 @@ export class EditorScene extends Phaser.Scene {
       }
       case 'text': {
         const text = object as Phaser.GameObjects.Text;
-        if (text.text !== node.props.text) text.setText(node.props.text);
+        const content = this.labelText(node.props);
+        if (text.text !== content) text.setText(content);
         this.applyTextStyle(text, node.props, key);
         break;
       }
@@ -4020,6 +4023,26 @@ export class EditorScene extends Phaser.Scene {
       held,
     });
     this.nodeTweenSignatures.set(key, this.tweenSignatureOf(node, tween));
+  }
+
+  /**
+   * What one text node actually draws: its caption, and the value it follows.
+   *
+   * **The starting value, which is the document's own statement and not a
+   * simulation.** A bound label reads the variable's declared value — the frame
+   * the game opens on — for the reason the camera frame is drawn and never
+   * applied: the canvas says what the document says, and the number a running
+   * game would have reached is something no editor here computes. Nothing about
+   * this moves on its own, which is why `hasMotionIn` is untouched and this is
+   * not on the preview toggle.
+   *
+   * Read from `this.syncing`, the project this pass is drawing, because a
+   * variable is project state and `applyNode` holds only the node.
+   */
+  private labelText(props: TextProps): string {
+    const label = labelOf(props, this.syncing);
+    if (label === null) return props.text;
+    return props.text + formatVariable(label.variable.value, label.decimals, label.pad);
   }
 
   /**

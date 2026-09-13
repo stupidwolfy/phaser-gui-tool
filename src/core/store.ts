@@ -43,6 +43,7 @@ import {
   frameNamesOf,
   guidesOf,
   isDefaultCamera,
+  labelOf,
   localTransformIn,
   newId,
   physicsOf,
@@ -65,7 +66,9 @@ import {
   MAX_TILEMAP_SIDE,
   tileLayerOf,
   tileMapOf,
+  RAW_DECIMALS,
   type NodeTween,
+  type VariableLabel,
   type TweenProperty,
   type TileLayer,
   type TilemapLayerDoc,
@@ -642,6 +645,22 @@ export interface EditorState {
    * property as one this tween is not about and a zero as a destination.
    */
   setTweenTarget: (id: string, property: TweenProperty, value: number | null) => void;
+  /**
+   * Binds a text node's caption to a variable, edits the format, or unbinds it
+   * with `null`.
+   *
+   * An action of its own rather than `updateProps`, for two reasons and the
+   * first is the one that decides it. `updateProps` spreads a patch, so it can
+   * set a label and can never *remove* one: `{ label: undefined }` leaves the
+   * key in place holding undefined, which survives in memory, vanishes through
+   * `JSON.stringify`, and gives the document two spellings of "off".
+   * `setNodePhysics`, `setNodeControls` and `setNodeTween` all `delete` for that
+   * reason and this joins them. The second is that binding one has to *seed* a
+   * variable — `defaultTween`'s rule, that a thing arrives already naming
+   * something rather than naming nothing — and `updateProps` cannot see the
+   * project's variable table from inside a scene edit.
+   */
+  setNodeLabel: (id: string, patch: Partial<VariableLabel> | null) => void;
   /**
    * Adds a collider row between two nodes, or edits or removes one.
    *
@@ -2265,31 +2284,54 @@ export const useEditorStore = create<EditorState>((set, get) => {
       }),
 
     removeVariable: (id) =>
-      editProject((project) => ({
-        ...project,
-        variables: project.variables.filter((variable) => variable.id !== id),
-        // Every rule that names it goes with it — **whole**, in a condition or
-        // in an action alike, and that is the same treatment `rulesOf` gives it
-        // on read, so the store and the reader say one thing.
+      editProject((project) => {
+        // Every text node that *shows* it loses its binding and keeps its
+        // caption, in the same undo step — `removeAsset`'s rule, which is that
+        // the document may never hold a dangling reference by any action in the
+        // editor, so `labelOf`'s drop-on-read only ever fires on a file this
+        // editor did not write. Through `mapProjectNodes` rather than a walk of
+        // `scenes`, because a label inside a prefab definition is drawn in every
+        // placement and is exactly the one a scene walk would miss.
         //
-        // The naive prune is wrong, and wrong in the direction this feature
-        // cares about most: dropping only the *conditions* that read the
-        // variable would leave `when tap coin, if score >= 10, startScene win`
-        // as `when tap coin, startScene win`, which now fires always. A repair
-        // may narrow what the document says and may never widen it, and that
-        // rule binds the store exactly as it binds the reader.
-        //
-        // Every scene, because a rule in a scene the user is not looking at is
-        // exactly the dangling reference this is here to prevent —
-        // `removeAudio`'s walk. Array identity where nothing changed, which is
-        // `editProject`'s signal for "no undo step".
-        scenes: project.scenes.map((scene) => {
-          const rules = scene.rules;
-          if (rules === undefined) return scene;
-          const kept = rules.filter((rule) => !ruleUsesVariable(rule, id));
-          return kept.length === rules.length ? scene : { ...scene, rules: kept };
-        }),
-      })),
+        // It narrows and does not widen: the label stops appending a value,
+        // which is strictly less than it said. That is why this is a prune where
+        // the rules below are a deletion — a rule that lost its gate would fire
+        // always, and a caption that lost its number is only a caption.
+        const stripped = mapProjectNodes(project, (node) => {
+          if (node.type !== 'text' || node.props.label?.variableId !== id) return null;
+          // `delete`, never `label: undefined`: the key would survive in memory
+          // and vanish through `JSON.stringify`, which is two spellings of
+          // "off" — see `setNodeLabel`, which is where that argument is made.
+          const props = { ...node.props };
+          delete props.label;
+          return { ...node, props };
+        });
+        return {
+          ...stripped,
+          variables: stripped.variables.filter((variable) => variable.id !== id),
+          // Every rule that names it goes with it — **whole**, in a condition or
+          // in an action alike, and that is the same treatment `rulesOf` gives it
+          // on read, so the store and the reader say one thing.
+          //
+          // The naive prune is wrong, and wrong in the direction this feature
+          // cares about most: dropping only the *conditions* that read the
+          // variable would leave `when tap coin, if score >= 10, startScene win`
+          // as `when tap coin, startScene win`, which now fires always. A repair
+          // may narrow what the document says and may never widen it, and that
+          // rule binds the store exactly as it binds the reader.
+          //
+          // Every scene, because a rule in a scene the user is not looking at is
+          // exactly the dangling reference this is here to prevent —
+          // `removeAudio`'s walk. Array identity where nothing changed, which is
+          // `editProject`'s signal for "no undo step".
+          scenes: stripped.scenes.map((scene) => {
+            const rules = scene.rules;
+            if (rules === undefined) return scene;
+            const kept = rules.filter((rule) => !ruleUsesVariable(rule, id));
+            return kept.length === rules.length ? scene : { ...scene, rules: kept };
+          }),
+        };
+      }),
 
     createPrefabFromSelection: () => {
       const state = get();
@@ -2843,6 +2885,55 @@ export const useEditorStore = create<EditorState>((set, get) => {
         };
       }),
 
+    setNodeLabel: (id, patch) =>
+      // The project rather than the scene, because the variable to seed with
+      // lives on the project — `withActiveScene` keeps that one edit one undo
+      // step, which is what the comment above it already says it is for.
+      editProject((project) =>
+        withActiveScene(project, (scene) => {
+          // Found first, then mapped, for `setNodeTween`'s reason: `mapNode`
+          // allocates whether or not it finds anything, so without this an id
+          // naming nothing would still push a history entry.
+          const node = findNode(scene.children, id);
+          if (!node || node.type !== 'text') return scene;
+          if (patch === null && node.props.label === undefined) return scene;
+          // A label with nothing to follow is not a label. The picker cannot
+          // offer this, so it only fires on a project whose variables have all
+          // been deleted between a render and a press.
+          const seed = project.variables[0];
+          if (patch !== null && seed === undefined) return scene;
+
+          // `mapNode`, not `scene.children`: a label on a text node inside a
+          // group is an ordinary thing to want, and unlike a body or a drive
+          // scheme it means exactly the same thing there — it is the object's
+          // own text rather than anything read in world coordinates. The tween's
+          // rule, one prop over.
+          return {
+            ...scene,
+            children: mapNode(scene.children, id, (current) => {
+              if (current.type !== 'text') return current;
+              const props = { ...current.props };
+              if (patch === null) {
+                delete props.label;
+                return { ...current, props };
+              }
+              const base = labelOf(current.props, project) ?? {
+                variable: seed,
+                decimals: RAW_DECIMALS,
+                pad: 0,
+              };
+              props.label = {
+                variableId: base.variable.id,
+                decimals: base.decimals,
+                pad: base.pad,
+                ...patch,
+              };
+              return { ...current, props };
+            }),
+          };
+        }),
+      ),
+
     setTweenTarget: (id, property, value) =>
       editScene((scene) => {
         const node = findNode(scene.children, id);
@@ -3385,6 +3476,13 @@ export function countFontUses(project: Project, family: string): number {
  * rule destroys objects and starts scenes, so a preview would not animate the
  * document the way a tween does — it would demolish it, and there would be
  * nothing for a second press of ▶ to put back.
+ *
+ * And blind to a bound label, which is the seventh refusal and the one that
+ * needs the least argument once it is said: a label follows its variable while
+ * the *game* runs, and what the canvas draws is the value the document declares
+ * — a still frame, the one the game opens on, exactly as the camera frame is
+ * drawn and never applied. It cannot change here, so there is nothing for a ▶
+ * to start or to stop.
  */
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;

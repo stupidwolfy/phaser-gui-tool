@@ -262,6 +262,42 @@ export function hostileProject(): Project {
             },
             children: [],
           },
+          {
+            id: 'p3',
+            // A **labelled text node inside a definition**, and the only test of
+            // the label emit's `${ctx.receiver}`: a factory is handed a `scene`
+            // where `create()` has `this`, so a helper call hardcoding either
+            // one is a `.ts` that does not compile in the other place. The tween
+            // block's claim, one statement over — and a label is the second
+            // thing on a node that is legal inside a definition, because it
+            // writes the object's own text rather than reading world
+            // coordinates the way a body and a drive scheme do.
+            name: 'coin count',
+            type: 'text',
+            visible: true,
+            transform: { x: 0, y: 40, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: {
+              text: 'x',
+              label: { variableId: 'var-2', decimals: 0, pad: 2 },
+              fontSize: 16,
+              color: '#ffffff',
+              fontFamily: 'system-ui, sans-serif',
+              alpha: 1,
+              bold: false,
+              italic: false,
+              align: 'left' as const,
+              wordWrapWidth: 0,
+              lineSpacing: 0,
+              letterSpacing: 0,
+              strokeColor: '#000000',
+              strokeThickness: 0,
+              shadowColor: '#000000',
+              shadowOffsetX: 0,
+              shadowOffsetY: 0,
+              shadowBlur: 0,
+            },
+            children: [],
+          },
         ],
       },
     ],
@@ -429,6 +465,12 @@ export function hostileProject(): Project {
                 nodeId: 'd',
                 text: `Score ${breakout}`,
                 variableId: 'var-1',
+                // The formatted branch of the emit, which routes the read
+                // through the same helper a bound label goes through — so this
+                // is what proves the two ways of showing a number share one
+                // formatter rather than each printing their own arithmetic.
+                decimals: 1,
+                pad: 4,
               },
               // The same action with no variable, which is the commonest shape
               // and the one that must not take the whole rule with it.
@@ -700,6 +742,14 @@ export function hostileProject(): Project {
               // The comment opener and the two line terminators JSON allows raw
               // in a string but older JS parsers do not.
               text: `${breakout}<!--\u2028\u2029"quoted" \\ backslash`,
+              // A bound label whose caption is the hostile string above and
+              // whose variable is the hostile-*named* one, formatted. That puts
+              // `str()` in front of two arguments of the `bindLabel` call — a
+              // derived registry key and a caption — which are call sites no
+              // other node in this fixture reaches, and it is the only place the
+              // emitted helper's signature meets `Phaser.GameObjects.Text` and
+              // `Phaser.Scene` under `tsc --strict`.
+              label: { variableId: 'var-1', decimals: 2, pad: 6 },
               fontSize: 28,
               color: '#ffffff',
               // Free user text that reaches a JS string literal *and* the
@@ -738,6 +788,11 @@ export function hostileProject(): Project {
             // one type over.
             props: {
               text: 'wrapped\nand styled',
+              // Following a variable that holds **text**, with both dials at
+              // their defaults: the branch where the emitted formatter returns
+              // its argument untouched, and the one place a string reaches
+              // `Text.setText` through the helper rather than through an action.
+              label: { variableId: 'var-4', decimals: -1, pad: 0 },
               fontSize: 24,
               color: '#ffe066',
               // An imported family at the head of a stack whose tail is a font
@@ -1327,6 +1382,12 @@ export function hostileProject(): Project {
             transform: { x: 480, y: 460, rotation: 0, scaleX: 1, scaleY: 1 },
             props: {
               text: 'ordinary',
+              // A label naming a variable the project has not got, which only a
+              // hand-edited file can hold. It reads as *absent* — the caption
+              // alone, no helper call, no import of the helper into a file with
+              // nothing to call it — which is why this node still proves the
+              // claim below about exporting exactly what it always did.
+              label: { variableId: 'gone', decimals: 3, pad: 7 },
               fontSize: 20,
               color: '#ffb84f',
               fontFamily: 'system-ui, sans-serif',

@@ -1201,6 +1201,81 @@ test('the exported page shows a number it was told to count', async ({
   await run.close();
 });
 
+test('the exported page keeps a label following a variable', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The positive claim for a bound label, and the only place it can be made** —
+  // and it is a strictly stronger claim than the `setText` test above, which is
+  // why it is a second test rather than an assertion added to that one. There a
+  // caption is written once, by a rule that names the object. Here **nothing in
+  // the project writes the label's text at all**: the node says which variable
+  // it shows, a looping timer adds to that variable, and the caption has to grow
+  // on its own — which is the whole of what a subscription is and is the one
+  // thing a set-once emit cannot fake.
+  await editor.clearScene();
+  await editor.addObject('Text');
+  await editor.setField('Name', 'Label');
+  await editor.setField('Content', '.');
+  await editor.setField('Font size', 64);
+  await editor.setField('Text colour', LABEL_FILL);
+  await editor.setField('X', 480);
+  await editor.setField('Y', 270);
+  await editor.deselect();
+
+  await editor.addVariable();
+  await editor.setVariable(1, 'Score', 0);
+
+  await editor.selectInTree('Label');
+  await editor.setLabelVariable('Score');
+  // Padded, so the label is already several glyphs wide at zero and the reading
+  // below is about the value rather than about the digit count creeping up.
+  await editor.setLabelFormat({ pad: 4 });
+  await editor.deselect();
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'a timer fires');
+  await editor.openRule(name);
+  await editor.setField('Rule 1 every', 60);
+  // Looping, because one firing proves a caption was written and this test is
+  // about a caption that keeps following.
+  await editor.page.getByLabel('Rule 1 repeats').check();
+  await editor.settle();
+  await editor.setChoice('Rule 1 do 1', 'Add to a variable');
+  await editor.setField('Rule 1 do 1 by', 1111);
+
+  const exported = await editor.exportCode('html');
+  // The subscription is emitted, and nothing writes the text: the only
+  // `.setText(` in the whole file is the one inside the helper, which is what
+  // makes the growth below the binding's doing and not an action's.
+  expect(exported.contents).toContain("'changedata-' + key");
+  expect(exported.contents.match(/\.setText\(/g) ?? []).toHaveLength(1);
+
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('bound-label'),
+    exported.contents,
+  );
+
+  // `0000` at 64px inks well over a hundred pixels across; four digits become
+  // five and then six as the timer runs, and a width that keeps growing is
+  // something no caption written once could produce.
+  const first = await reaches(
+    async () =>
+      findColorBox(run.page, await run.page.locator('canvas').screenshot(), LABEL_FILL),
+    (reading) => reading.width > 100,
+  );
+  const later = await reaches(
+    async () =>
+      findColorBox(run.page, await run.page.locator('canvas').screenshot(), LABEL_FILL),
+    (reading) => reading.width > first.width,
+  );
+  expect(later.width).toBeGreaterThan(first.width);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
 test('the exported page plays the object it was given controls', async ({
   editor,
   page,
@@ -1382,7 +1457,21 @@ test('a hostile project emits its solid tiles and only the collisions it can', a
   // the reader's `type !== 'text'` refusal the third is not a wrong picture but a
   // **compile error** in the emitted `.ts`, which is why it is asserted by count
   // here as well as by `export-toolchain.spec.ts` passing at all.
-  expect(exported.contents.match(/\.setText\(/g) ?? []).toHaveLength(2);
+  //
+  // Three now rather than two, and the third is the emitted label helper's own:
+  // iteration 30 put a bound label on two of this fixture's text nodes, and a
+  // binding writes through one `label.setText(` inside `bindLabel` however many
+  // labels there are. The action captions are still exactly two, which is what
+  // the refusal above is actually about — so both halves are asserted rather
+  // than one loosened number.
+  expect(exported.contents.match(/\.setText\(/g) ?? []).toHaveLength(3);
+  expect(exported.contents.match(/label\.setText\(/g) ?? []).toHaveLength(1);
+  // Two labels bound and one dangling: the helper is called twice in `create()`
+  // and once more inside the prefab factory, which is the `receiver` claim —
+  // `this` in a scene method, `scene` in a factory — and the node whose label
+  // names a variable the project has not got emits no call at all.
+  expect(exported.contents.match(/bindLabel\(this, /g) ?? []).toHaveLength(2);
+  expect(exported.contents).toContain('bindLabel(scene, ');
   // A text variable is a quoted value in the table and a quoted comparand in the
   // gate, which are two `str()` call sites a number never reaches.
   expect(exported.contents).toContain('"message": "hi ');
@@ -1541,6 +1630,18 @@ test('the exported page runs the tween it was given', async ({ editor, page }, t
   expect(run.errors).toEqual([]);
 
   await run.close();
+});
+
+test('a project with no label exports neither helper', async ({ editor }) => {
+  // Two gates, not one: a `setText` that asks for a format needs the formatter
+  // without needing the binder, so a project with neither emits neither. Scoped
+  // to a project that has no label rather than asserted over some other output,
+  // because the hostile project legitimately contains both strings — a
+  // whole-file `not.toContain` is a shared resource, which the prefab suite
+  // learned the hard way.
+  const exported = await editor.exportCode('ts');
+  expect(exported.contents).not.toContain('changedata-');
+  expect(exported.contents).not.toContain('padStart');
 });
 
 test('a project with no tween exports none', async ({ editor }) => {

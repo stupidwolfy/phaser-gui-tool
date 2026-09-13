@@ -38,6 +38,11 @@ import {
   frameNamesOf,
   guidesOf,
   isDefaultCamera,
+  labelFormatOf,
+  labelOf,
+  MAX_DECIMALS,
+  MAX_PAD,
+  RAW_DECIMALS,
   physicsOf,
   rulesNaming,
   rulesOf,
@@ -1140,6 +1145,11 @@ function ActionFields({
 
     case 'setText': {
       const labels = nodeOptions(scene, (node) => node.type === 'text');
+      // The variable this caption shows, if it names one. A text variable is
+      // shown as it is, so the two format dials below are hidden for one rather
+      // than sitting there doing nothing — the panel must not offer what the
+      // emit would ignore.
+      const shown = findVariable(project, action.variableId);
       if (labels.length === 0) {
         // A sentence rather than an absence: `AlignSection`'s rule, and here it
         // is the one thing that explains why the picker above chose something
@@ -1183,9 +1193,33 @@ function ActionFields({
               onChange({ ...action, variableId: variableId || undefined })
             }
           />
+          {shown !== undefined && variableKindOf(shown) === 'number' && (
+            /* Only while a variable is named: a format on a caption with no
+               value is a dial on nothing, and the panel must not offer what the
+               reader would ignore — `CollidersSection`' rule. The same two
+               fields, with the same words, as a bound label's on the object's
+               own panel, because they are the same question. */
+            <div className="field-row">
+              <NumberField
+                label={`${label} decimal places`}
+                value={labelFormatOf(action).decimals}
+                min={RAW_DECIMALS}
+                max={MAX_DECIMALS}
+                onChange={(decimals) => onChange({ ...action, decimals })}
+              />
+              <NumberField
+                label={`${label} pad to width`}
+                value={labelFormatOf(action).pad}
+                min={0}
+                max={MAX_PAD}
+                onChange={(pad) => onChange({ ...action, pad })}
+              />
+            </div>
+          )}
           <p className="hint">
             The variable&apos;s value goes on the end, so a label reads{' '}
-            <code>Score: 10</code>.
+            <code>Score: 10</code>. For a number, decimal places −1 leaves it as it
+            is and a pad of 0 is off; text is shown as it is.
           </p>
         </>
       );
@@ -2363,7 +2397,13 @@ function TileSpriteSection({
  */
 function TextSection({ node }: { node: Extract<GameObjectNode, { type: 'text' }> }) {
   const updateProps = useEditorStore((s) => s.updateProps);
+  const project = useEditorStore((s) => s.project);
+  const setNodeLabel = useEditorStore((s) => s.setNodeLabel);
   const setProp = (patch: Partial<TextProps>) => updateProps(node.id, patch);
+  // Derived here rather than in a selector, because it builds a fresh object
+  // every call — React error #185, the `tileMapOf` trap, and the warning
+  // `labelOf`'s own doc comment carries.
+  const label = labelOf(node.props, project);
 
   return (
     <>
@@ -2372,6 +2412,67 @@ function TextSection({ node }: { node: Extract<GameObjectNode, { type: 'text' }>
         value={node.props.text}
         onChange={(text) => setProp({ text })}
       />
+
+      {/* The label goes with the words rather than under Paragraph or Stroke:
+          it is part of what this object *says*. One control for on/off and for
+          which variable, because a label naming nothing is not a label — the
+          `setText` action's picker, one panel over. */}
+      {project.variables.length === 0 ? (
+        <p className="hint">
+          Declare a variable in the Scene panel to have this text follow one — a score
+          on screen is a caption here and a number the game keeps there.
+        </p>
+      ) : (
+        <SelectField
+          label="Shows variable"
+          value={label?.variable.id ?? ''}
+          options={[
+            { value: '', label: 'Nothing' },
+            ...project.variables.map((variable) => ({
+              value: variable.id,
+              label: variable.name,
+            })),
+          ]}
+          onChange={(variableId) =>
+            setNodeLabel(node.id, variableId ? { variableId } : null)
+          }
+        />
+      )}
+      {label !== null && variableKindOf(label.variable) === 'text' && (
+        <p className="hint">
+          The value goes on the end of the content above, and follows the variable while
+          the game runs — which is the difference between this and a rule that writes the
+          text once. A variable holding text is shown as it is, so there is nothing here
+          to format.
+        </p>
+      )}
+      {label !== null && variableKindOf(label.variable) === 'number' && (
+        <>
+          <div className="field-row">
+            <NumberField
+              label="Decimal places"
+              value={label.decimals}
+              min={RAW_DECIMALS}
+              max={MAX_DECIMALS}
+              onChange={(decimals) => setNodeLabel(node.id, { decimals })}
+            />
+            <NumberField
+              label="Pad to width"
+              value={label.pad}
+              min={0}
+              max={MAX_PAD}
+              onChange={(pad) => setNodeLabel(node.id, { pad })}
+            />
+          </div>
+          <p className="hint">
+            The value goes on the end of the content above, and follows the variable
+            while the game runs — which is the difference between this and a rule that
+            writes the text once. Decimal places −1 leaves the number as it is and a pad
+            of 0 is off. A rule that sets this object&apos;s text wins until the value
+            next changes.
+          </p>
+        </>
+      )}
       <div className="field-row">
         <NumberField
           label="Font size"

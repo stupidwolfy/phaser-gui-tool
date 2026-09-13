@@ -949,6 +949,44 @@ export interface ContainerProps {
 export type TextAlign = 'left' | 'center' | 'right';
 
 /**
+ * What a text node appends to its own caption, and how that value reads.
+ *
+ * Iteration 30, and the whole of it: a label says *what it shows*, where a
+ * `setText` action says *what happens at a moment*. That is the difference the
+ * "Not built yet" entry this closes was drawn on — a caption rewritten by a rule
+ * only follows the value where some rule remembers to rewrite it, in every scene
+ * and beside every `addVar`, while a bound one follows it wherever it is written.
+ *
+ * The node's existing `text` is the caption, and there is no second field for
+ * one. That is `RuleAction`'s `setText` shape exactly: one value, on the end,
+ * named in a field of its own rather than a `{score}` a parser would have to
+ * find. Two variables in one caption is an expression, which is the line this
+ * vocabulary does not cross.
+ *
+ * On the node rather than on the project for the reason a tween is on the node:
+ * "what does this label show" is a question about this object's own text, and a
+ * project-level answer would be a second thing to name the object with.
+ */
+export interface VariableLabel {
+  /** Dangling reads as *absent*, so the node falls back to its plain caption. */
+  variableId: string;
+  /**
+   * Fixed decimal places, or -1 for the value as it is. Ignored for a variable
+   * holding text.
+   *
+   * `-1` rather than `wordWrapWidth`'s `0`, because here zero is a real answer:
+   * "no decimal places" is what a score asks for, where a wrap width of zero has
+   * no second meaning. The sentinel goes where the sentinel works.
+   */
+  decimals: number;
+  /**
+   * The least width the formatted value is drawn at, zero-padded on the left.
+   * 0 is off, which is a sentinel that works: padding to no width says nothing.
+   */
+  pad: number;
+}
+
+/**
  * A text object's content and its typography.
  *
  * The five fields above `bold` are the ones this type shipped with in iteration
@@ -974,6 +1012,14 @@ export type TextAlign = 'left' | 'center' | 'right';
  */
 export interface TextProps {
   text: string;
+  /**
+   * The variable this label follows, or absent for a caption that stands still.
+   *
+   * Optional rather than a sentinel object, so a text node made before iteration
+   * 30 is byte for byte the node it was — and so `labelOf` has one absent state
+   * to answer with rather than two.
+   */
+  label?: VariableLabel;
   fontSize: number;
   color: string;
   fontFamily: string;
@@ -2882,7 +2928,21 @@ export type RuleAction =
   | { kind: 'restartScene' }
   | { kind: 'destroy'; nodeId: string }
   | { kind: 'setVisible'; nodeId: string; visible: boolean }
-  | { kind: 'setText'; nodeId: string; text: string; variableId?: string }
+  /**
+   * The two format fields are `VariableLabel`'s, and they are here so that the
+   * two ways of putting a number on screen cannot read differently — a rule that
+   * writes `Score: 007` and a label that follows the same variable to `Score: 7`
+   * is the one kind of disagreement nobody sees until the game is in their hand.
+   * They mean nothing without `variableId` and are absent without one.
+   */
+  | {
+      kind: 'setText';
+      nodeId: string;
+      text: string;
+      variableId?: string;
+      decimals?: number;
+      pad?: number;
+    }
   | { kind: 'playSound'; soundId: string }
   | { kind: 'stopSound'; soundId: string }
   | { kind: 'playAnimation'; nodeId: string; animationId: string }
@@ -3241,7 +3301,24 @@ function ruleActionsOf(
         // caption whose value is gone goes on claiming to show a number the
         // project has not got.
         if (findVariable(project, variableId) === undefined) return [];
-        actions.push({ kind: 'setText', nodeId, text: row.text, variableId });
+        // The format is repaired rather than refused, `labelOf`'s call and for
+        // its reason: a clamped `decimals` shows the value differently and no
+        // rule anywhere reads it, so narrowing it cannot widen what the document
+        // says. The clamp is not tidiness either — `toFixed` throws a RangeError
+        // outside 0..100, inside a rule callback in the player's game.
+        //
+        // **Attached only where it differs from the default**, which matters
+        // because the inspector edits this reader's output and writes it back:
+        // carrying `decimals: -1, pad: 0` unconditionally would put two keys
+        // into every `setText` in every document the moment any other field was
+        // touched, and would move an export that should not have moved.
+        const format = labelFormatOf(row);
+        const plain = format.decimals < 0 && format.pad === 0;
+        actions.push(
+          plain
+            ? { kind: 'setText', nodeId, text: row.text, variableId }
+            : { kind: 'setText', nodeId, text: row.text, variableId, ...format },
+        );
         break;
       }
 
@@ -3531,6 +3608,113 @@ export function findVariable(
   id: string | null | undefined,
 ): ProjectVariable | undefined {
   return id ? project.variables.find((variable) => variable.id === id) : undefined;
+}
+
+/** The least a `decimals` may say, and the value that says "as it is". */
+export const RAW_DECIMALS = -1;
+/** Phaser draws what `toFixed` can produce and no more. */
+export const MAX_DECIMALS = 20;
+/** A pad wider than this is a field nobody meant to type. */
+export const MAX_PAD = 20;
+
+/**
+ * One variable's value, as a label draws it.
+ *
+ * **One expression per decision, and that is the point rather than brevity.**
+ * The exporter cannot call this function — the generated game does not import
+ * this module — so it prints the same two lines instead, which makes this the
+ * one place in the codebase where a builder genuinely has a copy rather than a
+ * second consumer. `cameraViewOf`'s "copies Phaser's arithmetic and has to stay
+ * copied" for the same reason, and the answer to it is to leave nothing to
+ * copy *wrongly*: `toFixed` and `padStart`, both of them whole calls, with no
+ * arithmetic of our own and no sign handling to get right twice.
+ *
+ * `pad` therefore counts the width of the *whole* formatted value rather than
+ * its digits before the point, because that is what `padStart` counts. A
+ * negative number keeps its sign and is padded as written, which is what a
+ * score never reaches and what a second, cleverer rule would state differently
+ * in the editor and in the game.
+ */
+export function formatVariable(value: VariableValue, decimals: number, pad: number): string {
+  // Text is shown as it is, and the early return is the whole of that: both
+  // dials are about a number, and zero-padding a name to twelve characters is
+  // not a thing anybody asked for. The emitted helper returns here too, on the
+  // same line and for the same reason — this is the pair that has to stay
+  // copied, so neither side may branch where the other does not.
+  if (typeof value !== 'number' || !Number.isFinite(value)) return String(value);
+  const shown = decimals >= 0 ? value.toFixed(decimals) : String(value);
+  return pad > 0 ? shown.padStart(pad, '0') : shown;
+}
+
+/** A text node's label, with the variable it names and the format repaired. */
+export interface ResolvedLabel {
+  variable: ProjectVariable;
+  decimals: number;
+  pad: number;
+}
+
+/**
+ * What this text node appends to its caption, if anything.
+ *
+ * The only reader of `TextProps.label`, in the `guidesOf` / `tweenOf` /
+ * `soundsOf` / `textStyleOf` / `tileMapOf` family, and it answers three
+ * questions at once: is there a binding at all, does it name a variable the
+ * project still holds, and are these two numbers ones `toFixed` and `padStart`
+ * can be handed. `toFixed` throws a RangeError outside 0..100 and `padStart`
+ * builds whatever length it is given, so a hand-edited `decimals: 1e9` is a
+ * thrown exception inside `create()` rather than a wrong picture.
+ *
+ * **A dangling variable reads as absent**, so the node draws its plain caption
+ * — `fontStackOf`'s rule, where "no font chosen", "the font is gone" and "an
+ * ordinary family" are one state and one code path. It is deliberately *not*
+ * `rulesOf`'s treatment of a dangling variable in a `setText`, which costs the
+ * whole rule: dropping a condition widens what a rule says, while a label that
+ * stops appending a value says strictly less than it said. A repair may narrow
+ * and may never widen, and this narrows.
+ *
+ * The format is repaired rather than dropped for that same reason twice over: a
+ * clamped `decimals` shows the value differently, and no rule anywhere reads it.
+ *
+ * A fresh object per call, so `useEditorStore((s) => labelOf(...))` is React
+ * error #185 — the `tileMapOf` trap, eleventh time. Select the node and the
+ * project, and derive outside the selector.
+ */
+export function labelOf(props: TextProps, project: Project): ResolvedLabel | null {
+  const label = props.label;
+  if (!label || typeof label !== 'object') return null;
+  const variable = findVariable(project, label.variableId);
+  if (variable === undefined) return null;
+  return { variable, ...labelFormatOf(label) };
+}
+
+/**
+ * The two format dials, repaired.
+ *
+ * Split out of `labelOf` so the exporter can reach them without a `Project`: it
+ * resolves the variable through its own unfiltered `collectVariables` table and
+ * would otherwise have to repair the numbers a second time, which is how the
+ * canvas and the generated game come to format one value two ways.
+ *
+ * The clamp is not tidiness. `Number.prototype.toFixed` throws a `RangeError`
+ * outside 0..100, and that throw would happen inside the player's game — so a
+ * hand-edited `decimals: 999` is a document that crashes the export rather than
+ * one that draws something odd. `MIN_TIMER_DELAY`'s reason, in a different
+ * direction.
+ */
+export function labelFormatOf(label: {
+  decimals?: unknown;
+  pad?: unknown;
+}): { decimals: number; pad: number } {
+  return {
+    decimals: labelNumber(label.decimals, RAW_DECIMALS, RAW_DECIMALS, MAX_DECIMALS),
+    pad: labelNumber(label.pad, 0, 0, MAX_PAD),
+  };
+}
+
+/** A whole number inside the range a formatter can be handed, for both fields. */
+function labelNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
 /**
