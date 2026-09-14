@@ -1074,8 +1074,15 @@ export interface TextStyle {
   padding: { x: number; y: number };
 }
 
-/** '#rrggbb', or the fallback when a hand-edited file holds something else. */
-function textColor(value: unknown, fallback: string): string {
+/**
+ * '#rrggbb', or the fallback when a hand-edited file holds something else.
+ *
+ * Renamed from `textColor` when a rule's camera flash and fade became its
+ * second consumer, rather than left under a name that describes one of them —
+ * `clampFrame` becoming `resolveFrame`, one module over. It is a colour guard,
+ * and nothing about it was ever about text.
+ */
+function hexOr(value: unknown, fallback: string): string {
   const clean = String(value ?? '').trim();
   return /^#[0-9a-fA-F]{6}$/.test(clean) ? clean.toLowerCase() : fallback;
 }
@@ -1145,7 +1152,7 @@ export function textStyleOf(props: TextProps): TextStyle {
     // parse and which leaves the text drawn in whatever the last object set.
     fontFamily: String(props.fontFamily ?? '').trim() || 'sans-serif',
     fontSize: `${textNumber(props.fontSize, 32, 1)}px`,
-    color: textColor(props.color, '#ffffff'),
+    color: hexOr(props.color, '#ffffff'),
     fontStyle: [props.bold ? 'bold' : '', props.italic ? 'italic' : ''].filter(Boolean).join(' '),
     align: props.align === 'center' || props.align === 'right' ? props.align : 'left',
     // Null rather than 0: Phaser's own "not wrapping" value, and `0` would be a
@@ -1153,12 +1160,12 @@ export function textStyleOf(props: TextProps): TextStyle {
     wordWrap: { width: wrap > 0 ? wrap : null },
     lineSpacing: textNumber(props.lineSpacing, 0),
     letterSpacing: textNumber(props.letterSpacing, 0),
-    stroke: textColor(props.strokeColor, '#000000'),
+    stroke: hexOr(props.strokeColor, '#000000'),
     strokeThickness,
     shadow: {
       offsetX: shadowOffsetX,
       offsetY: shadowOffsetY,
-      color: textColor(props.shadowColor, '#000000'),
+      color: hexOr(props.shadowColor, '#000000'),
       blur: shadowBlur,
       // Both explicitly true, and this is the trap that makes a shadow set
       // through a style object invisible. `Text.setShadow()` defaults `fill` to
@@ -1794,6 +1801,13 @@ export function defaultControls(): NodeControls {
  * Phaser's map holds five `PowerN` aliases and eleven bare family names that
  * all mean `.easeOut`; none of them is here, because two names for one curve is
  * a thing to explain in a dropdown rather than a choice anybody wants.
+ *
+ * Read by a tween and, since iteration 31, by a rule's camera pan and zoom —
+ * `Camera.pan` and `Camera.zoomTo` take `ease?: string | Function`, so the same
+ * allowlist is handed over unchanged and for exactly the same reason. **Kept
+ * under its own name rather than renamed**, unlike `hexOr` above: what this
+ * constant means did not change, only who reads it. The rename habit is for a
+ * function whose *answer* widened.
  */
 export const TWEEN_EASES = [
   'Linear',
@@ -2947,9 +2961,69 @@ export type RuleAction =
   | { kind: 'stopSound'; soundId: string }
   | { kind: 'playAnimation'; nodeId: string; animationId: string }
   | { kind: 'startTween'; nodeId: string }
+  /**
+   * The five camera effects, and they are the first actions besides
+   * `restartScene` that **name nothing the document holds** — no node, no
+   * sound, no scene, no variable. Everything below follows from that one fact:
+   * nothing here can dangle, so nothing here can cost a rule; `ruleNames`,
+   * `ruleUsesVariable` and the store's `remapActionRefs` all key off
+   * `'nodeId' in action` and friends, so all three inherit the right answer
+   * with no edit; and a rule whose only action is one of these shows in the
+   * scene's own list and on no object's panel, which is correct, because it is
+   * about no object.
+   *
+   * `intensity` is a **fraction of the viewport**, which is Phaser's own unit
+   * and not pixels. `x`/`y` are where the camera's *midPoint* ends up, which is
+   * not `SceneCamera.scrollX`'s top-left — the `cameraViewOf` distinction
+   * arriving on an action, and the reason the panel's labels say "centre".
+   */
+  | { kind: 'cameraShake'; duration: number; intensity: number }
+  | { kind: 'cameraFlash'; duration: number; color: string }
+  /**
+   * One kind with a direction rather than two kinds, which is `setVisible`'s
+   * show/hide call: one verb, one question. `fadeIn` rather than `in`, because
+   * `action.in` reads as a keyword at every call site.
+   */
+  | { kind: 'cameraFade'; duration: number; color: string; fadeIn: boolean }
+  | { kind: 'cameraPan'; x: number; y: number; duration: number; ease: TweenEase }
+  | { kind: 'cameraZoom'; zoom: number; duration: number; ease: TweenEase }
   /** The value is in the variable's own kind; `addVar` below stays arithmetic. */
   | { kind: 'setVar'; variableId: string; value: VariableValue }
   | { kind: 'addVar'; variableId: string; by: number };
+
+/** What Phaser's own camera effects default to, and what a repair falls back to. */
+const CAMERA_EFFECT_MS = {
+  shake: 100,
+  flash: 250,
+  fade: 250,
+  pan: 1000,
+  zoom: 1000,
+} as const;
+
+/** Phaser's own default shake, as a fraction of the viewport. */
+const DEFAULT_SHAKE = 0.05;
+
+/** A finite number, or the fallback a hand-edited file falls back to. */
+const finiteOr = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+/**
+ * An effect's duration in milliseconds.
+ *
+ * `MIN_TIMER_DELAY`'s floor for `MIN_TIMER_DELAY`'s reason, one action over: an
+ * effect given 0ms completes on the frame it starts and is one nobody sees,
+ * which is indistinguishable from the action having done nothing at all. There
+ * is no runaway to guard against here — an effect does not repeat — so the
+ * floor is only about being visible.
+ */
+const effectMs = (value: unknown, fallback: number): number => {
+  const ms = finiteOr(value, fallback);
+  return ms >= MIN_TIMER_DELAY ? ms : fallback;
+};
+
+/** An ease this editor offers, or `Linear` — `tweenOf`'s repair verbatim. */
+const effectEase = (value: unknown): TweenEase =>
+  TWEEN_EASES.includes(value as TweenEase) ? (value as TweenEase) : 'Linear';
 
 /** Every action kind, for the inspector's picker. */
 export const RULE_ACTION_KINDS: readonly RuleAction['kind'][] = [
@@ -2960,6 +3034,13 @@ export const RULE_ACTION_KINDS: readonly RuleAction['kind'][] = [
   'stopSound',
   'playAnimation',
   'startTween',
+  // The camera between the object verbs and the variables, so the picker reads
+  // as four groups. The order is free: the suite picks an option by its label.
+  'cameraShake',
+  'cameraFlash',
+  'cameraFade',
+  'cameraPan',
+  'cameraZoom',
   'setVar',
   'addVar',
   'startScene',
@@ -3346,6 +3427,69 @@ function ruleActionsOf(
           actions.push({ kind: 'startTween', nodeId });
         }
         break;
+
+      // The five camera effects, and the whole block is **repair, never drop**
+      // — `cameraOf`'s policy rather than `soundsOf`'s split, and it is the
+      // first action block in this function where that needs no argument at
+      // all. A `setVar` costs the whole rule when its variable is gone because
+      // *a variable is the one thing a rule names that another rule reads*; an
+      // effect names nothing, reaches nothing, and every one of its fields has
+      // a sensible value to fall back to. So none of these can ever return [].
+      case 'cameraShake': {
+        const intensity = finiteOr(row.intensity, DEFAULT_SHAKE);
+        actions.push({
+          kind: 'cameraShake',
+          duration: effectMs(row.duration, CAMERA_EFFECT_MS.shake),
+          // A fraction of the viewport, so it is clamped into (0, 1]: a zero is
+          // a shake that does not shake, which reads as the feature being
+          // broken, and Phaser's own default is the thing to fall back to.
+          intensity: intensity > 0 ? Math.min(1, intensity) : DEFAULT_SHAKE,
+        });
+        break;
+      }
+
+      case 'cameraFlash':
+        actions.push({
+          kind: 'cameraFlash',
+          duration: effectMs(row.duration, CAMERA_EFFECT_MS.flash),
+          color: hexOr(row.color, '#ffffff'),
+        });
+        break;
+
+      case 'cameraFade':
+        actions.push({
+          kind: 'cameraFade',
+          duration: effectMs(row.duration, CAMERA_EFFECT_MS.fade),
+          color: hexOr(row.color, '#000000'),
+          fadeIn: row.fadeIn === true,
+        });
+        break;
+
+      case 'cameraPan':
+        actions.push({
+          kind: 'cameraPan',
+          // Zero is a place, so a non-finite one repairs to it rather than
+          // costing the action — unlike a zoom, which has no meaningful zero.
+          x: finiteOr(row.x, 0),
+          y: finiteOr(row.y, 0),
+          duration: effectMs(row.duration, CAMERA_EFFECT_MS.pan),
+          ease: effectEase(row.ease),
+        });
+        break;
+
+      case 'cameraZoom': {
+        const zoom = finiteOr(row.zoom, 1);
+        actions.push({
+          kind: 'cameraZoom',
+          // `cameraOf`'s repair to the character: Phaser clamps a zoom of 0 to
+          // 0.001 behind your back, which is a camera showing a thousand scenes
+          // at once with nothing saying why.
+          zoom: zoom > 0 ? zoom : 1,
+          duration: effectMs(row.duration, CAMERA_EFFECT_MS.zoom),
+          ease: effectEase(row.ease),
+        });
+        break;
+      }
 
       case 'setVar':
       case 'addVar': {

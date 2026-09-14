@@ -112,6 +112,23 @@ function hexLiteral(hex: string, fallback = '0xffffff'): string {
   return /^[0-9a-fA-F]{6}$/.test(clean) ? `0x${clean.toLowerCase()}` : fallback;
 }
 
+/**
+ * '#rrggbb' -> '255, 128, 0', the three channel arguments Phaser's camera
+ * `flash` and `fade` take.
+ *
+ * Every colour in this document is a hex string and these two calls are the one
+ * place that is not what Phaser wants, so the split lives here rather than at
+ * each call site — `hexLiteral`'s sibling, and its regex. The fallback is the
+ * belt to the reader's braces: `ruleActionsOf` has already repaired a bad
+ * colour, so nothing the editor can produce reaches it.
+ */
+function rgbArgs(hex: string, fallback = '0, 0, 0'): string {
+  const clean = String(hex).replace('#', '').trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return fallback;
+  const channels = [0, 2, 4].map((at) => parseInt(clean.slice(at, at + 2), 16));
+  return channels.join(', ');
+}
+
 /** JSON.stringify handles quotes, backslashes and newlines correctly for us. */
 const str = (value: string): string => JSON.stringify(value);
 
@@ -3234,6 +3251,46 @@ function ruleActionLines(
       return handle === undefined ? [] : [`${handle}.play();`];
     }
 
+    // The five camera effects. `this` hardcoded rather than `ctx.receiver`, for
+    // `buildSoundLines`' reason: a rule only ever runs in a Scene's `create()`,
+    // never in a prefab factory, and `${ctx.receiver}` would read as though one
+    // could reach it. Every argument is emitted whole, defaults included — the
+    // camera prologue's call and the emitter config's, and here it is not even
+    // a choice: these are positional arguments with no chain to leave one out
+    // of. Nothing is gated, tabled or pre-passed, so a project with no camera
+    // action emits byte for byte what it emitted before.
+    case 'cameraShake':
+      return [`this.cameras.main.shake(${num(action.duration)}, ${num(action.intensity)});`];
+
+    case 'cameraFlash':
+      return [
+        `this.cameras.main.flash(${num(action.duration)}, ${rgbArgs(action.color, '255, 255, 255')});`,
+      ];
+
+    case 'cameraFade':
+      // Two Phaser methods rather than a `fade(..., force)` flag: `fadeIn` is
+      // how a scene comes *back* from a fade, and it is the same one verb the
+      // document says with a direction.
+      return [
+        `this.cameras.main.${action.fadeIn ? 'fadeIn' : 'fade'}(` +
+          `${num(action.duration)}, ${rgbArgs(action.color)});`,
+      ];
+
+    case 'cameraPan':
+      // `pan` moves the camera's midPoint, which is why the document's own
+      // `scrollX` is a top-left and these two are a centre. Named that way on
+      // the panel for the same reason.
+      return [
+        `this.cameras.main.pan(${num(action.x)}, ${num(action.y)}, ` +
+          `${num(action.duration)}, ${str(action.ease)});`,
+      ];
+
+    case 'cameraZoom':
+      return [
+        `this.cameras.main.zoomTo(${num(action.zoom)}, ${num(action.duration)}, ` +
+          `${str(action.ease)});`,
+      ];
+
     case 'setVar': {
       const key = ctx.variables.get(action.variableId)?.key;
       return key === undefined
@@ -3819,7 +3876,10 @@ function buildCreateBody(
  * scene boots, in every Phaser game there has ever been, at the size of the
  * game canvas. So a scene that scrolls, zooms or follows needs no config key
  * and no note — and the viewport it works against is the game's own size, which
- * is why the camera's rectangle is never stored beside the scene's.
+ * is why the camera's rectangle is never stored beside the scene's. A rule's
+ * `shake`, `flash`, `fade`, `pan` and `zoomTo` are methods on that same object,
+ * so they extend this entry rather than needing a seventh: the effects arrived
+ * in iteration 31 and the game config did not move by a key.
  *
  * And the same again for the keyboard the emitted `update()` reads.
  * `this.input.keyboard` is built by the Input Plugin for every game with a

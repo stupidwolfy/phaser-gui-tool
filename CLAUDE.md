@@ -81,6 +81,11 @@ of its own caption, with two dials for how a number reads, and an export that su
 `changedata-<key>` — a moment Phaser already delivers, so iteration 28's line does not move
 and `update()` still gains nothing. The second iteration running whose whole subject is a
 hole the previous one left, and the first since 27 to touch `EditorScene.ts` at all.
+Iteration 31 (shipped) let the camera do something at a moment: five rule actions — shake,
+flash, fade, pan and zoom — which is the refusal iteration 18 made arriving at the door
+iteration 28 built, with no new format, no new table, no new emitted helper and an
+`EditorScene.ts` untouched for the fourth time, because here the canvas's refusal to run a
+rule and the camera's "drawn, never applied" are the same refusal twice.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -3135,6 +3140,131 @@ follows. It is drawn on the canvas as a violet frame and exported as real
   view is what "drawn, never applied" rules out, and a "set the camera from my view" button
   is the same coupling written backwards.
 
+### Doing something at a moment: camera effects
+
+Iteration 31 closes the hole iteration 18 named and iteration 28 costed. A rule may now
+`shake`, `flash`, `fade`, `pan` and `zoomTo` the scene's camera. The argument is not new —
+it is iteration 18's refusal (*"every one is a thing the camera does over time, which is
+game logic and the `scene.start` argument"*) arriving at the door iteration 28 built, and
+the interest is entirely in what it cost, which was almost nothing.
+
+- **The line iteration 28 drew does not move, and that is the first thing to check.** An
+  effect is one more verb in a list run at a moment Phaser already delivers, so `update()`
+  **gains nothing** — which is exactly the test that paragraph set for itself: the first
+  thing polled is where the line falls, and nothing here is polled.
+- **Five kinds, not one `cameraEffect` with an `effect` field.** The union is already
+  discriminated on `kind` at the reader and at the emitter, so a second discriminant inside
+  one case would be a switch inside a switch for nothing. Fade carries a `fadeIn` boolean
+  rather than splitting in two, which is `setVisible`'s show/hide call: one verb, one
+  question.
+- **They are the first actions besides `restartScene` that name nothing the document
+  holds**, and every structural saving here follows from that one fact. No `nodeId`, no
+  `soundId`, no `sceneId`, no `variableId` — so `ruleNames`, `ruleUsesVariable` and the
+  store's `remapActionRefs`, all of which key off `'nodeId' in action` and its siblings,
+  inherit the right answer with **no edit at all**. On this file's checklists that reads
+  exactly like three forgotten steps, which is why it says so here.
+- **A consequence worth stating rather than discovering: a rule whose only action is an
+  effect appears in the scene's own list and on no object's panel.** `NodeRulesSection` is
+  built on `rulesNaming`, which is `ruleNames` filtered — and a camera effect is about no
+  object, so there is no object's panel for it to be on.
+- **Nothing here can ever cost the whole rule**, which is the first time that needs no
+  argument. `setVar` and a dangling variable cost the rule because *a variable is the one
+  thing a rule names that another rule reads*; an effect reaches nothing at all and every
+  field has a value to fall back to. So the whole block is **repair, never drop** —
+  `cameraOf`'s policy rather than `soundsOf`'s split, and `rulesOf`'s "a repair may narrow
+  what the document says, it may never widen it" is satisfied trivially, because there is
+  no gate here to open.
+- **Three of those repairs are silent-fallback traps this file has already paid for.** A
+  zoom of 0 becomes 1, because Phaser clamps it to 0.001 behind your back — `cameraOf`'s
+  own sentence, one module over. An unknown ease becomes `Linear`, because
+  `GetEaseFunction` resolves one to `Power0` and says nothing — `TWEEN_EASES`' whole reason
+  for existing. And a duration below `MIN_TIMER_DELAY` becomes the effect's own default,
+  because an effect given 0ms completes on the frame it starts and is one nobody sees,
+  which is indistinguishable from the action having done nothing.
+- **`intensity` is a fraction of the viewport, not a pixel count**, which is Phaser's unit
+  and the one number here a reader would guess wrong. The panel says so with a 0.01 step
+  and a ceiling of 1 rather than with a sentence there is no room for.
+- **`pan`'s two numbers are a *centre*, and the panel's labels say so.** `Camera.pan` moves
+  the camera's midPoint where `SceneCamera.scrollX` is its top-left — the distinction
+  `cameraViewOf` is built on, arriving on a control. A field reading "Camera X" would be
+  wrong by half a viewport with nothing saying so, and *that is also the exact label of the
+  scroll field a few sections up the same panel*, which `EditorPage.setCamera` drives. Two
+  independent reasons for the same word.
+- **`TWEEN_EASES` is reused and deliberately *not* renamed**, where `textColor` became
+  `hexOr` in the same change. The difference is the rule: a function whose *answer* widened
+  gets renamed (`clampFrame` → `resolveFrame`), and this constant's meaning did not change
+  — only who reads it. `Camera.pan` and `zoomTo` take `ease?: string | Function`, so the
+  allowlist is handed over unchanged.
+- **`EditorScene.ts` is untouched by this whole feature**, for the fourth time after Audio,
+  Rules and iteration 29 — and this is the strongest version of it, because two refusals
+  meet in one place. The canvas runs no rule. *And* the editor's `cameras.main` is the
+  **user's own view**, so a `pan` or a `zoomTo` run here would move where the user is
+  looking, which is precisely what "drawn, never applied" rules out, and a `fade` would
+  black out the canvas being edited. `hasMotionIn` records its **eighth** refusal, the one
+  a reader will expect to be wrong hardest of all.
+- **And nothing new is drawn for one.** The violet frame is the shot the scene *opens* on;
+  an effect is what happens afterwards, and a second frame showing where a pan ends would
+  be a camera in motion, which is the thing this canvas does not show.
+- **The emit is five one-line cases and no machinery whatsoever.** No gate, no table, no
+  `EmitContext` field, no `prepare` flag, no pre-pass, and — the one that matters — **no new
+  emitted helper**, because the identifier allocation warns that a new one must go last or
+  it shifts names the suite asserts by name. Nothing moved. A project with no camera action
+  emits byte for byte what it emitted before, because the case simply never fires.
+- **`this` is hardcoded rather than `ctx.receiver`**, `buildSoundLines`' reason: a rule only
+  ever runs in a Scene's `create()`, and `${ctx.receiver}` would read as though a prefab
+  factory could reach one.
+- **The arguments are emitted whole, defaults included**, and here that is not even a
+  choice the way it was for the emitter config and the physics body: these are positional
+  arguments with no chain to leave one out of.
+- **`rgbArgs` is the one new helper, and it is four lines beside `hexLiteral`.** Every
+  colour in this document is a hex string and `flash`/`fade` are the one pair of calls that
+  wants three channel numbers, so the split lives in one place rather than at two call
+  sites.
+- **`constructorFor` gains no case, so every step of this feature is silent except one** —
+  and that one is real: `ruleActionLines`' switch is **exhaustive with no `default`**, so
+  the five union members are a compile error there until they are written. It is the only
+  thing standing between a new action kind and an exporter quietly falling behind.
+- **`SCHEMA_VERSION` did not bump — the guides case, ninth time.** No new `NodeType`, and
+  the actions ride in on `scenes`, which `parseProject` passes through verbatim. One thing
+  worth stating rather than discovering, because it is the closest this gets to the
+  silent-data-loss half: a v14 build's `ruleActionsOf` drops an unknown kind through its
+  `default: break`, so a rule whose *only* action is an effect fails the empty-`do` check
+  and vanishes from **that build's emit**. The document still holds it, a re-save loses
+  nothing, and the rule is back the moment a current build opens the file. That is an old
+  build exporting less, not a file breaking. `rules.spec.ts` asserts the 14.
+- **The suite splits exactly where this feature's own argument says it must.**
+  `rules.spec.ts` carries the document, the panel, the emitted text and the one claim only
+  the near side can make — that a pan and a zoom move neither the editor's own zoom nor a
+  drawn object, and that the violet frame stays absent. That is the assertion that fails the
+  day anybody wires an effect into `EditorScene`. `export.spec.ts` carries the positive
+  runtime claim, because the editor runs none of it.
+- **A fade is the runtime instrument, and a flash is not.** A fade is monotonic and it
+  *stays*, where a flash is a race with the poll — "what frame is up at any instant", one
+  effect over. The zoom claim is an **extent**, because what is asserted is how big
+  something is drawn, and it is the claim a fade cannot make: an effect that painted over
+  the picture rather than acting on the camera would darken the canvas and never widen
+  anything on it.
+- **That zoom test needs a long ramp, and the reason is a trap rather than padding.**
+  `runExportedPage` already waits for the canvas and a frame, so a 200ms zoom is **over**
+  before the first screenshot comes back — both readings are of the finished state, the
+  ratio is 1.0, and it looks exactly like an effect that never ran. Four seconds is what
+  makes "before" mean before.
+- **The hostile project's effects are deliberately at rest**, which is `NO_MOTION`'s rule
+  one action over: they hang off the untriggered `tap` rule nothing in the suite presses,
+  so `export.spec.ts`' colour assertions never race a fade that is correct behaviour and is
+  not what those assertions are about. All five carry a non-default value in every field,
+  because their whole job there is the emitted calls' *shape* meeting
+  `Phaser.Cameras.Scene2D.Camera` under `tsc --strict` — and the fade is a `fadeIn`, since
+  `fade` is the branch every other fixture already emits.
+- **What stays refused.** **No `rotateTo`** — a rotating camera turns everything on screen,
+  the HUD the touch buttons draw included, and it is the one effect whose result cannot be
+  read off the document at all. **No `onComplete` and nothing that waits** — "fade out,
+  *then* change scene" is a sequence, which is `tweens.chain`'s refusal and iteration 28's
+  line verbatim; a rule fires at a moment and does not wait for an outcome. **No `force`
+  flag** — it says what to do about an effect already in flight, which is again a question
+  about a sequence. **Nothing reads whether an effect is running, and there is no
+  `resetFX`** — that is a rule about rules.
+
 
 ## The properties panel
 
@@ -3702,7 +3832,8 @@ tests/
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
   rules.spec.ts             a variable declared, a rule built and refused, a caption
-                            written — and a canvas that runs none of it
+                            written, a camera shaken — and a canvas that runs
+                            none of it, and does not move when the camera does
   labels.spec.ts            a caption that follows a variable, formatted, and a
                             binding that falls back when the variable is gone
   inspector.spec.ts         the properties panel's sections: closed by default,
@@ -4037,9 +4168,16 @@ names top-level scene nodes only, so a definition's children are unreachable, an
 would take later is a per-*instance* rule, which is the override model prefabs already refuse.
 **No tap on a group, an instance, a tilemap or an emitter** — the instance one is the loosening
 (the factory would `setSize` from `getBounds()` before returning); the other three are Phaser's
-limits or the document's rather than deferred work, and each is said in the panel. **No camera
-effects** — shake, flash, fade, pan and zoom were offered as part of this iteration and not
-taken, and they are a pure loosening: five actions and no format change. **Nothing pauses and
+limits or the document's rather than deferred work, and each is said in the panel. **Camera
+effects** were the third entry here and **shipped in iteration 31** — and this is the rare
+case where a prediction was right to the word: "a pure loosening: five actions and no format
+change" is exactly what it was, five union members, five reader cases, five panel cases and
+five one-line emits, with no table, no gate, no helper and no schema bump. What it did not
+name is the one thing that made it cheaper still, and it is the sentence worth carrying
+forward: these are the first actions that **name nothing the document holds**, so three
+reference-walking functions inherited the right answer with no edit and nothing in the
+reader can cost a rule. See "Doing something at a moment" above, including `rotateTo`,
+`onComplete` and `force`, which stayed refused. **Nothing pauses and
 nothing stops** — `timer{loop: false}` is the whole of "once", and a rule that switches another
 rule off is a rule about rules.
 
@@ -4192,7 +4330,12 @@ Cameras shipped in iteration 18 with five deliberate holes. **No second camera**
 which objects each one draws, and a minimap is two of those decisions rather than more of
 this one. **No rotation, fade, flash, shake, pan or `zoomTo`** — every one is a thing the
 camera does *over time*, which is game logic and the `scene.start` argument; the handle
-they would act on is `this.cameras.main`, which the user already has. **No follow offset
+they would act on is `this.cameras.main`, which the user already has. Four of those six
+**shipped in iteration 31**, and the sentence above is the reason rather than a thing it
+overturned: what changed is that iteration 28 gave the document somewhere to put game
+logic, so "a thing that happens at a moment" stopped being a thing with no home. `rotateTo`
+is the one that stayed refused on its own merits, and the sixth — see "Doing something at a
+moment" above. **No follow offset
 and no dead zone**, which are a pure loosening later: two numbers and a `setFollowOffset`,
 two more and a `setDeadzone`, with nothing about the format or the drawing that has to
 change first. **No camera gesture on the canvas** — see Cameras above for why a frame whose
