@@ -254,6 +254,46 @@ export interface EditorState {
    */
   previewMotion: boolean;
   setPreviewMotion: (previewMotion: boolean) => void;
+
+  /**
+   * Which sections of the inspector are open.
+   *
+   * Editor state, in the `lockAspect` / `snapEnabled` family — it is a
+   * preference about the panel, never a fact about the project, so it is not
+   * saved with the document, does not mark the file dirty and is not undoable.
+   * Unlike the rest of that family it *is* persisted, through `io/prefs.ts`: a
+   * panel the user has tidied should still be tidy after a reload, where
+   * whether the aspect lock is on is about the gesture in hand.
+   *
+   * Two fields rather than a set of what is open. `setAllSections` has to be
+   * able to say "everything, including sections that are not on screen right
+   * now and sections nobody has written yet", and a set cannot — it would have
+   * to enumerate every title in the file, which is a list that goes stale
+   * silently the next time one is added. So the default is a field of its own
+   * and an override is recorded only for a section the user has touched.
+   *
+   * Keyed by title, so a section stays as it was left across a selection change
+   * and across node types: opening "Appearance" once means it is open on the
+   * next sprite too, which is how anyone actually works. Every repeated title
+   * in the inspector is either a mutually exclusive `node.type` branch or an
+   * alternate empty state of one section, so no two can render at once.
+   */
+  sectionsOpenByDefault: boolean;
+  sectionOverrides: Record<string, boolean>;
+  toggleSection: (title: string) => void;
+  setAllSections: (open: boolean) => void;
+  /**
+   * Replaces the section state wholesale, for `main.tsx` to seed from storage
+   * before the first render.
+   *
+   * The store deliberately does not read or write localStorage itself: nothing
+   * in `core/` imports from `io/`, and adding the first such import to hold a
+   * panel preference would invert the one layering rule this codebase has. The
+   * composition root does the wiring, which is where a persistence decision
+   * belongs, and doing it before `render` is what keeps the panel from opening
+   * and then visibly snapping shut a frame later.
+   */
+  hydrateSections: (openByDefault: boolean, overrides: Record<string, boolean>) => void;
   /**
    * The tilemap the canvas is currently painting, or null.
    *
@@ -1733,6 +1773,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
     angleStep: DEFAULT_ANGLE_STEP,
     guidesVisible: true,
     previewMotion: false,
+    sectionsOpenByDefault: false,
+    sectionOverrides: {},
     paintingId: null,
     activeLayerId: null,
     brushTile: 0,
@@ -1757,6 +1799,23 @@ export const useEditorStore = create<EditorState>((set, get) => {
       }),
     setGuidesVisible: (guidesVisible) => set({ guidesVisible }),
     setPreviewMotion: (previewMotion) => set({ previewMotion }),
+
+    // An override is written for the section that was pressed and nothing else,
+    // so a later Expand-all still reaches every section this one does not name.
+    toggleSection: (title) =>
+      set((state) => {
+        const open = state.sectionOverrides[title] ?? state.sectionsOpenByDefault;
+        return { sectionOverrides: { ...state.sectionOverrides, [title]: !open } };
+      }),
+
+    // Clears the overrides rather than inverting them: "collapse everything"
+    // has to mean everything, including the sections this render has no way to
+    // name, which is what moving the *default* says and a set of titles cannot.
+    setAllSections: (open) =>
+      set({ sectionsOpenByDefault: open, sectionOverrides: {} }),
+
+    hydrateSections: (sectionsOpenByDefault, sectionOverrides) =>
+      set({ sectionsOpenByDefault, sectionOverrides }),
 
     setPainting: (paintingId) => set({ paintingId }),
     setActiveLayer: (activeLayerId) => set({ activeLayerId }),

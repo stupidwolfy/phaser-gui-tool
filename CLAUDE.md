@@ -138,7 +138,10 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
    case. Only the first is enforced: `createDisplayObject` assigns `object` and uses it
    after the switch, so a missing case is a definite-assignment error, while a missing
    `applyNode` case is **silent**. That makes three silent steps, not the two below.
-4. `src/ui/Inspector.tsx` — a properties section.
+4. `src/ui/Inspector.tsx` — a properties section, as a `<Section title=…>`. It needs
+   registering nowhere: the open/closed state is a default plus sparse overrides, so a
+   section nobody has touched simply follows the default. Keep it a flat peer of the
+   sections around it — see "The properties panel".
 5. `src/ui/SceneTree.tsx` — add to `ADDABLE`; add a `.tree__type[data-type=...]` colour
    chip in `src/styles/app.css`.
 6. `src/io/exportPhaser.ts` — a `constructorFor` case. That one *is* a compile error under
@@ -3133,6 +3136,96 @@ follows. It is drawn on the canvas as a violet frame and exported as real
   is the same coupling written backwards.
 
 
+## The properties panel
+
+Every section of the inspector is a disclosure — `src/ui/Section.tsx` — and they ship
+**closed**. It is the first iteration whose subject is the editor's own UI rather than what
+the document can say, and it exists because the panel had grown a section per iteration and
+never a way to put one away: a tilemap carrying a dynamic body renders eighteen at once,
+which on a phone is a 55vh sheet of unbroken scroll.
+
+- **Sections are flat peers. Nothing nests.** This is the decision the whole conversion
+  turns on and it is not the obvious one. `NodeInspector` used to render one
+  `SECTION_TITLE[node.type]` heading above the whole per-type block, so wrapping naively
+  would have buried a sprite's Sprite sheet, Animation and Appearance *inside* its Image
+  section — invisible while it is closed and two presses away while it is open. Each branch
+  therefore opens its own, `SnappingSection` closes before it renders `<GuidesSection/>`,
+  and `PhysicsSection` closes before `<NodeCollisionsSection/>` and `<ControlsSection/>`.
+  The last is also what gives `NodeCollisionsSection` one shape in both the places it
+  appears, since it already rendered flat inside `TilemapSection`.
+- **The state is editor state, and the first of its family that is persisted.** It sits in
+  the store beside `lockAspect`, `snapEnabled` and `previewMotion` — never in the document,
+  so it does not mark the file dirty and is not undoable — but unlike those it is written
+  to `io/prefs.ts`. The difference is what each is about: whether the aspect lock is on is
+  about the gesture in hand, while this is the shape of a workspace and should still be
+  there after a reload. `inspector.spec.ts` asserts a collapse does not move a saved byte.
+- **Two fields, not a set of open titles, and `setAllSections` is why.** Expand-all has to
+  reach sections that are not on screen when it is pressed *and* sections nobody has
+  written yet; a set could only ever name the ones that were rendered. So
+  `sectionsOpenByDefault` is a field of its own and `sectionOverrides` records only what
+  the user has touched. The payoff on the "Adding a Phaser object type" checklist is that a
+  new section needs **no registration anywhere** — which is the opposite of `PHYSICS_TYPES`
+  and `countAssetUses`, the lists that go stale silently. `inspector.spec.ts` asserts it by
+  pressing Expand-all with a rectangle selected and then checking a *tilemap's* Brush.
+- **Keyed by title**, so a section stays as it was left across a selection change and
+  across node types. Every repeated title in the file is either a mutually exclusive
+  `node.type` branch or an alternate empty state of one section, so no two can render at
+  once — checked, not assumed. Two consequences worth knowing: renaming a heading resets
+  that section for every existing user and leaves an inert orphan in the overrides map
+  (harmless, because the map is sparse — the second reason for that shape); and this file
+  renames labels often and for good reasons, so a heading is a **storage key** now.
+  `Particles` and `Particle` are one letter apart and are two of them.
+- **The head's title must stay its own text node.** `physics.spec.ts` asserts
+  `getByText('Physics', { exact: true })` has count 0 for a type that cannot carry a body.
+  A head rendering its title and chevron as one text node would match nothing and pass
+  vacuously for ever, so the chevron is a separate `aria-hidden` span — and
+  `inspector.spec.ts` carries the positive counterpart so the negative cannot rot.
+- **A head is a `button` whose accessible name is its title, which is a live locator
+  hazard.** `SECTION_TITLE` contains `Group`, `Text`, `Image`, `Panel` and `Tiles`, and
+  `multi-select.spec.ts` already clicks a button named exactly `Group`. It is safe only
+  because that click happens in `SelectionInspector`, which renders no per-type section.
+  The harness therefore reaches a head by `.section__head`, never by role — the "Centre in
+  scene ↔ matched the Scene tab" trap, one control type over.
+- **A closed body unmounts**, which is what `RuleCard` beside it already does. Hiding would
+  not have helped the suite anyway — Playwright refuses to click what it cannot see — and
+  unmounting is the cheaper half on a panel that can hold eighteen sections. The one thing
+  that would genuinely break: `NumberField` opens an undo transaction on focus and closes
+  it on blur, and unmounting a focused input fires **no blur**, which would strand
+  `txDepth` above zero and poison undo. Pressing the head moves focus first, so it holds —
+  a toggle driven from anywhere that does not move focus has to blur the panel itself.
+- **The suite reaches the panel by seeding the preference, not by a test-only branch.**
+  `EditorPage.open`'s init script writes the real `PREFS_KEY` (imported, never copied) with
+  `openByDefault: true` — the same state the panel's own Expand-all button produces. The
+  decisive argument is not the ninety-odd call sites it saves: `panel('inspect')` is a
+  *synchronous* locator factory and `openPanel()` returns immediately on desktop, so there
+  is no async seam to hang an expand step on — but more importantly several existing
+  assertions are **absence** assertions (`physics.spec.ts`'s `toHaveCount(0)`,
+  `behaviour.spec.ts`'s empty-state sentences), and a collapsed neighbour turns every one
+  of them into a statement that is true for the wrong reason. Seeding keeps the DOM the
+  suite sees identical to the one it was written against. The seed is skipped when a marker
+  key is present, because `addInitScript` re-runs on every navigation and a spec that only
+  cleared the key would find it seeded again after a reload —
+  `EditorPage.useShippedSectionDefaults` sets that marker, and `inspector.spec.ts` is its
+  one caller.
+- **`core/` still imports nothing from `io/`.** The store holds the state and knows nothing
+  about where it is kept; `main.tsx` hydrates it before `createRoot(...).render(...)` and
+  subscribes to persist. Hydrating in an effect instead would paint the panel closed and
+  snap it open a frame later, which is the flash this ordering exists to avoid.
+- **`.panel__section` is untouched and still has four owners** — `SceneTree`'s Scenes and
+  Prefabs, `Toolbar`'s File and Export to Phaser. Those are lists rather than panels of
+  controls and have nothing to collapse. `.section__head` deliberately reuses that rule's
+  exact voice (11px, `--text-dim`, uppercase, `0.08em`) so the panel sounds the same as it
+  did when these were bare labels; what changed is that it is now a control.
+- **One hairline between sections, and nothing else.** `.section + .section` gets a
+  `border-top` — no border *and* fill *and* shadow, which on a dark panel stacks into mud
+  and makes eighteen sections read as eighteen cards rather than one list. The stylesheet's
+  first `:focus-visible` lives here too, because a head is the one control standing between
+  a keyboard and every field in the panel.
+- **The particles "Stopped." hint moved.** It used to sit between the Sprite sheet heading
+  and Emission, which under the flat rule belongs to neither — it would have floated
+  between two collapsed bars. It is about the emitter as a whole, so it is in the per-type
+  section's lead-in now.
+
 ## Selection
 
 `selectedIds: string[]` is the selection, in the order it was picked; the **last** entry
@@ -3612,6 +3705,8 @@ tests/
                             written — and a canvas that runs none of it
   labels.spec.ts            a caption that follows a variable, formatted, and a
                             binding that falls back when the variable is gone
+  inspector.spec.ts         the properties panel's sections: closed by default,
+                            remembered, persisted, and never in the document
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
   camera.spec.ts            a camera drawn, clamped, followed, saved and exported
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting

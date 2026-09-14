@@ -316,6 +316,26 @@ select {
   text-transform: none;
 }
 
+/*
+ * The header's own controls, pushed together at the right.
+ *
+ * `.panel__header` is `space-between`, which reads correctly for two children
+ * and spreads three evenly — so the node inspector's header, which carries the
+ * section toggle *and* the delete button, would put the toggle in the middle of
+ * the row. `.panel__count` above already solves this the same way.
+ */
+.panel__tool {
+  margin-left: auto;
+}
+
+/*
+ * A section heading that is only a heading.
+ *
+ * The inspector's own headings are `.section__head` now — this belongs to the
+ * scene tree (Scenes, Prefabs) and the toolbar's File sheet (File, Export to
+ * Phaser), which are lists rather than panels of controls and have nothing to
+ * collapse.
+ */
 .panel__section {
   margin: 14px 0 6px;
   color: var(--text-dim);
@@ -323,6 +343,94 @@ select {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+
+/*
+ * One collapsible section of the inspector.
+ *
+ * The separation is a single hairline rule above the head and nothing else — no
+ * border-plus-fill-plus-shadow, which on a dark panel stacks into mud and makes
+ * eighteen sections read as eighteen boxes rather than one list. The head keeps
+ * `.panel__section`'s exact voice (11px, dim, uppercase, wide tracking) so the
+ * panel sounds the same as it did when these were bare labels; what changed is
+ * that it is now a control.
+ */
+.section + .section {
+  border-top: 1px solid var(--border);
+}
+
+.section__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  /* The same 44px every other touch target in this panel has. A section head is
+     the widest one here and also the one pressed most, so it is the last place
+     to save a few pixels. */
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  padding: 6px 4px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.section__head:hover,
+.section__head:active {
+  background: var(--bg-elevated);
+}
+
+/*
+ * The first focus ring in this stylesheet.
+ *
+ * Everything else here is either a field (which shows focus by recolouring its
+ * border) or a button nobody tabs to on a touch screen. A section head is the
+ * one control standing between the keyboard and every field in the panel, so
+ * it cannot be the UA default against this background.
+ */
+.section__head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.section.is-open .section__head {
+  color: var(--text);
+}
+
+.section__chevron {
+  margin-left: auto;
+}
+
+/* Rotated rather than swapped for a second glyph: one element that turns reads
+   as the same thing in two states, where two glyphs read as two. Guarded,
+   because the sheet's slide is the only other transition in this file and an
+   unguarded one here would be a new convention rather than a matching one. */
+@media (prefers-reduced-motion: no-preference) {
+  .section__chevron {
+    transition: transform 0.15s ease;
+  }
+}
+
+.section.is-open .section__chevron {
+  transform: rotate(90deg);
+}
+
+.section__body {
+  padding: 0 4px 10px;
+}
+
+/* `.hint` and `.empty` carry a 12px bottom margin, which would otherwise stack
+   with the body's padding into a visible gap above the next section's rule. */
+.section__body > :last-child {
+  margin-bottom: 0;
+}
+
+/* Sections are flat peers — nothing nests — so there is deliberately no
+   `.section .section` rule here. See `Section.tsx`. */
 
 /*
  * A subsection heading, one step in from `.panel__section`.
