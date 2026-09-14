@@ -75,7 +75,12 @@ merely animate the document, it destroys objects and starts other scenes. Iterat
 (shipped) let the game say what it counts: a variable may now hold text as well as a number,
 and a rule may set an object's text — with a variable's value on the end, which is how a
 score gets on screen. The first iteration whose whole subject is a hole the previous one
-left, and the third to leave `EditorScene.ts` untouched.
+left, and the third to leave `EditorScene.ts` untouched. Iteration 30 (shipped) let that
+label keep up: a text node now *names* the variable it shows and draws the value on the end
+of its own caption, with two dials for how a number reads, and an export that subscribes to
+`changedata-<key>` — a moment Phaser already delivers, so iteration 28's line does not move
+and `update()` still gains nothing. The second iteration running whose whole subject is a
+hole the previous one left, and the first since 27 to touch `EditorScene.ts` at all.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -2565,6 +2570,145 @@ a variable may hold **text**, and a rule may **set an object's text**.
   refusal that is not a wrong picture but a **compile error** in the emitted `.ts`, which only
   `export-toolchain.spec.ts` could find.
 
+### Showing one as it changes: live labels
+
+Iteration 30 closes the first hole iteration 29 left. A rule could put a score on screen and
+the score could then move with nothing on screen following it, because a caption written by
+`setText` is only right until the next `addVar` — so every rule that touched the number
+needed a caption beside it, in every scene, and a number changed from anywhere else went
+unshown. `TextProps.label?: VariableLabel` makes a label say what it *shows*, and the whole
+iteration is that one shift in subject: from *what happens at this moment* to *what this
+object reads*.
+
+- **The line iteration 28 drew does not move, and that is the first thing to check.**
+  `registry.events` emits `changedata-<key>` on its own, so a label is still a moment Phaser
+  already delivers and `update()` **gains nothing**. That is exactly the test that paragraph
+  set: a caption watched for would have been the first thing polled, and the first thing
+  polled is where the line falls. Nothing here is watched for.
+- **The node's existing `text` is the caption, and there is no second field.** `setText`'s
+  shape to the character: one value, on the end, named in a field of its own rather than a
+  `{score}` a parser would have to find. Two variables in one caption is an expression, which
+  is still the line this vocabulary does not cross.
+- **A field on the node rather than an action, and the difference is the whole feature.** The
+  question a label answers is "what does this object read", which is about the object; the
+  question `setText` answers is "what happens at this moment", which is about the rule. Both
+  now exist, and a project may use either — a rule's caption wins until the value next
+  changes, which is Phaser's ordering and is a thing the panel says rather than a combination
+  refused: the tween-versus-dynamic-body case, one type over.
+- **`labelOf(props, project)` is the only reader**, in the `guidesOf` / `tweenOf` / `soundsOf`
+  / `textStyleOf` family, and it answers three questions at once: is there a binding, does it
+  name a variable the project still holds, and are the two numbers ones `toFixed` and
+  `padStart` can be handed. A fresh object per call, so `useEditorStore((s) => labelOf(...))`
+  is React error #185 — the `tileMapOf` trap, twelfth time.
+- **A dangling variable reads as *absent*, where `rulesOf` costs a `setText` the whole rule.**
+  Both follow from the same sentence and they land in different places, which is worth saying
+  because the inconsistency is the point: *a repair may narrow what the document says and may
+  never widen it.* Dropping a rule's gate widens it; a label that stops appending a value says
+  strictly less than it said, and the caption underneath is a state that already has a code
+  path. `fontStackOf`'s "no font chosen, the font is gone, and an ordinary family are one
+  state", arriving for a fifth time.
+- **The clamp is not tidiness.** `toFixed` throws a `RangeError` outside 0..100, and that
+  throw happens inside the *player's* game — so a hand-edited `decimals: 999` would be a
+  document that crashes the export rather than one that draws something odd. `MIN_TIMER_DELAY`
+  in a different direction: there a repair stops a runaway, here it stops a throw.
+- **`decimals: -1` is off and `pad: 0` is off**, and the split is deliberate. Zero decimal
+  places is a real answer — it is what a score asks for — so the sentinel cannot be `0` there;
+  padding to no width says nothing, so it can be here. `wordWrapWidth: 0`'s call where it
+  works and an explicit `-1` where it does not.
+- **`pad` counts the whole formatted value, because that is what `padStart` counts**, and a
+  negative number keeps its sign and pads as written. A cleverer rule — pad the digits before
+  the point, move the sign out front — is the one thing this feature refuses on grounds of
+  *arithmetic*, and the reason is the next entry.
+- **`formatVariable` is the one builder in this codebase that genuinely has a copy.** The
+  generated game cannot import `src/core/schema.ts`, so the canvas runs that function and the
+  export runs a printed one — `cameraViewOf`'s "copies Phaser's arithmetic and has to stay
+  copied" arriving from the other side. The answer is to leave nothing to copy *wrongly*: two
+  whole calls, `toFixed` and `padStart`, one early return for a value that is not a number,
+  and no arithmetic of our own on either side. The first version of this had the editor pad a
+  text variable and the export not, which is precisely the disagreement the rule predicts, and
+  `labels.spec.ts` caught it on the first run.
+- **The same two dials went onto the `setText` action**, and that was the point of doing them
+  at all rather than a second feature bolted on. A rule writing `Score: 0007` beside a label
+  following the same variable to `Score: 7` is the one kind of failure a user cannot see until
+  the game is in their hand — `textStyleOf`'s two-consumer argument, on a pair of *outputs*
+  rather than a pair of readers.
+- **`ruleActionsOf` attaches the format only where it differs from the default**, which is not
+  cosmetic: the inspector edits that reader's output and writes it straight back, so carrying
+  `decimals: -1, pad: 0` unconditionally would put two keys into every `setText` in every
+  document the moment any other field on it was touched — and would move an export that should
+  not have moved. `rules.spec.ts` asserts the unformatted line byte for byte beside the
+  formatted one.
+- **`setNodeLabel` is a store action of its own, and `updateProps` genuinely could not do
+  it.** `updateProps` spreads a patch, so it can set a label and can never *remove* one:
+  `{ label: undefined }` leaves the key holding undefined, which survives in memory, vanishes
+  through `JSON.stringify`, and gives the document two spellings of "off". `setNodePhysics`,
+  `setNodeControls` and `setNodeTween` all `delete` for that reason and this joins them. The
+  second reason is that binding one has to *seed* a variable — `defaultTween`'s rule, that a
+  thing arrives already naming something — and a scene edit cannot see the project's table,
+  which is why this one action reaches through `editProject` where its three neighbours use
+  `editScene`.
+- **A label is legal inside a container and inside a prefab definition**, where a body, a
+  drive scheme and a rule's `nodeId` are all banned. Same test, opposite answer: those three
+  read world coordinates or name a binding the scene's own list has made, and a label writes
+  the object's *own* text. It is the tween's rule a second time, and it is why the emit goes
+  through `ctx.receiver` — `this` in a scene method, `scene` in a factory. The hostile
+  project's definition carries a labelled text child for exactly that, and without it the
+  emitted `.ts` would compile in one place and not the other.
+- **`removeVariable` strips every label naming it**, through `mapProjectNodes` rather than a
+  walk of the scenes, because a label inside a definition is the one nothing else could reach.
+  `removeAsset`'s rule — the document may never hold a dangling reference by any action in the
+  editor — so `labelOf`'s drop-on-read only ever fires on a file the editor did not write. The
+  two look redundant and are not: the reader is what keeps the canvas right, and the walk is
+  what keeps the *file* right.
+- **`setVariableKind` needed nothing at all**, which is `migrateRuleToKind`'s own sentence
+  about `setText` a second time: a label shows whatever the value is, which is the whole point
+  of it. Said out loud, because beside a function that migrates every condition and every
+  `setVar` in the project, not migrating a label reads exactly like a step that was missed.
+- **Two emitted helpers, not one, and the split is the `setText` action's doing.** A rule can
+  ask for a format without asking for a subscription, so the formatter is its own function and
+  the binder calls it — one formatting implementation in the generated file, two gates in
+  `prepare`. Both names come out of the module's identifier set last of all, thirteenth and
+  fourteenth, by the rule the tenth to twelfth already state: nothing above them moves, and
+  four of those are asserted by name in the suite.
+- **The binder draws once before it subscribes, and has to.** `initVariables` sets a key that
+  is absent, and Phaser's `DataManager` emits `setdata-<key>` for a first write and
+  `changedata-<key>` only for a later one — so a label that waited for the event would sit
+  showing its bare caption until the score first moved. That first call is also what makes
+  `constructorFor`'s `'text'` case need **no edit at all**: the object is built with its
+  caption and handed the whole string one line later.
+- **The handler takes no arguments and re-reads the registry**, rather than the
+  `(parent, value, previous)` the event carries. `buildKeyHelper`'s paragraph verbatim: Phaser
+  types `EventEmitter#on`'s second parameter as the bare `Function`, so a named parameter
+  there is an implicit `any` the exported `.ts` refuses. It also means the emitted file
+  depends on nothing about the event but its *name*.
+- **And it unsubscribes on SHUTDOWN, which the tween deliberately does not.** A Tween belongs
+  to the scene's own manager and dies with it; the registry belongs to the **game**, so a
+  scene that starts another and comes back would leave a listener holding a destroyed `Text`
+  and the next change to the score would throw — in the player's game, long after anything
+  points at that line. The `assetTextures` / `animationKeys` / `FontFace` bookkeeping rule,
+  in *emitted* code for the first time.
+- **The renderer draws the variable's starting value**, which is the document's own statement
+  about the frame the game opens on rather than a simulation — the camera frame's rule, and
+  the reason `hasMotionIn` records a seventh refusal: a label cannot change here, so there is
+  nothing for a ▶ to start or to stop. It is the first thing on this canvas whose content
+  comes out of a *project* table, and it is why this is the first iteration since 27 to touch
+  `EditorScene.ts`.
+- **`SCHEMA_VERSION` did not bump — the guides case, eighth time.** No new `NodeType`, so a
+  v14 `createDisplayObject` has a case for everything in the file. `props.label` rides in on
+  `scenes`, which `parseProject` passes through verbatim, **and on `prefabs.children`, which
+  `parsePrefabs` also passes through unvalidated**; the action's two fields ride in the same
+  way. An old build draws the plain caption, reads neither field, and carries both back out on
+  a re-save. Still contingent on `parseProject` not reconstructing scenes or prefab children
+  field by field, exactly as physics, cameras, behaviour, touch, Matter and tweens are.
+  `labels.spec.ts` asserts the 14 in the saved artefact.
+- **The suite's instrument is an extent, and every claim is "this draws wider than that".**
+  Text is one colour however much of it there is, so a centroid says nothing — `fonts.spec.ts`'
+  reading, here measuring the string rather than the face. The positive *runtime* claim cannot
+  live in `labels.spec.ts` at all and is in `export.spec.ts`, and it is a strictly stronger
+  claim than `setText`'s beside it: **nothing in that fixture writes the label's text**, a
+  looping timer adds to the variable, and the caption has to grow twice on its own — which is
+  the one thing a set-once emit cannot fake.
+
 ## Touch controls
 
 `NodeControls.touch` is a boolean beside `scheme`, and the exported game draws a D-pad and
@@ -3466,6 +3610,8 @@ tests/
                             the buttons a thumb will drive it with
   rules.spec.ts             a variable declared, a rule built and refused, a caption
                             written — and a canvas that runs none of it
+  labels.spec.ts            a caption that follows a variable, formatted, and a
+                            binding that falls back when the variable is gone
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
   camera.spec.ts            a camera drawn, clamped, followed, saved and exported
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
@@ -3750,18 +3896,29 @@ the half that carried all the risk: a kind is a thing every rule naming the vari
 agree with, so the work was four new refusals in `rulesOf` and a store action that migrates
 the document when a kind is switched — **strip on read, repair on write** — without which the
 refusals are a trap rather than a guard. The emit was mechanical, as predicted. Five holes
-left. **No template in a caption** — `Score: {score}` would be a syntax inside a field, so
+were left and **two of them closed in iteration 30** — see "Showing one as it changes" above,
+and read that prediction beside the work too, because this time it was right about the shape
+and wrong about where the cost fell. It said a following label "needs a field on the node
+rather than an action", which is exactly what `TextProps.label` is, and it said number
+formatting was "a field on the action and a pure loosening", which is exactly what two
+`NumberField`s are. What neither line names is the half the work actually went into: a format
+on the action and a format on the node are two ways of showing one number, so the emit had to
+grow **one printed formatter with two callers** rather than two call sites each printing their
+own arithmetic — and the first version of that formatter disagreed with the editor's copy
+about a text variable, which is the one disagreement this codebase has no reader to catch. The
+other surprise was the store: `updateProps` could set a label and could never remove one, so a
+feature whose document change is one optional field still needed an action of its own. Four
+holes left, one of which is now a remainder rather than a hole. **No template in a caption** — `Score: {score}` would be a syntax inside a field, so
 nothing parses the text and one variable goes on the end instead; two in one caption is an
 expression, which is the line this vocabulary does not cross, and the shape a loosening would
-take is a *list* of parts rather than a parser. **No number formatting** — no zero padding, no
-decimal places, no thousands separator: each is a field on the action and a pure loosening,
-and `"Score: " + 3` is what a hand-written line would have said anyway. **No label that
-follows a variable on its own** — a caption that updates whenever the score does is
-`registry.on('changedata-score')`, which *is* a moment Phaser delivers, so it is a genuine
-loosening rather than a refusal; what it needs is a field on the node rather than an action,
-and that is a different question from this one ("what does this label show" rather than "what
-happens at this moment"). **No text on a type that has no `setText`** — a `BitmapText` is the
-obvious second one and it does not exist yet; everything else in the union has no text at all,
+take is a *list* of parts rather than a parser. Note what iteration 30 did **not** make of
+this: a bound label appends one value to one caption, which is the same refusal said a second
+time from the node's side. **No thousands separator**, which is what is left of the formatting
+hole — zero padding and decimal places shipped, and a separator is the one of the three that
+is a *locale* rather than a number: `toLocaleString` takes a language tag, which is a field
+whose right answer depends on who is playing, and `padStart` and `toFixed` were chosen
+precisely because neither has an answer that varies. **No text on a type that has no
+`setText`** — a `BitmapText` is the obvious second one and it does not exist yet; everything else in the union has no text at all,
 which is Phaser's limit and is said in the panel. And **no concatenating two variables**,
 which is the expression tree again and is refused rather than deferred.
 

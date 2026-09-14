@@ -661,6 +661,22 @@ test.describe('the emit', () => {
     // A literal and one read, joined — never a template the emit assembles, and
     // never `setText(registry.get(k))`, which would hand `Text` a number.
     expect(exported).toContain('label.setText("Score: " + this.registry.get("score"));');
+    // And nothing else: a `setText` at its default format carries neither field
+    // and emits no formatter, so a caption written before iteration 30 exports
+    // byte for byte what it always did — the rule the asset table, the tilemap
+    // helper and the prefab factories all follow.
+    expect(exported).not.toContain('labelValue(');
+
+    await editor.setField('Rule 1 do 1 pad to width', 4);
+    exported = (await editor.exportCode('ts')).contents;
+    // Formatted, the read goes through the one printed formatter — the same one
+    // a bound label reads through, which is the whole reason the two fields are
+    // on both: a rule that writes `Score: 0007` and a label that follows the
+    // same variable to `Score: 7` is a disagreement nobody sees until the game
+    // is in their hand.
+    expect(exported).toContain(
+      'label.setText("Score: " + labelValue(this.registry.get("score"), -1, 4));',
+    );
   });
 
   test('a text variable is emitted quoted, and widens the helper it is read by', async ({

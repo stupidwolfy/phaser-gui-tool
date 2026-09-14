@@ -20,6 +20,7 @@ import {
   fontStackOf,
   frameGridOf,
   isDefaultCamera,
+  labelFormatOf,
   physicsOf,
   resolveFrame,
   rulesOf,
@@ -289,6 +290,34 @@ function emittedNodes(
   };
   walk(scene.children);
   return bodies;
+}
+
+/**
+ * Whether anything this export emits is a text node bound to a live variable.
+ *
+ * Through `emittedNodes` rather than a walk of `project.scenes`, which is
+ * `collectAssets`' and `collectAnimations`' route and for their reason: a
+ * labelled text node can sit inside a placed prefab definition, and a helper
+ * gate that missed one would emit the call and not the function it calls.
+ *
+ * The variable table is the same unfiltered `collectVariables` the emit reads,
+ * so a dangling label answers false here exactly as it emits nothing there — a
+ * helper is never carried into a file with nothing to call it.
+ */
+function collectLabels(
+  scenes: SceneDoc[],
+  prefabs: Map<string, UsedPrefab>,
+  variables: Map<string, UsedVariable>,
+): boolean {
+  const walk = (nodes: GameObjectNode[]): boolean =>
+    nodes.some(
+      (node) =>
+        (node.type === 'text' &&
+          node.props.label !== undefined &&
+          variables.has(node.props.label.variableId)) ||
+        walk(node.children),
+    );
+  return scenes.some((scene) => emittedNodes(scene, prefabs).some(walk));
 }
 
 /**
@@ -777,6 +806,107 @@ function buildMatterHitHelper(fn: string, language: SceneLanguage, indent: strin
     '        return;',
     '      }',
     '    }',
+    '  });',
+    '}',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * How one variable's value reads, wherever the file puts it on screen.
+ *
+ * The one printed formatter, read by a bound label and by a `setText` that asks
+ * for a format — so the two ways of showing a number cannot disagree about
+ * whether the score is `7` or `007`. That is `textStyleOf`'s two-consumer rule
+ * inside the emitted file rather than inside this one.
+ *
+ * It is also **the one builder in this codebase that genuinely has a copy**:
+ * the generated game cannot import `formatVariable` from `src/core/schema.ts`,
+ * so the editor's canvas runs that function and the exported game runs this
+ * text. `cameraViewOf`'s "copies Phaser's arithmetic and has to stay copied",
+ * arriving from the other side — and the answer to it is to leave nothing to
+ * copy wrongly: two whole calls, `toFixed` and `padStart`, with no arithmetic
+ * of our own and no sign handling to get right twice.
+ *
+ * `value` is `unknown` rather than `number | string`, because every call site
+ * hands it `registry.get`, which answers `any` — and `String(value)` is legal
+ * on `unknown` where `value.toFixed` would not be, which is what lets the
+ * non-number branch come first and narrow the rest with no cast. The shared
+ * `create()` body is plain JavaScript in all three outputs, so a cast is not
+ * available to it at all.
+ */
+function buildLabelValueHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(value: unknown, decimals: number, pad: number): string {`
+    : `function ${fn}(value, decimals, pad) {`;
+  const lines = [
+    signature,
+    // A variable holding text is shown as it is: these two dials are about a
+    // number, and padding a name to six characters is not a thing anyone asked
+    // for. `formatVariable` says the same in the editor.
+    "  if (typeof value !== 'number' || !Number.isFinite(value)) return String(value);",
+    '  const shown = decimals >= 0 ? value.toFixed(decimals) : String(value);',
+    "  return pad > 0 ? shown.padStart(pad, '0') : shown;",
+    '}',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * The one function a bound label follows its variable through.
+ *
+ * Three things in it are load-bearing and none is obvious.
+ *
+ * **It draws once before it subscribes**, because `initVariables` sets a key
+ * that is absent and Phaser's `DataManager` emits `setdata-<key>` for a first
+ * write and `changedata-<key>` only for a later one. A label that waited for
+ * the event would sit showing its bare caption until the score first moved.
+ * That first call is also what makes `constructorFor`'s `'text'` case need no
+ * edit at all — the object is built with its caption and given the whole string
+ * one line later.
+ *
+ * **The handler takes no arguments and re-reads the registry**, rather than
+ * taking the `(parent, value, previous)` the event carries. `buildKeyHelper`'s
+ * paragraph verbatim: Phaser types `EventEmitter#on`'s second parameter as the
+ * bare `Function`, which gives a named parameter no contextual typing and makes
+ * it an implicit `any` the exported `.ts` refuses. It also means the emitted
+ * file depends on nothing about the event but its *name*.
+ *
+ * **And it unsubscribes on shutdown, which the tween deliberately does not.**
+ * A Tween belongs to the scene's own manager and dies with it; the registry is
+ * the *game's*, and a scene that starts another and comes back would otherwise
+ * leave a listener holding a destroyed `Text` — so the next change to the score
+ * throws, in the player's game, long after anything points at this line. The
+ * `assetTextures` / `animationKeys` / `FontFace` bookkeeping rule, in emitted
+ * code for the first time.
+ */
+function buildBindLabelHelper(
+  fn: string,
+  valueFn: string,
+  language: SceneLanguage,
+  indent: string,
+): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(\n` +
+      '  scene: Phaser.Scene,\n' +
+      '  label: Phaser.GameObjects.Text,\n' +
+      '  key: string,\n' +
+      '  caption: string,\n' +
+      '  decimals: number,\n' +
+      '  pad: number,\n' +
+      '): void {'
+    : `function ${fn}(scene, label, key, caption, decimals, pad) {`;
+  const lines = [
+    ...signature.split('\n'),
+    '  const show = () => {',
+    `    label.setText(caption + ${valueFn}(scene.registry.get(key), decimals, pad));`,
+    '  };',
+    '  show();',
+    "  scene.registry.events.on('changedata-' + key, show);",
+    '  scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {',
+    "    scene.registry.events.off('changedata-' + key, show);",
     '  });',
     '}',
   ];
@@ -1943,6 +2073,14 @@ interface EmitContext {
   /** The Matter collision-pair helper a `collide` rule goes through. */
   matterHitFn: string;
   /**
+   * How a variable's value is formatted, for a bound label and for a `setText`
+   * that asks for a format alike — the one printed formatter, so the two ways of
+   * putting a number on screen cannot read differently.
+   */
+  labelValueFn: string;
+  /** What a bound label subscribes through, allocated like `tilemapFn`. */
+  bindLabelFn: string;
+  /**
    * What each scene's `super(...)` registers it as, by scene id.
    *
    * A `startScene` action names a scene the document holds and has to emit the
@@ -2466,6 +2604,34 @@ function emitNode(
     lines.push('});');
   }
 
+  // The label, after the tween and last in the node's own block, and the tween's
+  // paragraph applies to it word for word: its own statement rather than a link
+  // in the chain, inside the successful branch, and through `${ctx.receiver}` so
+  // that a labelled text node inside a prefab definition binds against the scene
+  // its factory was handed. A node that emitted no object never reaches this
+  // line, which is why `missingReason` needs no branch for one.
+  //
+  // Resolved through `ctx.variables` rather than through `labelOf`, and only
+  // because `collectVariables` is unfiltered over the whole project: the table
+  // holds every declared variable, so `get` answering `undefined` *is*
+  // `findVariable` answering `undefined`, and a dangling label falls back to the
+  // plain caption in the export exactly as it does on the canvas. The format is
+  // repaired by the reader's own `labelFormatOf`, so the two cannot drift.
+  //
+  // The three arguments are emitted whole, defaults included — the tween config's
+  // call and the body's, because a caption, a key and a format only mean
+  // anything beside each other.
+  if (node.type === 'text' && node.props.label) {
+    const labelled = ctx.variables.get(node.props.label.variableId);
+    if (labelled) {
+      const { decimals, pad } = labelFormatOf(node.props.label);
+      lines.push(
+        `${ctx.bindLabelFn}(${ctx.receiver}, ${id}, ${str(labelled.key)}, ` +
+          `${str(node.props.text)}, ${num(decimals)}, ${num(pad)});`,
+      );
+    }
+  }
+
   lines.push('');
 
   if (node.type === 'container' && node.children.length > 0) {
@@ -2573,6 +2739,8 @@ function buildFactories(
       ctx.keyFn,
       ctx.tapFn,
       ctx.matterHitFn,
+      ctx.labelValueFn,
+      ctx.bindLabelFn,
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
@@ -2820,6 +2988,8 @@ function buildUpdateBody(
     ctx.keyFn,
     ctx.tapFn,
     ctx.matterHitFn,
+    ctx.labelValueFn,
+    ctx.bindLabelFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
 
@@ -3016,10 +3186,21 @@ function ruleActionLines(
       // expression is two terms a reader can see the shape of. `registry.get`
       // answers `any`, so the concatenation needs no annotation in a body that
       // cannot carry one — the convenience the conditions already rest on.
+      // The formatter only when the action asks for one, so a `setText` written
+      // before iteration 30 emits the line it always emitted, character for
+      // character — the rule the asset table, the tilemap helper and the prefab
+      // factories all follow. And the same formatter a bound label goes
+      // through, which is the whole reason the two fields are on both.
+      const format = key === undefined ? null : labelFormatOf(action);
+      const formatted = format !== null && (format.decimals >= 0 || format.pad > 0);
+      const read = key === undefined ? '' : `this.registry.get(${str(key)})`;
       const value =
         key === undefined
           ? str(action.text)
-          : `${str(action.text)} + this.registry.get(${str(key)})`;
+          : formatted
+            ? `${str(action.text)} + ${ctx.labelValueFn}(${read}, ` +
+              `${num(format.decimals)}, ${num(format.pad)})`
+            : `${str(action.text)} + ${read}`;
       // `constructorFor`'s `'text'` case needed no edit for this, unlike
       // `playAnimation`'s (which widens an `Image` to a `Sprite`) and
       // `startTween`'s (which binds a handle): a `Text` is already a `Text`.
@@ -3252,6 +3433,8 @@ function buildCreateBody(
     ctx.keyFn,
     ctx.tapFn,
     ctx.matterHitFn,
+    ctx.labelValueFn,
+    ctx.bindLabelFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
   const lines: string[] = [
@@ -3727,6 +3910,15 @@ interface Emission {
   touch: boolean;
   /** Which rule helpers this file needs, each gated like every table above. */
   rules: { keys: boolean; taps: boolean; matterHits: boolean };
+  /**
+   * Whether anything binds a label, and whether anything formats a value.
+   *
+   * Two flags rather than one, because the `setText` action can ask for a format
+   * without asking for a subscription — so a project with a padded caption and
+   * no bound label carries the formatter and not the binder. Gated like every
+   * table above: a project that predates iteration 30 emits neither.
+   */
+  labels: { bind: boolean; value: boolean };
 }
 
 function prepare(project: Project): Emission {
@@ -3761,6 +3953,11 @@ function prepare(project: Project): Emission {
   const keyFn = toIdentifier('on key', moduleNames);
   const tapFn = toIdentifier('on tap', moduleNames);
   const matterHitFn = toIdentifier('on matter hit', moduleNames);
+  // And a thirteenth and fourteenth, last of all and in this order, by that
+  // same rule for the last time: every name above them keeps the suffix it had,
+  // which is what the specs asserting four of them by name depend on.
+  const labelValueFn = toIdentifier('label value', moduleNames);
+  const bindLabelFn = toIdentifier('bind label', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
@@ -3775,6 +3972,19 @@ function prepare(project: Project): Emission {
   const tilemaps = collectTilemaps(project, project.scenes, prefabs, assets);
   const current = activeScene(project);
   const worlds = project.scenes.map(physicsUsedIn);
+  const bound = collectLabels(project.scenes, prefabs, variables);
+  // A format on a `setText` with no variable is a dial on nothing, which
+  // `ruleActionsOf` already refuses to carry — so reading the action's two
+  // fields here cannot pick one up.
+  const formats = project.scenes.some((scene) =>
+    rulesOf(project, scene).some((rule) =>
+      rule.do.some((action) => {
+        if (action.kind !== 'setText' || action.variableId === undefined) return false;
+        const format = labelFormatOf(action);
+        return format.decimals >= 0 || format.pad > 0;
+      }),
+    ),
+  );
   return {
     scenes,
     ctx: {
@@ -3794,6 +4004,8 @@ function prepare(project: Project): Emission {
       keyFn,
       tapFn,
       matterHitFn,
+      labelValueFn,
+      bindLabelFn,
       variables,
       sceneKeys: new Map(scenes.map((entry) => [entry.scene.id, entry.key])),
       // Placeholders the per-scene context overwrites, exactly as `engine` is:
@@ -3822,6 +4034,7 @@ function prepare(project: Project): Emission {
     // rule the asset table, the tilemap helper, the prefab factories, the
     // emitted `update()` and the touch buttons all follow: a project that
     // predates a feature exports byte for byte what it always did.
+    labels: { bind: bound, value: bound || formats },
     rules: {
       keys: project.scenes.some((scene) =>
         rulesOf(project, scene).some((rule) => rule.when.kind === 'keyDown'),
@@ -3943,7 +4156,7 @@ ${created.body}
  * outputs cover the three real cases without overlapping.
  */
 export function generateScene(project: Project, language: SceneLanguage = 'ts'): string {
-  const { scenes, ctx, boot, physics, touch, rules } = prepare(project);
+  const { scenes, ctx, boot, physics, touch, rules, labels } = prepare(project);
 
   // A project with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
@@ -4010,13 +4223,21 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   const matterHitFn = rules.matterHits
     ? `\n${buildMatterHitHelper(ctx.matterHitFn, language, '')}\n`
     : '';
+  // Same rule once more, and two flags rather than one: a `setText` that asks
+  // for a format needs the formatter without needing the binder.
+  const labelValueFn = labels.value
+    ? `\n${buildLabelValueHelper(ctx.labelValueFn, language, '')}\n`
+    : '';
+  const bindLabelFn = labels.bind
+    ? `\n${buildBindLabelHelper(ctx.bindLabelFn, ctx.labelValueFn, language, '')}\n`
+    : '';
   const classes = scenes
     .map((entry) => buildSceneClass(project, entry, ctx, language, true))
     .join('\n\n');
 
   return `${header(project)}${physicsNote(physics.arcade)}
 import Phaser from 'phaser';
-${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${factories}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -4029,7 +4250,7 @@ export default ${boot.className};
  * the Phaser it was built for.
  */
 export function generateRunnableHtml(project: Project): string {
-  const { scenes, ctx, boot, physics, touch, rules } = prepare(project);
+  const { scenes, ctx, boot, physics, touch, rules, labels } = prepare(project);
   // phaserVersion comes from the project file, so it is not trustworthy input
   // for a URL. Anything that is not a plain version falls back to the version
   // this editor targets.
@@ -4081,6 +4302,12 @@ export function generateRunnableHtml(project: Project): string {
   const matterHitFn = rules.matterHits
     ? `${buildMatterHitHelper(ctx.matterHitFn, 'js', '      ')}\n\n`
     : '';
+  const labelValueFn = labels.value
+    ? `${buildLabelValueHelper(ctx.labelValueFn, 'js', '      ')}\n\n`
+    : '';
+  const bindLabelFn = labels.bind
+    ? `${buildBindLabelHelper(ctx.bindLabelFn, ctx.labelValueFn, 'js', '      ')}\n\n`
+    : '';
   const classes = scenes
     .map((entry) =>
       buildSceneClass(project, entry, ctx, 'js', false).replace(/^(?!$)/gm, '      '),
@@ -4112,7 +4339,7 @@ export function generateRunnableHtml(project: Project): string {
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

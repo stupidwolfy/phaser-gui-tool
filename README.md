@@ -122,6 +122,11 @@ on a desktop.
   a rule that sets an object's text can put a variable's value on the end of it — so a text
   object reading `Score: 0` in the editor reads `Score: 7` in the game. The editor leaves the
   text the document says, since only a running game can change it
+- **Keep the label up to date**: a text object can name a variable under *Shows variable* on
+  its own panel, and then follows it — the value goes on the end of what the object says, and
+  changes in the game whenever the number does, with no rule needed to rewrite it. *Decimal
+  places* and *Pad to width* say how the number reads, so a score shows `0007` rather than
+  `7`. The editor draws the value the variable starts at, which is the frame the game opens on
 - Duplicate, copy and paste objects, keeping their styling
 - Change draw order with the inspector's Arrange buttons, or by dragging rows in the
   scene tree (the first row is the object furthest back; inside a group, the same applies

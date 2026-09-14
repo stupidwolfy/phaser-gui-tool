@@ -1310,6 +1310,28 @@ export class EditorPage {
     await this.settle();
   }
 
+  // -- labels ----------------------------------------------------------------
+
+  /**
+   * Binds the selected text node's caption to a variable, or unbinds it.
+   *
+   * One control for both, because a label naming nothing is not a label — which
+   * is why there is no `clearLabel` beside this and no checkbox to find.
+   */
+  async setLabelVariable(name: string | null): Promise<void> {
+    await this.openPanel('inspect');
+    await this.setChoice('Shows variable', name ?? 'Nothing');
+    await this.settle();
+  }
+
+  /** Sets one or both of a bound label's format dials on the selected node. */
+  async setLabelFormat(format: { decimals?: number; pad?: number }): Promise<void> {
+    await this.openPanel('inspect');
+    if (format.decimals !== undefined) await this.setField('Decimal places', format.decimals);
+    if (format.pad !== undefined) await this.setField('Pad to width', format.pad);
+    await this.settle();
+  }
+
   // -- rules -----------------------------------------------------------------
 
   /** Adds a rule from the scene panel, and returns the name it arrived under. */
