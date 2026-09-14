@@ -73,6 +73,7 @@ import { AudioSection } from './AudioPicker';
 import { FontPicker } from './FontPicker';
 import { SolidPalette, TilePalette } from './TilePalette';
 import { AnimationEditor } from './AnimationEditor';
+import { Section, SectionsToggle } from './Section';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
 
 /**
@@ -113,6 +114,7 @@ function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
     <div className="panel">
       <div className="panel__header">
         <span>{nodes.length} objects</span>
+        <SectionsToggle />
         <button
           className="icon-btn icon-btn--danger"
           onClick={deleteSelection}
@@ -124,49 +126,51 @@ function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
 
       <p className="hint">Drag any one of them on the canvas to move them together.</p>
 
-      <div className="panel__section">Selection</div>
-      <div className="arrange-row">
-        <button className="btn btn--add" onClick={groupSelection}>
-          Group
+      <Section title="Selection">
+        <div className="arrange-row">
+          <button className="btn btn--add" onClick={groupSelection}>
+            Group
+          </button>
+          <button className="btn btn--add" onClick={duplicateSelection}>
+            Duplicate
+          </button>
+          <button className="btn btn--add" onClick={() => setSelectionVisible(!anyVisible)}>
+            {anyVisible ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        <button
+          className="btn btn--block"
+          disabled={nestsPrefab}
+          onClick={createPrefabFromSelection}
+          title={
+            nestsPrefab
+              ? 'A prefab cannot contain another prefab yet'
+              : 'Reuse these objects, linked, anywhere in the project'
+          }
+        >
+          Save as prefab
         </button>
-        <button className="btn btn--add" onClick={duplicateSelection}>
-          Duplicate
-        </button>
-        <button className="btn btn--add" onClick={() => setSelectionVisible(!anyVisible)}>
-          {anyVisible ? 'Hide' : 'Show'}
-        </button>
-      </div>
-      <button
-        className="btn btn--block"
-        disabled={nestsPrefab}
-        onClick={createPrefabFromSelection}
-        title={
-          nestsPrefab
-            ? 'A prefab cannot contain another prefab yet'
-            : 'Reuse these objects, linked, anywhere in the project'
-        }
-      >
-        Save as prefab
-      </button>
+      </Section>
 
       <AlignSection count={nodes.length} />
 
-      <div className="panel__section">Objects</div>
-      <ul className="tree">
-        {nodes.map((node) => (
-          <li key={node.id} className="tree__group">
-            <div className="tree__item">
-              {/* Tapping one drops back to editing just that object, which is
-                  the only way out of the multi panel that does not also mean
-                  losing the selection you have just built. */}
-              <button className="tree__label" onClick={() => select(node.id)}>
-                <span className="tree__type" data-type={node.type} />
-                <span className="tree__name">{node.name}</span>
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
+      <Section title="Objects">
+        <ul className="tree">
+          {nodes.map((node) => (
+            <li key={node.id} className="tree__group">
+              <div className="tree__item">
+                {/* Tapping one drops back to editing just that object, which is
+                    the only way out of the multi panel that does not also mean
+                    losing the selection you have just built. */}
+                <button className="tree__label" onClick={() => select(node.id)}>
+                  <span className="tree__type" data-type={node.type} />
+                  <span className="tree__name">{node.name}</span>
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Section>
     </div>
   );
 }
@@ -194,8 +198,7 @@ function AlignSection({ count }: { count: number }) {
   const canAlign = count >= 2;
 
   return (
-    <>
-      <div className="panel__section">Align</div>
+    <Section title="Align">
       <div className="align-grid">
         <button
           className="btn btn--add"
@@ -286,7 +289,7 @@ function AlignSection({ count }: { count: number }) {
           Centre in scene ↕
         </button>
       </div>
-    </>
+    </Section>
   );
 }
 
@@ -299,7 +302,10 @@ function SceneInspector() {
 
   return (
     <div className="panel">
-      <div className="panel__header">Scene</div>
+      <div className="panel__header">
+        <span>Scene</span>
+        <SectionsToggle />
+      </div>
       <p className="hint">Select an object to edit it.</p>
 
       <TextField
@@ -381,6 +387,12 @@ function SceneInspector() {
       <RulesSection />
 
       <SnappingSection />
+      {/* A peer of Snapping rather than a child of it, which is where it used to
+          render. Sections do not nest, and here that is more than a house rule:
+          the guides are saved with the document while the snapping toggles are
+          editor preferences, so burying the one inside the other would have put
+          a part of the project behind a panel setting. */}
+      <GuidesSection />
     </div>
   );
 }
@@ -417,8 +429,7 @@ function VariablesSection() {
   const keys = variableKeysOf(project);
 
   return (
-    <>
-      <div className="panel__section">Variables</div>
+    <Section title="Variables">
 
       {variables.length === 0 ? (
         <p className="hint">
@@ -503,10 +514,9 @@ function VariablesSection() {
         <code>this.registry.get(&apos;name&apos;)</code>, or show one to the player with a
         rule that sets an object&apos;s text.
       </p>
-    </>
+    </Section>
   );
 }
-
 
 /* -------------------------------------------------------------------------- */
 /*  Rules                                                                      */
@@ -595,8 +605,7 @@ function RulesSection() {
   const tappable = scene.children.filter((node) => canBeTapped(node.type));
 
   return (
-    <>
-      <div className="panel__section">Rules</div>
+    <Section title="Rules">
 
       {rules.length === 0 ? (
         <p className="hint">Nothing happens on its own yet.</p>
@@ -626,7 +635,7 @@ function RulesSection() {
         A rule is a moment, an optional check, and a list of things to do. The editor
         never runs one — press Export to play what they build.
       </p>
-    </>
+    </Section>
   );
 }
 
@@ -649,19 +658,17 @@ function NodeRulesSection({ node }: { node: GameObjectNode }) {
   // silently absent, which is the failure this file records twice.
   if (!topLevel) {
     return (
-      <>
-        <div className="panel__section">Rules</div>
+      <Section title="Rules">
         <p className="hint">
           Rules name objects at the top level of the scene. Drag this one out of its
           group to give it one.
         </p>
-      </>
+      </Section>
     );
   }
 
   return (
-    <>
-      <div className="panel__section">Rules</div>
+    <Section title="Rules">
 
       {rules.length === 0 ? (
         <p className="hint">Nothing happens to this object on its own yet.</p>
@@ -688,7 +695,7 @@ function NodeRulesSection({ node }: { node: GameObjectNode }) {
           one of those starts from another moment.
         </p>
       ) : null}
-    </>
+    </Section>
   );
 }
 
@@ -1393,8 +1400,7 @@ function CameraSection() {
   const targets = scene.children;
 
   return (
-    <>
-      <div className="panel__section">Camera</div>
+    <Section title="Camera">
       <div className="field-row">
         <NumberField
           label="Camera X"
@@ -1462,7 +1468,7 @@ function CameraSection() {
         group, not to the scene. Nothing here moves the editor's own view: pan
         and pinch as usual, and press ⤢ to see the whole scene again.
       </p>
-    </>
+    </Section>
   );
 }
 
@@ -1493,8 +1499,7 @@ function WorldSection() {
     updateScene({ physics: { ...gravity, ...patch } });
 
   return (
-    <>
-      <div className="panel__section">Physics world</div>
+    <Section title="Physics world">
       {/* First, above the gravity, because it decides what every field under it
           means — and because it is the one setting here that changes what the
           canvas draws. Labelled "Physics engine" rather than "Engine": the
@@ -1530,7 +1535,7 @@ function WorldSection() {
         and height, so an object set to collide with them stops at the frame you
         can see.
       </p>
-    </>
+    </Section>
   );
 }
 
@@ -1572,14 +1577,13 @@ function CollidersSection() {
   // control that says why it cannot beats one that is not there.
   if (scenePhysicsOf(scene).engine === 'matter') {
     return (
-      <>
-        <div className="panel__section">Collisions</div>
+      <Section title="Collisions">
         <p className="hint">
           This scene runs Matter, which collides every body with every other one
           on its own. There is nothing to pair up. Any rows made under Arcade
           are kept and come back if the scene is switched back.
         </p>
-      </>
+      </Section>
     );
   }
 
@@ -1593,22 +1597,20 @@ function CollidersSection() {
   if (candidates.length === 0) return null;
   if (candidates.length === 1) {
     return (
-      <>
-        <div className="panel__section">Collisions</div>
+      <Section title="Collisions">
         <p className="hint">
           Only one thing here can collide. Give a second object a body — or add
           a tilemap with solid tiles — and the pair can be made here or on
           either object's own panel.
         </p>
-      </>
+      </Section>
     );
   }
   const rows = collidersOf(scene);
   const options = candidates.map((node) => ({ value: node.id, label: node.name }));
 
   return (
-    <>
-      <div className="panel__section">Collisions</div>
+    <Section title="Collisions">
       {/* Every label is numbered, and that is not decoration: a second row puts
           a second field reading exactly "Collides" on the page, and the suite
           locates a field by its exact label — the trap the prefab buttons' "+ "
@@ -1669,7 +1671,7 @@ function CollidersSection() {
         Solid stops them; Overlap only reports the touch. What happens then is
         yours to write, on the collider the export hands back.
       </p>
-    </>
+    </Section>
   );
 }
 
@@ -1697,8 +1699,7 @@ function SnappingSection() {
   const setAngleStep = useEditorStore((s) => s.setAngleStep);
 
   return (
-    <>
-      <div className="panel__section">Snapping</div>
+    <Section title="Snapping">
       <CheckboxField label="Snap to objects" value={snapEnabled} onChange={setSnapEnabled} />
       <CheckboxField label="Snap to grid" value={gridEnabled} onChange={setGridEnabled} />
       <NumberField
@@ -1726,9 +1727,7 @@ function SnappingSection() {
         object turns it, agreeing with another object's angle or landing on the step the
         same way. These are editor settings: they are not saved with the project.
       </p>
-
-      <GuidesSection />
-    </>
+    </Section>
   );
 }
 
@@ -1754,8 +1753,7 @@ function GuidesSection() {
   const count = guides.length;
 
   return (
-    <>
-      <div className="panel__section">Guides</div>
+    <Section title="Guides">
       {/* At the centre rather than at 0: a guide on the scene's own edge lies
           under the frame and is half off-screen at the fit zoom, which is the
           same reason a new object does not land at the origin either. */}
@@ -1813,7 +1811,7 @@ function GuidesSection() {
         settings above, guides <em>are</em> saved with the project — turning them off hides
         them and stops objects agreeing with them, but does not delete them.
       </p>
-    </>
+    </Section>
   );
 }
 
@@ -1844,8 +1842,7 @@ function NodePrefabSection({ node }: { node: GameObjectNode }) {
   const replaceable = node.type === 'container' && prefabs.length > 0;
 
   return (
-    <>
-      <div className="panel__section">Prefab</div>
+    <Section title="Prefab">
       {nestsPrefab ? (
         <p className="hint">
           This group places a prefab of its own, and a prefab cannot contain another one
@@ -1878,7 +1875,7 @@ function NodePrefabSection({ node }: { node: GameObjectNode }) {
           )}
         </>
       )}
-    </>
+    </Section>
   );
 }
 
@@ -1911,7 +1908,7 @@ function InstanceSection({ node }: { node: GameObjectNode }) {
   const prefab = prefabs.find((entry) => entry.id === node.props.prefabId);
 
   return (
-    <>
+    <Section title={SECTION_TITLE.instance}>
       {prefab ? (
         <p className="hint">
           {uses === 1
@@ -1971,7 +1968,7 @@ function InstanceSection({ node }: { node: GameObjectNode }) {
           Delete prefab
         </button>
       )}
-    </>
+    </Section>
   );
 }
 
@@ -2032,8 +2029,7 @@ function ParentRow({ node }: { node: GameObjectNode }) {
   ];
 
   return (
-    <>
-      <div className="panel__section">Parent</div>
+    <Section title="Parent">
       <SelectField
         label="Group"
         value={parent?.id ?? SCENE_PARENT}
@@ -2043,7 +2039,7 @@ function ParentRow({ node }: { node: GameObjectNode }) {
       <button className="btn btn--add" onClick={groupSelection}>
         Wrap in a new group
       </button>
-    </>
+    </Section>
   );
 }
 
@@ -2066,8 +2062,7 @@ function ArrangeRow({ node }: { node: GameObjectNode }) {
   const move = (to: number) => reorderNode(node.id, to);
 
   return (
-    <>
-      <div className="panel__section">Arrange</div>
+    <Section title="Arrange">
       <div className="arrange-row">
         <button
           className="btn btn--add"
@@ -2109,7 +2104,7 @@ function ArrangeRow({ node }: { node: GameObjectNode }) {
           Duplicate
         </button>
       </div>
-    </>
+    </Section>
   );
 }
 
@@ -2201,81 +2196,85 @@ function NineSliceSection({
 
   return (
     <>
-      <AssetSummary assetId={node.props.assetId} kind="panel" />
-      <AssetPicker
-        selectedAssetId={node.props.assetId}
-        onPick={(assetId) => setProp({ assetId })}
-      />
+      <Section title={SECTION_TITLE.nineslice}>
+        <AssetSummary assetId={node.props.assetId} kind="panel" />
+        <AssetPicker
+          selectedAssetId={node.props.assetId}
+          onPick={(assetId) => setProp({ assetId })}
+        />
+      </Section>
 
       {node.props.assetId && (
-        <>
-          <div className="panel__section">Sprite sheet</div>
+        <Section title="Sprite sheet">
           <SheetSection assetId={node.props.assetId} />
           <FrameField node={node} />
-        </>
+        </Section>
       )}
 
-      <div className="panel__section">Size</div>
-      <div className="field-row">
-        <NumberField
-          label="Width"
-          value={node.props.width}
-          min={1}
-          onChange={(width) => setProp({ width })}
-        />
-        <NumberField
-          label="Height"
-          value={node.props.height}
-          min={1}
-          onChange={(height) => setProp({ height })}
-        />
-      </div>
+      <Section title="Size">
+        <div className="field-row">
+          <NumberField
+            label="Width"
+            value={node.props.width}
+            min={1}
+            onChange={(width) => setProp({ width })}
+          />
+          <NumberField
+            label="Height"
+            value={node.props.height}
+            min={1}
+            onChange={(height) => setProp({ height })}
+          />
+        </div>
+      </Section>
 
-      <div className="panel__section">Slices</div>
-      <p className="hint">
-        The corners keep their size at any width; only the edges and the middle
-        stretch. Leave Slice top and bottom at 0 for a bar that stretches
-        sideways only.
-      </p>
-      <div className="field-row">
-        <NumberField
-          label="Slice left"
-          value={node.props.left}
-          min={0}
-          onChange={(left) => setProp({ left })}
-        />
-        <NumberField
-          label="Slice right"
-          value={node.props.right}
-          min={0}
-          onChange={(right) => setProp({ right })}
-        />
-      </div>
-      <div className="field-row">
-        <NumberField
-          label="Slice top"
-          value={node.props.top}
-          min={0}
-          onChange={(top) => setProp({ top })}
-        />
-        <NumberField
-          label="Slice bottom"
-          value={node.props.bottom}
-          min={0}
-          onChange={(bottom) => setProp({ bottom })}
-        />
-      </div>
+      <Section title="Slices">
+        <p className="hint">
+          The corners keep their size at any width; only the edges and the middle
+          stretch. Leave Slice top and bottom at 0 for a bar that stretches
+          sideways only.
+        </p>
+        <div className="field-row">
+          <NumberField
+            label="Slice left"
+            value={node.props.left}
+            min={0}
+            onChange={(left) => setProp({ left })}
+          />
+          <NumberField
+            label="Slice right"
+            value={node.props.right}
+            min={0}
+            onChange={(right) => setProp({ right })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Slice top"
+            value={node.props.top}
+            min={0}
+            onChange={(top) => setProp({ top })}
+          />
+          <NumberField
+            label="Slice bottom"
+            value={node.props.bottom}
+            min={0}
+            onChange={(bottom) => setProp({ bottom })}
+          />
+        </div>
+      </Section>
 
-      <div className="panel__section">Appearance</div>
-      <ColorField label="Tint" value={node.props.tint} onChange={(tint) => setProp({ tint })} />
-      <NumberField
-        label="Alpha"
-        value={node.props.alpha}
-        step={0.05}
-        min={0}
-        max={1}
-        onChange={(alpha) => setProp({ alpha })}
-      />
+      <Section title="Appearance">
+        <ColorField label="Tint" value={node.props.tint} onChange={(tint) => setProp({ tint })} />
+        <NumberField
+          label="Alpha"
+          value={node.props.alpha}
+          step={0.05}
+          min={0}
+          max={1}
+          onChange={(alpha) => setProp({ alpha })}
+        />
+      </Section>
     </>
   );
 }
@@ -2300,78 +2299,82 @@ function TileSpriteSection({
 
   return (
     <>
-      <AssetSummary assetId={node.props.assetId} kind="tile" />
-      <AssetPicker
-        selectedAssetId={node.props.assetId}
-        onPick={(assetId) => setProp({ assetId })}
-      />
+      <Section title={SECTION_TITLE.tileSprite}>
+        <AssetSummary assetId={node.props.assetId} kind="tile" />
+        <AssetPicker
+          selectedAssetId={node.props.assetId}
+          onPick={(assetId) => setProp({ assetId })}
+        />
+      </Section>
 
       {node.props.assetId && (
-        <>
-          <div className="panel__section">Sprite sheet</div>
+        <Section title="Sprite sheet">
           <SheetSection assetId={node.props.assetId} />
           <FrameField node={node} />
-        </>
+        </Section>
       )}
 
-      <div className="panel__section">Size</div>
-      <div className="field-row">
-        <NumberField
-          label="Width"
-          value={node.props.width}
-          min={1}
-          onChange={(width) => setProp({ width })}
-        />
-        <NumberField
-          label="Height"
-          value={node.props.height}
-          min={1}
-          onChange={(height) => setProp({ height })}
-        />
-      </div>
+      <Section title="Size">
+        <div className="field-row">
+          <NumberField
+            label="Width"
+            value={node.props.width}
+            min={1}
+            onChange={(width) => setProp({ width })}
+          />
+          <NumberField
+            label="Height"
+            value={node.props.height}
+            min={1}
+            onChange={(height) => setProp({ height })}
+          />
+        </div>
+      </Section>
 
-      <div className="panel__section">Pattern</div>
-      <p className="hint">
-        The image repeats to fill the box. Tile offset scrolls it inside the
-        box; tile scale changes how big one repeat is.
-      </p>
-      <div className="field-row">
-        <NumberField
-          label="Tile offset X"
-          value={node.props.tilePositionX}
-          onChange={(tilePositionX) => setProp({ tilePositionX })}
-        />
-        <NumberField
-          label="Tile offset Y"
-          value={node.props.tilePositionY}
-          onChange={(tilePositionY) => setProp({ tilePositionY })}
-        />
-      </div>
-      <div className="field-row">
-        <NumberField
-          label="Tile scale X"
-          value={node.props.tileScaleX}
-          step={0.1}
-          onChange={(tileScaleX) => setProp({ tileScaleX })}
-        />
-        <NumberField
-          label="Tile scale Y"
-          value={node.props.tileScaleY}
-          step={0.1}
-          onChange={(tileScaleY) => setProp({ tileScaleY })}
-        />
-      </div>
+      <Section title="Pattern">
+        <p className="hint">
+          The image repeats to fill the box. Tile offset scrolls it inside the
+          box; tile scale changes how big one repeat is.
+        </p>
+        <div className="field-row">
+          <NumberField
+            label="Tile offset X"
+            value={node.props.tilePositionX}
+            onChange={(tilePositionX) => setProp({ tilePositionX })}
+          />
+          <NumberField
+            label="Tile offset Y"
+            value={node.props.tilePositionY}
+            onChange={(tilePositionY) => setProp({ tilePositionY })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Tile scale X"
+            value={node.props.tileScaleX}
+            step={0.1}
+            onChange={(tileScaleX) => setProp({ tileScaleX })}
+          />
+          <NumberField
+            label="Tile scale Y"
+            value={node.props.tileScaleY}
+            step={0.1}
+            onChange={(tileScaleY) => setProp({ tileScaleY })}
+          />
+        </div>
+      </Section>
 
-      <div className="panel__section">Appearance</div>
-      <ColorField label="Tint" value={node.props.tint} onChange={(tint) => setProp({ tint })} />
-      <NumberField
-        label="Alpha"
-        value={node.props.alpha}
-        step={0.05}
-        min={0}
-        max={1}
-        onChange={(alpha) => setProp({ alpha })}
-      />
+      <Section title="Appearance">
+        <ColorField label="Tint" value={node.props.tint} onChange={(tint) => setProp({ tint })} />
+        <NumberField
+          label="Alpha"
+          value={node.props.alpha}
+          step={0.05}
+          min={0}
+          max={1}
+          onChange={(alpha) => setProp({ alpha })}
+        />
+      </Section>
     </>
   );
 }
@@ -2407,194 +2410,198 @@ function TextSection({ node }: { node: Extract<GameObjectNode, { type: 'text' }>
 
   return (
     <>
-      <TextField
-        label="Content"
-        value={node.props.text}
-        onChange={(text) => setProp({ text })}
-      />
-
-      {/* The label goes with the words rather than under Paragraph or Stroke:
-          it is part of what this object *says*. One control for on/off and for
-          which variable, because a label naming nothing is not a label — the
-          `setText` action's picker, one panel over. */}
-      {project.variables.length === 0 ? (
-        <p className="hint">
-          Declare a variable in the Scene panel to have this text follow one — a score
-          on screen is a caption here and a number the game keeps there.
-        </p>
-      ) : (
-        <SelectField
-          label="Shows variable"
-          value={label?.variable.id ?? ''}
-          options={[
-            { value: '', label: 'Nothing' },
-            ...project.variables.map((variable) => ({
-              value: variable.id,
-              label: variable.name,
-            })),
-          ]}
-          onChange={(variableId) =>
-            setNodeLabel(node.id, variableId ? { variableId } : null)
-          }
+      <Section title={SECTION_TITLE.text}>
+        <TextField
+          label="Content"
+          value={node.props.text}
+          onChange={(text) => setProp({ text })}
         />
-      )}
-      {label !== null && variableKindOf(label.variable) === 'text' && (
-        <p className="hint">
-          The value goes on the end of the content above, and follows the variable while
-          the game runs — which is the difference between this and a rule that writes the
-          text once. A variable holding text is shown as it is, so there is nothing here
-          to format.
-        </p>
-      )}
-      {label !== null && variableKindOf(label.variable) === 'number' && (
-        <>
-          <div className="field-row">
-            <NumberField
-              label="Decimal places"
-              value={label.decimals}
-              min={RAW_DECIMALS}
-              max={MAX_DECIMALS}
-              onChange={(decimals) => setNodeLabel(node.id, { decimals })}
-            />
-            <NumberField
-              label="Pad to width"
-              value={label.pad}
-              min={0}
-              max={MAX_PAD}
-              onChange={(pad) => setNodeLabel(node.id, { pad })}
-            />
-          </div>
+
+        {/* The label goes with the words rather than under Paragraph or Stroke:
+            it is part of what this object *says*. One control for on/off and for
+            which variable, because a label naming nothing is not a label — the
+            `setText` action's picker, one panel over. */}
+        {project.variables.length === 0 ? (
           <p className="hint">
-            The value goes on the end of the content above, and follows the variable
-            while the game runs — which is the difference between this and a rule that
-            writes the text once. Decimal places −1 leaves the number as it is and a pad
-            of 0 is off. A rule that sets this object&apos;s text wins until the value
-            next changes.
+            Declare a variable in the Scene panel to have this text follow one — a score
+            on screen is a caption here and a number the game keeps there.
           </p>
-        </>
-      )}
-      <div className="field-row">
-        <NumberField
-          label="Font size"
-          value={node.props.fontSize}
-          min={1}
-          onChange={(fontSize) => setProp({ fontSize })}
-        />
-        <NumberField
-          label="Alpha"
-          value={node.props.alpha}
-          step={0.05}
-          min={0}
-          max={1}
-          onChange={(alpha) => setProp({ alpha })}
-        />
-      </div>
-      <ColorField
-        label="Text colour"
-        value={node.props.color}
-        onChange={(color) => setProp({ color })}
-      />
-      <TextField
-        label="Font family"
-        value={node.props.fontFamily}
-        onChange={(fontFamily) => setProp({ fontFamily })}
-      />
-      <FontPicker
-        fontFamily={node.props.fontFamily}
-        onPick={(fontFamily) => setProp({ fontFamily })}
-      />
-      <div className="field-row">
-        <CheckboxField
-          label="Bold"
-          value={node.props.bold}
-          onChange={(bold) => setProp({ bold })}
-        />
-        <CheckboxField
-          label="Italic"
-          value={node.props.italic}
-          onChange={(italic) => setProp({ italic })}
-        />
-      </div>
-
-      <div className="panel__section">Paragraph</div>
-      <p className="hint">
-        Wrap width 0 means the text runs on in one line. Align only shows itself
-        on text with more than one line — wrapped, or with a line break in it.
-      </p>
-      <div className="field-row">
-        <NumberField
-          label="Wrap width"
-          value={node.props.wordWrapWidth}
-          min={0}
-          onChange={(wordWrapWidth) => setProp({ wordWrapWidth })}
-        />
-        <SelectField
-          label="Align"
-          value={node.props.align}
-          options={[
-            { value: 'left', label: 'Left' },
-            { value: 'center', label: 'Centre' },
-            { value: 'right', label: 'Right' },
-          ]}
-          onChange={(align) => setProp({ align: align as TextProps['align'] })}
-        />
-      </div>
-      <div className="field-row">
-        <NumberField
-          label="Line spacing"
-          value={node.props.lineSpacing}
-          onChange={(lineSpacing) => setProp({ lineSpacing })}
-        />
-        <NumberField
-          label="Letter spacing"
-          value={node.props.letterSpacing}
-          onChange={(letterSpacing) => setProp({ letterSpacing })}
-        />
-      </div>
-
-      <div className="panel__section">Stroke and shadow</div>
-      <p className="hint">
-        A stroke draws only while its width is above zero. Room for both is
-        worked out from the numbers you set, so neither is clipped.
-      </p>
-      <div className="field-row">
+        ) : (
+          <SelectField
+            label="Shows variable"
+            value={label?.variable.id ?? ''}
+            options={[
+              { value: '', label: 'Nothing' },
+              ...project.variables.map((variable) => ({
+                value: variable.id,
+                label: variable.name,
+              })),
+            ]}
+            onChange={(variableId) =>
+              setNodeLabel(node.id, variableId ? { variableId } : null)
+            }
+          />
+        )}
+        {label !== null && variableKindOf(label.variable) === 'text' && (
+          <p className="hint">
+            The value goes on the end of the content above, and follows the variable while
+            the game runs — which is the difference between this and a rule that writes the
+            text once. A variable holding text is shown as it is, so there is nothing here
+            to format.
+          </p>
+        )}
+        {label !== null && variableKindOf(label.variable) === 'number' && (
+          <>
+            <div className="field-row">
+              <NumberField
+                label="Decimal places"
+                value={label.decimals}
+                min={RAW_DECIMALS}
+                max={MAX_DECIMALS}
+                onChange={(decimals) => setNodeLabel(node.id, { decimals })}
+              />
+              <NumberField
+                label="Pad to width"
+                value={label.pad}
+                min={0}
+                max={MAX_PAD}
+                onChange={(pad) => setNodeLabel(node.id, { pad })}
+              />
+            </div>
+            <p className="hint">
+              The value goes on the end of the content above, and follows the variable
+              while the game runs — which is the difference between this and a rule that
+              writes the text once. Decimal places −1 leaves the number as it is and a pad
+              of 0 is off. A rule that sets this object&apos;s text wins until the value
+              next changes.
+            </p>
+          </>
+        )}
+        <div className="field-row">
+          <NumberField
+            label="Font size"
+            value={node.props.fontSize}
+            min={1}
+            onChange={(fontSize) => setProp({ fontSize })}
+          />
+          <NumberField
+            label="Alpha"
+            value={node.props.alpha}
+            step={0.05}
+            min={0}
+            max={1}
+            onChange={(alpha) => setProp({ alpha })}
+          />
+        </div>
         <ColorField
-          label="Stroke colour"
-          value={node.props.strokeColor}
-          onChange={(strokeColor) => setProp({ strokeColor })}
+          label="Text colour"
+          value={node.props.color}
+          onChange={(color) => setProp({ color })}
         />
-        <NumberField
-          label="Stroke width"
-          value={node.props.strokeThickness}
-          min={0}
-          onChange={(strokeThickness) => setProp({ strokeThickness })}
+        <TextField
+          label="Font family"
+          value={node.props.fontFamily}
+          onChange={(fontFamily) => setProp({ fontFamily })}
         />
-      </div>
-      <div className="field-row">
-        <NumberField
-          label="Shadow X"
-          value={node.props.shadowOffsetX}
-          onChange={(shadowOffsetX) => setProp({ shadowOffsetX })}
+        <FontPicker
+          fontFamily={node.props.fontFamily}
+          onPick={(fontFamily) => setProp({ fontFamily })}
         />
-        <NumberField
-          label="Shadow Y"
-          value={node.props.shadowOffsetY}
-          onChange={(shadowOffsetY) => setProp({ shadowOffsetY })}
-        />
-      </div>
-      <div className="field-row">
-        <ColorField
-          label="Shadow colour"
-          value={node.props.shadowColor}
-          onChange={(shadowColor) => setProp({ shadowColor })}
-        />
-        <NumberField
-          label="Shadow blur"
-          value={node.props.shadowBlur}
-          min={0}
-          onChange={(shadowBlur) => setProp({ shadowBlur })}
-        />
-      </div>
+        <div className="field-row">
+          <CheckboxField
+            label="Bold"
+            value={node.props.bold}
+            onChange={(bold) => setProp({ bold })}
+          />
+          <CheckboxField
+            label="Italic"
+            value={node.props.italic}
+            onChange={(italic) => setProp({ italic })}
+          />
+        </div>
+      </Section>
+
+      <Section title="Paragraph">
+        <p className="hint">
+          Wrap width 0 means the text runs on in one line. Align only shows itself
+          on text with more than one line — wrapped, or with a line break in it.
+        </p>
+        <div className="field-row">
+          <NumberField
+            label="Wrap width"
+            value={node.props.wordWrapWidth}
+            min={0}
+            onChange={(wordWrapWidth) => setProp({ wordWrapWidth })}
+          />
+          <SelectField
+            label="Align"
+            value={node.props.align}
+            options={[
+              { value: 'left', label: 'Left' },
+              { value: 'center', label: 'Centre' },
+              { value: 'right', label: 'Right' },
+            ]}
+            onChange={(align) => setProp({ align: align as TextProps['align'] })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Line spacing"
+            value={node.props.lineSpacing}
+            onChange={(lineSpacing) => setProp({ lineSpacing })}
+          />
+          <NumberField
+            label="Letter spacing"
+            value={node.props.letterSpacing}
+            onChange={(letterSpacing) => setProp({ letterSpacing })}
+          />
+        </div>
+      </Section>
+
+      <Section title="Stroke and shadow">
+        <p className="hint">
+          A stroke draws only while its width is above zero. Room for both is
+          worked out from the numbers you set, so neither is clipped.
+        </p>
+        <div className="field-row">
+          <ColorField
+            label="Stroke colour"
+            value={node.props.strokeColor}
+            onChange={(strokeColor) => setProp({ strokeColor })}
+          />
+          <NumberField
+            label="Stroke width"
+            value={node.props.strokeThickness}
+            min={0}
+            onChange={(strokeThickness) => setProp({ strokeThickness })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Shadow X"
+            value={node.props.shadowOffsetX}
+            onChange={(shadowOffsetX) => setProp({ shadowOffsetX })}
+          />
+          <NumberField
+            label="Shadow Y"
+            value={node.props.shadowOffsetY}
+            onChange={(shadowOffsetY) => setProp({ shadowOffsetY })}
+          />
+        </div>
+        <div className="field-row">
+          <ColorField
+            label="Shadow colour"
+            value={node.props.shadowColor}
+            onChange={(shadowColor) => setProp({ shadowColor })}
+          />
+          <NumberField
+            label="Shadow blur"
+            value={node.props.shadowBlur}
+            min={0}
+            onChange={(shadowBlur) => setProp({ shadowBlur })}
+          />
+        </div>
+      </Section>
     </>
   );
 }
@@ -2622,20 +2629,18 @@ function ParticlesSection({
 
   return (
     <>
-      <AssetSummary assetId={node.props.assetId} kind="particle" />
-      <AssetPicker
-        selectedAssetId={node.props.assetId}
-        onPick={(assetId) => setProp({ assetId })}
-      />
+      <Section title={SECTION_TITLE.particles}>
+        <AssetSummary assetId={node.props.assetId} kind="particle" />
+        <AssetPicker
+          selectedAssetId={node.props.assetId}
+          onPick={(assetId) => setProp({ assetId })}
+        />
+      </Section>
 
-      {node.props.assetId && (
-        <>
-          <div className="panel__section">Sprite sheet</div>
-          <SheetSection assetId={node.props.assetId} />
-          <FrameField node={node} />
-        </>
-      )}
-
+      {/* Moved up here from between the sheet and Emission when the sections
+          became collapsible: it is about the emitter as a whole rather than
+          about any one of them, and left where it was it would have floated
+          between two collapsed bars, belonging to neither. */}
       {!previewMotion && (
         <p className="hint">
           Stopped. Press ▶ in the toolbar to watch it run — the canvas holds
@@ -2643,136 +2648,146 @@ function ParticlesSection({
         </p>
       )}
 
-      <div className="panel__section">Emission</div>
-      <NumberField
-        label="Lifespan"
-        value={node.props.lifespan}
-        min={1}
-        step={50}
-        onChange={(lifespan) => setProp({ lifespan })}
-      />
-      <div className="field-row">
+      {node.props.assetId && (
+        <Section title="Sprite sheet">
+          <SheetSection assetId={node.props.assetId} />
+          <FrameField node={node} />
+        </Section>
+      )}
+
+      <Section title="Emission">
         <NumberField
-          label="Quantity"
-          value={node.props.quantity}
+          label="Lifespan"
+          value={node.props.lifespan}
           min={1}
-          step={1}
-          onChange={(quantity) => setProp({ quantity })}
+          step={50}
+          onChange={(lifespan) => setProp({ lifespan })}
         />
-        <NumberField
-          label="Frequency"
-          value={node.props.frequency}
-          min={0}
-          step={10}
-          onChange={(frequency) => setProp({ frequency })}
-        />
-      </div>
-      <div className="field-row">
-        <NumberField
-          label="Speed min"
-          value={node.props.speedMin}
-          step={10}
-          onChange={(speedMin) => setProp({ speedMin })}
-        />
-        <NumberField
-          label="Speed max"
-          value={node.props.speedMax}
-          step={10}
-          onChange={(speedMax) => setProp({ speedMax })}
-        />
-      </div>
-      <div className="field-row">
-        <NumberField
-          label="Angle min"
-          value={node.props.angleMin}
-          step={5}
-          onChange={(angleMin) => setProp({ angleMin })}
-        />
-        <NumberField
-          label="Angle max"
-          value={node.props.angleMax}
-          step={5}
-          onChange={(angleMax) => setProp({ angleMax })}
-        />
-      </div>
-      <div className="field-row">
-        <NumberField
-          label="Gravity X"
-          value={node.props.gravityX}
-          step={10}
-          onChange={(gravityX) => setProp({ gravityX })}
-        />
-        <NumberField
-          label="Gravity Y"
-          value={node.props.gravityY}
-          step={10}
-          onChange={(gravityY) => setProp({ gravityY })}
-        />
-      </div>
+        <div className="field-row">
+          <NumberField
+            label="Quantity"
+            value={node.props.quantity}
+            min={1}
+            step={1}
+            onChange={(quantity) => setProp({ quantity })}
+          />
+          <NumberField
+            label="Frequency"
+            value={node.props.frequency}
+            min={0}
+            step={10}
+            onChange={(frequency) => setProp({ frequency })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Speed min"
+            value={node.props.speedMin}
+            step={10}
+            onChange={(speedMin) => setProp({ speedMin })}
+          />
+          <NumberField
+            label="Speed max"
+            value={node.props.speedMax}
+            step={10}
+            onChange={(speedMax) => setProp({ speedMax })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Angle min"
+            value={node.props.angleMin}
+            step={5}
+            onChange={(angleMin) => setProp({ angleMin })}
+          />
+          <NumberField
+            label="Angle max"
+            value={node.props.angleMax}
+            step={5}
+            onChange={(angleMax) => setProp({ angleMax })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Gravity X"
+            value={node.props.gravityX}
+            step={10}
+            onChange={(gravityX) => setProp({ gravityX })}
+          />
+          <NumberField
+            label="Gravity Y"
+            value={node.props.gravityY}
+            step={10}
+            onChange={(gravityY) => setProp({ gravityY })}
+          />
+        </div>
+      </Section>
 
-      <div className="panel__section">Particle</div>
-      {/* Phaser's own names, and deliberately not "Scale"/"Alpha": the
-          transform's Scale X/Y and the object's own Alpha are a few rows up
-          this same panel, and two fields differing by one word is ambiguous to
-          a reader and to a test locator alike. */}
-      <div className="field-row">
-        <NumberField
-          label="Scale start"
-          value={node.props.scaleStart}
-          step={0.1}
-          min={0}
-          onChange={(scaleStart) => setProp({ scaleStart })}
+      <Section title="Particle">
+        {/* Phaser's own names, and deliberately not "Scale"/"Alpha": the
+            transform's Scale X/Y and the object's own Alpha are a few rows up
+            this same panel, and two fields differing by one word is ambiguous to
+            a reader and to a test locator alike. */}
+        <div className="field-row">
+          <NumberField
+            label="Scale start"
+            value={node.props.scaleStart}
+            step={0.1}
+            min={0}
+            onChange={(scaleStart) => setProp({ scaleStart })}
+          />
+          <NumberField
+            label="Scale end"
+            value={node.props.scaleEnd}
+            step={0.1}
+            min={0}
+            onChange={(scaleEnd) => setProp({ scaleEnd })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Alpha start"
+            value={node.props.alphaStart}
+            step={0.05}
+            min={0}
+            max={1}
+            onChange={(alphaStart) => setProp({ alphaStart })}
+          />
+          <NumberField
+            label="Alpha end"
+            value={node.props.alphaEnd}
+            step={0.05}
+            min={0}
+            max={1}
+            onChange={(alphaEnd) => setProp({ alphaEnd })}
+          />
+        </div>
+        <ColorField
+          label="Tint"
+          value={node.props.tint}
+          onChange={(tint) => setProp({ tint })}
         />
-        <NumberField
-          label="Scale end"
-          value={node.props.scaleEnd}
-          step={0.1}
-          min={0}
-          onChange={(scaleEnd) => setProp({ scaleEnd })}
+        <SelectField
+          label="Blend"
+          value={node.props.blendMode}
+          options={[
+            { value: 'NORMAL', label: 'Normal' },
+            { value: 'ADD', label: 'Add' },
+          ]}
+          onChange={(blendMode) => setProp({ blendMode: blendMode as 'NORMAL' | 'ADD' })}
         />
-      </div>
-      <div className="field-row">
+      </Section>
+
+      <Section title="Appearance">
         <NumberField
-          label="Alpha start"
-          value={node.props.alphaStart}
+          label="Alpha"
+          value={node.props.alpha}
           step={0.05}
           min={0}
           max={1}
-          onChange={(alphaStart) => setProp({ alphaStart })}
+          onChange={(alpha) => setProp({ alpha })}
         />
-        <NumberField
-          label="Alpha end"
-          value={node.props.alphaEnd}
-          step={0.05}
-          min={0}
-          max={1}
-          onChange={(alphaEnd) => setProp({ alphaEnd })}
-        />
-      </div>
-      <ColorField
-        label="Tint"
-        value={node.props.tint}
-        onChange={(tint) => setProp({ tint })}
-      />
-      <SelectField
-        label="Blend"
-        value={node.props.blendMode}
-        options={[
-          { value: 'NORMAL', label: 'Normal' },
-          { value: 'ADD', label: 'Add' },
-        ]}
-        onChange={(blendMode) => setProp({ blendMode: blendMode as 'NORMAL' | 'ADD' })}
-      />
-
-      <div className="panel__section">Appearance</div>
-      <NumberField
-        label="Alpha"
-        value={node.props.alpha}
-        step={0.05}
-        min={0}
-        max={1}
-        onChange={(alpha) => setProp({ alpha })}
-      />
+      </Section>
     </>
   );
 }
@@ -2903,80 +2918,85 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
 
   return (
     <>
-      <AssetSummary assetId={node.props.assetId} kind="tileset" />
-      <AssetPicker
-        selectedAssetId={node.props.assetId}
-        onPick={(assetId) => updateProps(node.id, { assetId })}
-      />
+      <Section title={SECTION_TITLE.tilemap}>
+        <AssetSummary assetId={node.props.assetId} kind="tileset" />
+        <AssetPicker
+          selectedAssetId={node.props.assetId}
+          onPick={(assetId) => updateProps(node.id, { assetId })}
+        />
+      </Section>
 
       {node.props.assetId && (
-        <>
-          <div className="panel__section">Tileset</div>
+        <Section title="Tileset">
           <SheetSection assetId={node.props.assetId} />
-        </>
+        </Section>
       )}
 
-      <div className="panel__section">Grid</div>
-      <div className="field-row">
-        <NumberField
-          label="Columns"
-          value={node.props.columns}
-          min={1}
-          onChange={(columns) => resizeTilemap(node.id, columns, node.props.rows)}
-        />
-        <NumberField
-          label="Rows"
-          value={node.props.rows}
-          min={1}
-          onChange={(rows) => resizeTilemap(node.id, node.props.columns, rows)}
-        />
-      </div>
-      <p className="hint">
-        {map.columns}×{map.rows} tiles of {map.tileWidth}×{map.tileHeight}px —{' '}
-        {map.columns * map.tileWidth}×{map.rows * map.tileHeight} before scaling. The tile
-        size is the tileset's frame size.
-      </p>
+      <Section title="Grid">
+        <div className="field-row">
+          <NumberField
+            label="Columns"
+            value={node.props.columns}
+            min={1}
+            onChange={(columns) => resizeTilemap(node.id, columns, node.props.rows)}
+          />
+          <NumberField
+            label="Rows"
+            value={node.props.rows}
+            min={1}
+            onChange={(rows) => resizeTilemap(node.id, node.props.columns, rows)}
+          />
+        </div>
+        <p className="hint">
+          {map.columns}×{map.rows} tiles of {map.tileWidth}×{map.tileHeight}px —{' '}
+          {map.columns * map.tileWidth}×{map.rows * map.tileHeight} before scaling. The tile
+          size is the tileset's frame size.
+        </p>
+      </Section>
 
-      <div className="panel__section">Layers</div>
-      <LayerList nodeId={node.id} map={map} />
+      <Section title="Layers">
+        <LayerList nodeId={node.id} map={map} />
+      </Section>
 
-      <div className="panel__section">Brush</div>
-      <TilePalette assetId={node.props.assetId} />
-      <p className="hint">Painting on {layer.name}.</p>
+      <Section title="Brush">
+        <TilePalette assetId={node.props.assetId} />
+        <p className="hint">Painting on {layer.name}.</p>
 
-      {/* Toggling rather than only entering: the bar over the canvas has the ✓
-          that leaves, but on a desktop the button that turned the mode on is
-          where a user looks to turn it off again. */}
-      <button
-        className={`btn btn--block ${painting ? 'is-active' : ''}`}
-        onClick={() => setPainting(painting ? null : node.id)}
-        aria-pressed={painting}
-      >
-        {painting ? 'Done painting' : 'Edit tiles'}
-      </button>
-      <button
-        className="btn btn--block"
-        onClick={() => fillTiles(node.id, layer.id, erasing ? EMPTY_TILE : brushTile)}
-      >
-        {erasing ? 'Clear every tile' : 'Fill with this tile'}
-      </button>
+        {/* Toggling rather than only entering: the bar over the canvas has the ✓
+            that leaves, but on a desktop the button that turned the mode on is
+            where a user looks to turn it off again. */}
+        <button
+          className={`btn btn--block ${painting ? 'is-active' : ''}`}
+          onClick={() => setPainting(painting ? null : node.id)}
+          aria-pressed={painting}
+        >
+          {painting ? 'Done painting' : 'Edit tiles'}
+        </button>
+        <button
+          className="btn btn--block"
+          onClick={() => fillTiles(node.id, layer.id, erasing ? EMPTY_TILE : brushTile)}
+        >
+          {erasing ? 'Clear every tile' : 'Fill with this tile'}
+        </button>
+      </Section>
 
       {/* "Collision", not "Physics": a tilemap carries no Arcade body — its
           collision is `setCollision([...])`, which is about which *tiles* are
           solid rather than about a box round the layer. Naming it Physics would
           say the map has the thing it deliberately has not got. */}
-      <div className="panel__section">Collision</div>
-      <SolidPalette
-        nodeId={node.id}
-        layerId={layer.id}
-        assetId={node.props.assetId}
-        collides={layer.collides}
-      />
-      <p className="hint">
-        {layer.collides.length > 0
-          ? 'Solid tiles are outlined green while you paint. They stop nothing until this map is told what to collide with, below.'
-          : 'Pick the tiles that should stop things — walls, floors. They stop nothing until this map is told what to collide with, below.'}
-      </p>
+      <Section title="Collision">
+        <SolidPalette
+          nodeId={node.id}
+          layerId={layer.id}
+          assetId={node.props.assetId}
+          collides={layer.collides}
+        />
+        <p className="hint">
+          {layer.collides.length > 0
+            ? 'Solid tiles are outlined green while you paint. They stop nothing until this map is told what to collide with, below.'
+            : 'Pick the tiles that should stop things — walls, floors. They stop nothing until this map is told what to collide with, below.'}
+        </p>
+      </Section>
 
       {/* A tilemap is a valid side of a collision without being in
           `PHYSICS_TYPES`, so `PhysicsSection` — which is where every other type
@@ -2985,15 +3005,16 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
           is the panel that is off screen for as long as this one is showing. */}
       <NodeCollisionsSection node={node} />
 
-      <div className="panel__section">Appearance</div>
-      <NumberField
-        label="Alpha"
-        value={node.props.alpha}
-        step={0.05}
-        min={0}
-        max={1}
-        onChange={(alpha) => updateProps(node.id, { alpha })}
-      />
+      <Section title="Appearance">
+        <NumberField
+          label="Alpha"
+          value={node.props.alpha}
+          step={0.05}
+          min={0}
+          max={1}
+          onChange={(alpha) => updateProps(node.id, { alpha })}
+        />
+      </Section>
     </>
   );
 }
@@ -3013,6 +3034,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
     <div className="panel">
       <div className="panel__header">
         <span>{node.type}</span>
+        <SectionsToggle />
         <button
           className="icon-btn icon-btn--danger"
           onClick={deleteSelection}
@@ -3041,52 +3063,58 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
           under the heading `SECTION_TITLE` already gives it. */}
       {node.type !== 'instance' && <NodePrefabSection node={node} />}
 
-      <div className="panel__section">Transform</div>
-      <div className="field-row">
-        <NumberField
-          label="X"
-          value={node.transform.x}
-          onChange={(x) => updateTransform(node.id, { x })}
+      <Section title="Transform">
+        <div className="field-row">
+          <NumberField
+            label="X"
+            value={node.transform.x}
+            onChange={(x) => updateTransform(node.id, { x })}
+          />
+          <NumberField
+            label="Y"
+            value={node.transform.y}
+            onChange={(y) => updateTransform(node.id, { y })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Rotation°"
+            value={node.transform.rotation}
+            onChange={(rotation) => updateTransform(node.id, { rotation })}
+          />
+        </div>
+        <div className="field-row">
+          <NumberField
+            label="Scale X"
+            value={node.transform.scaleX}
+            step={0.1}
+            onChange={(scaleX) => scaleNode(node.id, 'x', scaleX)}
+          />
+          <NumberField
+            label="Scale Y"
+            value={node.transform.scaleY}
+            step={0.1}
+            onChange={(scaleY) => scaleNode(node.id, 'y', scaleY)}
+          />
+        </div>
+        <CheckboxField
+          label="Scale X and Y together"
+          value={lockAspect}
+          onChange={setLockAspect}
         />
-        <NumberField
-          label="Y"
-          value={node.transform.y}
-          onChange={(y) => updateTransform(node.id, { y })}
-        />
-      </div>
-      <div className="field-row">
-        <NumberField
-          label="Rotation°"
-          value={node.transform.rotation}
-          onChange={(rotation) => updateTransform(node.id, { rotation })}
-        />
-      </div>
-      <div className="field-row">
-        <NumberField
-          label="Scale X"
-          value={node.transform.scaleX}
-          step={0.1}
-          onChange={(scaleX) => scaleNode(node.id, 'x', scaleX)}
-        />
-        <NumberField
-          label="Scale Y"
-          value={node.transform.scaleY}
-          step={0.1}
-          onChange={(scaleY) => scaleNode(node.id, 'y', scaleY)}
-        />
-      </div>
-      <CheckboxField
-        label="Scale X and Y together"
-        value={lockAspect}
-        onChange={setLockAspect}
-      />
+      </Section>
 
-      <div className="panel__section">{SECTION_TITLE[node.type]}</div>
+      {/* One heading per branch rather than one above them all. Wrapping the
+          whole per-type block in a single section would bury a sprite's Sprite
+          sheet, Animation and Appearance inside its Image section — invisible
+          while it is closed and two presses away while it is open. Sections are
+          flat peers, so each branch opens its own. `SECTION_TITLE` still names
+          them, so a new node type is still a compile error there.
 
-      {/* The union in schema.ts narrows node.props per branch, so adding a node
-          type later turns every missed case here into a compile error. */}
+          The union in schema.ts narrows node.props per branch, so adding a node
+          type later turns every missed case here into a compile error too. */}
       {(node.type === 'rectangle' || node.type === 'ellipse') && (
-        <>
+        <Section title={SECTION_TITLE[node.type]}>
           <div className="field-row">
             <NumberField
               label="Width"
@@ -3114,59 +3142,64 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
             max={1}
             onChange={(alpha) => setProp({ alpha })}
           />
-        </>
+        </Section>
       )}
 
       {node.type === 'sprite' && (
         <>
-          <AssetSummary assetId={node.props.assetId} />
-          <AssetPicker
-            selectedAssetId={node.props.assetId}
-            onPick={(assetId) => setProp({ assetId })}
-          />
+          <Section title={SECTION_TITLE.sprite}>
+            <AssetSummary assetId={node.props.assetId} />
+            <AssetPicker
+              selectedAssetId={node.props.assetId}
+              onPick={(assetId) => setProp({ assetId })}
+            />
+          </Section>
 
           {node.props.assetId && (
             <>
-              <div className="panel__section">Sprite sheet</div>
-              <SheetSection assetId={node.props.assetId} />
-              <FrameField node={node} />
+              <Section title="Sprite sheet">
+                <SheetSection assetId={node.props.assetId} />
+                <FrameField node={node} />
+              </Section>
 
-              <div className="panel__section">Animation</div>
-              <AnimationEditor
-                nodeId={node.id}
-                assetId={node.props.assetId}
-                animationId={node.props.animationId}
-                onPick={(animationId) => setProp({ animationId })}
-              />
+              <Section title="Animation">
+                <AnimationEditor
+                  nodeId={node.id}
+                  assetId={node.props.assetId}
+                  animationId={node.props.animationId}
+                  onPick={(animationId) => setProp({ animationId })}
+                />
+              </Section>
             </>
           )}
 
-          <div className="panel__section">Appearance</div>
-          <ColorField
-            label="Tint"
-            value={node.props.tint}
-            onChange={(tint) => setProp({ tint })}
-          />
-          <NumberField
-            label="Alpha"
-            value={node.props.alpha}
-            step={0.05}
-            min={0}
-            max={1}
-            onChange={(alpha) => setProp({ alpha })}
-          />
-          <div className="field-row">
-            <CheckboxField
-              label="Flip X"
-              value={node.props.flipX}
-              onChange={(flipX) => setProp({ flipX })}
+          <Section title="Appearance">
+            <ColorField
+              label="Tint"
+              value={node.props.tint}
+              onChange={(tint) => setProp({ tint })}
             />
-            <CheckboxField
-              label="Flip Y"
-              value={node.props.flipY}
-              onChange={(flipY) => setProp({ flipY })}
+            <NumberField
+              label="Alpha"
+              value={node.props.alpha}
+              step={0.05}
+              min={0}
+              max={1}
+              onChange={(alpha) => setProp({ alpha })}
             />
-          </div>
+            <div className="field-row">
+              <CheckboxField
+                label="Flip X"
+                value={node.props.flipX}
+                onChange={(flipX) => setProp({ flipX })}
+              />
+              <CheckboxField
+                label="Flip Y"
+                value={node.props.flipY}
+                onChange={(flipY) => setProp({ flipY })}
+              />
+            </div>
+          </Section>
         </>
       )}
 
@@ -3177,7 +3210,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
       {node.type === 'particles' && <ParticlesSection node={node} />}
 
       {node.type === 'container' && (
-        <>
+        <Section title={SECTION_TITLE.container}>
           <p className="hint">
             {node.children.length === 0
               ? 'Empty. Drag objects onto this row in the scene tree, or set their Parent to this group.'
@@ -3193,7 +3226,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
             max={1}
             onChange={(alpha) => setProp({ alpha })}
           />
-        </>
+        </Section>
       )}
 
       {node.type === 'instance' && <InstanceSection node={node} />}
@@ -3248,185 +3281,194 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
 
   if (!topLevel) {
     return (
+      <Section title="Physics">
+          <p className="hint">
+            {node.physics
+              ? 'This object has a body, but it is inside a group, so nothing draws it and the export leaves it out. Move it back to the top level of the scene and it comes back exactly as you left it.'
+              : "Only an object in the scene itself can have a body. Arcade places a body from its object's X and Y, and inside a group those are the group's coordinates rather than the scene's."}
+          </p>
+        </Section>
+      );
+    }
+
+    return (
       <>
-        <div className="panel__section">Physics</div>
-        <p className="hint">
-          {node.physics
-            ? 'This object has a body, but it is inside a group, so nothing draws it and the export leaves it out. Move it back to the top level of the scene and it comes back exactly as you left it.'
-            : "Only an object in the scene itself can have a body. Arcade places a body from its object's X and Y, and inside a group those are the group's coordinates rather than the scene's."}
-        </p>
-      </>
-    );
-  }
+        <Section title="Physics">
+          <CheckboxField
+            label="Physics body"
+          value={body !== null}
+          onChange={(on) => setNodePhysics(node.id, on ? {} : null)}
+        />
 
-  return (
-    <>
-      <div className="panel__section">Physics</div>
-      <CheckboxField
-        label="Physics body"
-        value={body !== null}
-        onChange={(on) => setNodePhysics(node.id, on ? {} : null)}
-      />
+        {body && (
+          <>
+            <SelectField
+              label="Body"
+              value={body.kind}
+              options={[
+                { value: 'dynamic', label: 'Dynamic — moves' },
+                { value: 'static', label: 'Static — never moves' },
+              ]}
+              onChange={(kind) =>
+                setNodePhysics(node.id, { kind: kind === 'static' ? 'static' : 'dynamic' })
+              }
+            />
 
+            {/* A static body genuinely has none of these — Phaser's StaticBody
+                carries no velocity, bounce, drag, mass or gravity — so they are
+                absent rather than disabled. A disabled field says "not now"; these
+                do not exist for this kind of body at all. */}
+            {body.kind === 'dynamic' && (
+              <>
+                <div className="field-row">
+                  <NumberField
+                    label="Velocity X"
+                    value={body.velocityX}
+                    onChange={(velocityX) => setNodePhysics(node.id, { velocityX })}
+                  />
+                  <NumberField
+                    label="Velocity Y"
+                    value={body.velocityY}
+                    onChange={(velocityY) => setNodePhysics(node.id, { velocityY })}
+                  />
+                </div>
+                {/* Two sets of dials for one body, and which one is shown is the
+                    scene's engine rather than a preference. An Arcade body
+                    bounces and drags per axis because it is an axis-aligned box;
+                    a Matter body is a polygon that turns, so it has one
+                    restitution and one friction for the whole of it, and a
+                    surface friction Arcade has no notion of. Showing both sets at
+                    once would put four fields on screen that the exported game
+                    reads nowhere. */}
+                {engine === 'arcade' ? (
+                  <>
+                    <div className="field-row">
+                      <NumberField
+                        label="Bounce X"
+                        value={body.bounceX}
+                        step={0.05}
+                        min={0}
+                        onChange={(bounceX) => setNodePhysics(node.id, { bounceX })}
+                      />
+                      <NumberField
+                        label="Bounce Y"
+                        value={body.bounceY}
+                        step={0.05}
+                        min={0}
+                        onChange={(bounceY) => setNodePhysics(node.id, { bounceY })}
+                      />
+                    </div>
+                    <div className="field-row">
+                      <NumberField
+                        label="Drag X"
+                        value={body.dragX}
+                        min={0}
+                        onChange={(dragX) => setNodePhysics(node.id, { dragX })}
+                      />
+                      <NumberField
+                        label="Drag Y"
+                        value={body.dragY}
+                        min={0}
+                        onChange={(dragY) => setNodePhysics(node.id, { dragY })}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="field-row">
+                      <NumberField
+                        label="Bounciness"
+                        value={body.restitution}
+                        step={0.05}
+                        min={0}
+                        max={1}
+                        onChange={(restitution) => setNodePhysics(node.id, { restitution })}
+                      />
+                      <NumberField
+                        label="Air friction"
+                        value={body.frictionAir}
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        onChange={(frictionAir) => setNodePhysics(node.id, { frictionAir })}
+                      />
+                    </div>
+                    <NumberField
+                      label="Surface friction"
+                      value={body.friction}
+                      step={0.05}
+                      min={0}
+                      max={1}
+                      onChange={(friction) => setNodePhysics(node.id, { friction })}
+                    />
+                  </>
+                )}
+                <div className="field-row">
+                  <NumberField
+                    label="Spin°/s"
+                    value={body.angularVelocity}
+                    onChange={(angularVelocity) =>
+                      setNodePhysics(node.id, { angularVelocity })
+                    }
+                  />
+                  <NumberField
+                    label="Mass"
+                    value={body.mass}
+                    step={0.1}
+                    min={0.0001}
+                    onChange={(mass) => setNodePhysics(node.id, { mass })}
+                  />
+                </div>
+                {/* Matter has no such flag: a body there either takes part in the
+                    simulation or is static, and "dynamic but unpushable" is not a
+                    state it can be in. Absent rather than disabled, by the rule
+                    the static body's own missing fields already follow. */}
+                {engine === 'arcade' && (
+                  <CheckboxField
+                    label="Immovable"
+                    value={body.immovable}
+                    onChange={(immovable) => setNodePhysics(node.id, { immovable })}
+                  />
+                )}
+                <CheckboxField
+                  label="Affected by gravity"
+                  value={body.allowGravity}
+                  onChange={(allowGravity) => setNodePhysics(node.id, { allowGravity })}
+                />
+              </>
+            )}
+
+            <CheckboxField
+              label="Collide with world bounds"
+              value={body.collideWorldBounds}
+              onChange={(collideWorldBounds) =>
+                setNodePhysics(node.id, { collideWorldBounds })
+              }
+            />
+            <p className="hint">
+              {engine === 'arcade'
+                ? 'The green outline on the canvas is the body. It stays square to the screen however the object is turned, because an Arcade body does not rotate with what it belongs to — it grows to hold the turned object instead. Switch the scene to Matter if the collision shape has to follow the shape.'
+                : 'The green outline on the canvas is the body, and it turns with the object because a Matter body is a real polygon. Matter also collides every body with every other one, so there are no pairs to list.'}{' '}
+              Nothing moves in the editor — the document is what you are editing,
+              so the simulation is left to the game you export.
+            </p>
+          </>
+        )}
+      </Section>
+
+      {/* Peers of Physics rather than children of it. Sections are flat —
+          a nested one is invisible while its parent is closed and two
+          presses away while it is open — and `NodeCollisionsSection` in
+          particular already renders flat inside `TilemapSection`, so this
+          is also what gives it one shape in both places. The order is
+          unchanged, which is what the two comments below still describe. */}
       {body && (
         <>
-          <SelectField
-            label="Body"
-            value={body.kind}
-            options={[
-              { value: 'dynamic', label: 'Dynamic — moves' },
-              { value: 'static', label: 'Static — never moves' },
-            ]}
-            onChange={(kind) =>
-              setNodePhysics(node.id, { kind: kind === 'static' ? 'static' : 'dynamic' })
-            }
-          />
-
-          {/* A static body genuinely has none of these — Phaser's StaticBody
-              carries no velocity, bounce, drag, mass or gravity — so they are
-              absent rather than disabled. A disabled field says "not now"; these
-              do not exist for this kind of body at all. */}
-          {body.kind === 'dynamic' && (
-            <>
-              <div className="field-row">
-                <NumberField
-                  label="Velocity X"
-                  value={body.velocityX}
-                  onChange={(velocityX) => setNodePhysics(node.id, { velocityX })}
-                />
-                <NumberField
-                  label="Velocity Y"
-                  value={body.velocityY}
-                  onChange={(velocityY) => setNodePhysics(node.id, { velocityY })}
-                />
-              </div>
-              {/* Two sets of dials for one body, and which one is shown is the
-                  scene's engine rather than a preference. An Arcade body
-                  bounces and drags per axis because it is an axis-aligned box;
-                  a Matter body is a polygon that turns, so it has one
-                  restitution and one friction for the whole of it, and a
-                  surface friction Arcade has no notion of. Showing both sets at
-                  once would put four fields on screen that the exported game
-                  reads nowhere. */}
-              {engine === 'arcade' ? (
-                <>
-                  <div className="field-row">
-                    <NumberField
-                      label="Bounce X"
-                      value={body.bounceX}
-                      step={0.05}
-                      min={0}
-                      onChange={(bounceX) => setNodePhysics(node.id, { bounceX })}
-                    />
-                    <NumberField
-                      label="Bounce Y"
-                      value={body.bounceY}
-                      step={0.05}
-                      min={0}
-                      onChange={(bounceY) => setNodePhysics(node.id, { bounceY })}
-                    />
-                  </div>
-                  <div className="field-row">
-                    <NumberField
-                      label="Drag X"
-                      value={body.dragX}
-                      min={0}
-                      onChange={(dragX) => setNodePhysics(node.id, { dragX })}
-                    />
-                    <NumberField
-                      label="Drag Y"
-                      value={body.dragY}
-                      min={0}
-                      onChange={(dragY) => setNodePhysics(node.id, { dragY })}
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="field-row">
-                    <NumberField
-                      label="Bounciness"
-                      value={body.restitution}
-                      step={0.05}
-                      min={0}
-                      max={1}
-                      onChange={(restitution) => setNodePhysics(node.id, { restitution })}
-                    />
-                    <NumberField
-                      label="Air friction"
-                      value={body.frictionAir}
-                      step={0.01}
-                      min={0}
-                      max={1}
-                      onChange={(frictionAir) => setNodePhysics(node.id, { frictionAir })}
-                    />
-                  </div>
-                  <NumberField
-                    label="Surface friction"
-                    value={body.friction}
-                    step={0.05}
-                    min={0}
-                    max={1}
-                    onChange={(friction) => setNodePhysics(node.id, { friction })}
-                  />
-                </>
-              )}
-              <div className="field-row">
-                <NumberField
-                  label="Spin°/s"
-                  value={body.angularVelocity}
-                  onChange={(angularVelocity) =>
-                    setNodePhysics(node.id, { angularVelocity })
-                  }
-                />
-                <NumberField
-                  label="Mass"
-                  value={body.mass}
-                  step={0.1}
-                  min={0.0001}
-                  onChange={(mass) => setNodePhysics(node.id, { mass })}
-                />
-              </div>
-              {/* Matter has no such flag: a body there either takes part in the
-                  simulation or is static, and "dynamic but unpushable" is not a
-                  state it can be in. Absent rather than disabled, by the rule
-                  the static body's own missing fields already follow. */}
-              {engine === 'arcade' && (
-                <CheckboxField
-                  label="Immovable"
-                  value={body.immovable}
-                  onChange={(immovable) => setNodePhysics(node.id, { immovable })}
-                />
-              )}
-              <CheckboxField
-                label="Affected by gravity"
-                value={body.allowGravity}
-                onChange={(allowGravity) => setNodePhysics(node.id, { allowGravity })}
-              />
-            </>
-          )}
-
-          <CheckboxField
-            label="Collide with world bounds"
-            value={body.collideWorldBounds}
-            onChange={(collideWorldBounds) =>
-              setNodePhysics(node.id, { collideWorldBounds })
-            }
-          />
-          <p className="hint">
-            {engine === 'arcade'
-              ? 'The green outline on the canvas is the body. It stays square to the screen however the object is turned, because an Arcade body does not rotate with what it belongs to — it grows to hold the turned object instead. Switch the scene to Matter if the collision shape has to follow the shape.'
-              : 'The green outline on the canvas is the body, and it turns with the object because a Matter body is a real polygon. Matter also collides every body with every other one, so there are no pairs to list.'}{' '}
-            Nothing moves in the editor — the document is what you are editing,
-            so the simulation is left to the game you export.
-          </p>
-
-          {/* Under the body rather than in a panel of its own, and directly
-              after "Collide with world bounds" and its hint, because the world
-              edges and the collider rows are the only two things an Arcade body
-              ever stops against. Before the controls on purpose too: a
-              platformer's jump is gated on there being something underneath,
-              which is what a row here is for. */}
+          {/* Directly after "Collide with world bounds" and its hint, because
+              the world edges and the collider rows are the only two things an
+              Arcade body ever stops against. Before the controls on purpose
+              too: a platformer's jump is gated on there being something
+              underneath, which is what a row here is for. */}
           <NodeCollisionsSection node={node} />
 
           {/* Only for a dynamic body, and absent rather than disabled for the
@@ -3489,14 +3531,13 @@ function NodeCollisionsSection({ node }: { node: GameObjectNode }) {
   // control that says why it cannot beats one that is not there.
   if (scenePhysicsOf(scene).engine === 'matter') {
     return (
-      <>
-        <div className="panel__section">Collides with</div>
+      <Section title="Collides with">
         <p className="hint">
           This scene runs Matter, which collides every body with every other one
           on its own. There is nothing to pair up. Any rows made under Arcade
           are kept and come back if the scene is switched back.
         </p>
-      </>
+      </Section>
     );
   }
 
@@ -3511,13 +3552,12 @@ function NodeCollisionsSection({ node }: { node: GameObjectNode }) {
   const unpaired = others.find((other) => !paired.has(other.id));
 
   return (
-    <>
-      {/* "Collides with", not "Collisions" and not "Collision": the Scene panel
-          owns the first and a tilemap's solid-tile palette owns the second, and
-          on a tilemap this renders directly under that one. Three headings, one
-          word apart, would read as three features. */}
-      <div className="panel__section">Collides with</div>
-
+    /* "Collides with", not "Collisions" and not "Collision": the Scene panel
+       owns the first and a tilemap's solid-tile palette owns the second, and on
+       a tilemap this renders directly under that one. Three headings, one word
+       apart, would read as three features. It is also a storage key now — the
+       open sections are remembered by title — so the three stay three. */
+    <Section title="Collides with">
       {rows.map((row, index) => {
         // Which side this node sits on decides which field the picker writes.
         // Read once, so the value shown and the value written cannot disagree.
@@ -3599,7 +3639,7 @@ function NodeCollisionsSection({ node }: { node: GameObjectNode }) {
           )}
         </>
       )}
-    </>
+    </Section>
   );
 }
 
@@ -3624,8 +3664,7 @@ function ControlsSection({ node }: { node: GameObjectNode }) {
   const controls = controlsOf(node, true);
 
   return (
-    <>
-      <div className="panel__section">Controls</div>
+    <Section title="Controls">
       <CheckboxField
         label="Player controls"
         value={controls !== null}
@@ -3698,7 +3737,7 @@ function ControlsSection({ node }: { node: GameObjectNode }) {
           )}
         </>
       )}
-    </>
+    </Section>
   );
 }
 
@@ -3737,8 +3776,7 @@ function TweenSection({ node }: { node: GameObjectNode }) {
   ];
 
   return (
-    <>
-      <div className="panel__section">Tween</div>
+    <Section title="Tween">
       <CheckboxField
         label="Tween this object"
         value={tween !== null}
@@ -3850,6 +3888,6 @@ function TweenSection({ node }: { node: GameObjectNode }) {
           )}
         </>
       )}
-    </>
+    </Section>
   );
 }

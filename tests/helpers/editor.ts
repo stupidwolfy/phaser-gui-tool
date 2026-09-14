@@ -1,4 +1,5 @@
 import { expect, type CDPSession, type Dialog, type Locator, type Page } from '@playwright/test';
+import { PREFS_KEY } from '../../src/io/prefs';
 import {
   countColorIn,
   findColor,
@@ -55,6 +56,14 @@ export interface Point {
   y: number;
 }
 
+/**
+ * Set in the page to stop `open`'s init script re-seeding the section
+ * preference. It has to be a marker rather than a one-off removal, because
+ * `addInitScript` runs again on every navigation — so a spec that cleared the
+ * key and reloaded would come back with it seeded again.
+ */
+const SHIPPED_DEFAULTS_KEY = 'phaser-gui-tool:test:shipped-defaults';
+
 export type PanelName = 'scene' | 'inspect' | 'file';
 
 /** Mobile sheet titles, which are also how the suite finds each sheet. */
@@ -89,6 +98,42 @@ export class EditorPage {
       delete (window as unknown as Record<string, unknown>).showSaveFilePicker;
       delete (window as unknown as Record<string, unknown>).showOpenFilePicker;
     });
+
+    // The inspector's sections ship collapsed, and the suite reaches their
+    // controls two ways: through the async helpers below, which could be taught
+    // to expand first, and directly — `editor.panel('inspect').getByRole(…)` —
+    // in some forty places, which could not, because `panel()` is a synchronous
+    // locator factory and `openPanel()` returns immediately on desktop. So the
+    // preference is seeded instead of the call sites being rewritten.
+    //
+    // This is a real user configuration, not a back door: it is the state the
+    // panel's own Expand-all button writes, under the key it writes it to, so
+    // production code carries no test-only branch.
+    //
+    // The decisive argument is not the edit count, though. Several existing
+    // assertions are *absence* assertions — `physics.spec.ts`'s `toHaveCount(0)`
+    // for a section that should not be there, `behaviour.spec.ts`'s empty-state
+    // sentences — and a collapsed neighbour turns every one of them into a
+    // statement that is true for the wrong reason. Seeding everything open
+    // keeps the DOM the suite sees identical to the one it was written against.
+    //
+    // `useShippedSectionDefaults` below opts out, for the one spec whose
+    // subject is the collapsing itself.
+    await page.addInitScript(
+      ([key, optOut]) => {
+        try {
+          if (localStorage.getItem(optOut) === null) {
+            localStorage.setItem(
+              key,
+              JSON.stringify({ sections: { openByDefault: true, overrides: {} } }),
+            );
+          }
+        } catch {
+          /* A browser with storage disabled still gets the shipped default. */
+        }
+      },
+      [PREFS_KEY, SHIPPED_DEFAULTS_KEY] as const,
+    );
 
     const editor = new EditorPage(page, isMobile);
     await page.goto('./');
@@ -904,6 +949,52 @@ export class EditorPage {
   }
 
   // -- inspector -------------------------------------------------------------
+
+  /**
+   * A section's disclosure head, by its exact title.
+   *
+   * Located by class rather than by role, deliberately. A head is a button
+   * whose accessible name is its title, and several titles are also the names
+   * of controls in the same panel — `SECTION_TITLE` contains "Group", "Text",
+   * "Image" and "Panel", and `multi-select.spec.ts` already clicks a button
+   * named exactly "Group". Reaching a head by role would put those one strict
+   * mode violation apart.
+   */
+  sectionHead(title: string): Locator {
+    return this.panel('inspect')
+      .locator('.section__head')
+      .filter({ has: this.page.locator('.section__title', { hasText: new RegExp(`^${title}$`) }) });
+  }
+
+  async toggleSection(title: string): Promise<void> {
+    await this.openPanel('inspect');
+    await this.sectionHead(title).click();
+    await this.settle();
+  }
+
+  async sectionIsOpen(title: string): Promise<boolean> {
+    await this.openPanel('inspect');
+    return (await this.sectionHead(title).getAttribute('aria-expanded')) === 'true';
+  }
+
+  /**
+   * Drops the harness's seeded "every section open" and comes back on what a
+   * first-time user actually gets.
+   *
+   * Sets a marker rather than only clearing the key, because `open`'s init
+   * script runs again on every navigation and would otherwise re-seed the
+   * preference during the reload this performs.
+   */
+  async useShippedSectionDefaults(): Promise<void> {
+    await this.page.evaluate(
+      ([key, optOut]) => {
+        localStorage.setItem(optOut, '1');
+        localStorage.removeItem(key);
+      },
+      [PREFS_KEY, SHIPPED_DEFAULTS_KEY] as const,
+    );
+    await this.reload();
+  }
 
   /**
    * An inspector input, found by its label's exact text.

@@ -140,6 +140,9 @@ on a desktop.
   no files alongside it. The scene you are editing is the module's default export and the
   one the page starts; the rest are registered alongside it, ready for `scene.start`
 - Three panels on desktop, canvas plus bottom sheets on a phone
+- The properties panel is a stack of collapsible sections, closed until you open
+  them. What you open stays open — across objects, and the next time you visit
+- One button in the panel header opens or closes them all
 
 ### Keyboard
 

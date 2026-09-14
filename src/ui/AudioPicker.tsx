@@ -4,6 +4,7 @@ import { countAudioUses, useActiveScene, useEditorStore } from '../core/store';
 import { findAudio, soundsOf, type AudioAsset, type SceneSound } from '../core/schema';
 import { audioKeyOf } from '../io/exportPhaser';
 import { pickAudioFile } from '../io/fileIO';
+import { Section } from './Section';
 import { CheckboxField, NumberField, SelectField } from './fields';
 
 /**
@@ -75,37 +76,38 @@ export function AudioSection() {
 
   return (
     <>
-      <div className="panel__section">Audio</div>
+      <Section title="Audio">
 
-      <button
-        className="btn btn--block"
-        disabled={busy}
-        onClick={() => void importAudio()}
-      >
-        {busy ? 'Importing…' : 'Import audio…'}
-      </button>
+        <button
+          className="btn btn--block"
+          disabled={busy}
+          onClick={() => void importAudio()}
+        >
+          {busy ? 'Importing…' : 'Import audio…'}
+        </button>
 
-      {error && <p className="hint hint--error">{error}</p>}
+        {error && <p className="hint hint--error">{error}</p>}
 
-      {audio.length > 0 && (
-        <ul className="assets">
-          {audio.map((asset) => (
-            <AudioRow
-              key={asset.id}
-              asset={asset}
-              playing={playingId === asset.id}
-              onPlayingChange={setPlayingId}
-            />
-          ))}
-        </ul>
-      )}
+        {audio.length > 0 && (
+          <ul className="assets">
+            {audio.map((asset) => (
+              <AudioRow
+                key={asset.id}
+                asset={asset}
+                playing={playingId === asset.id}
+                onPlayingChange={setPlayingId}
+              />
+            ))}
+          </ul>
+        )}
 
-      {audio.length === 0 && !busy && (
-        <p className="hint">
-          No sounds yet. Import one, then add it to a scene to have the export
-          load it.
-        </p>
-      )}
+        {audio.length === 0 && !busy && (
+          <p className="hint">
+            No sounds yet. Import one, then add it to a scene to have the export
+            load it.
+          </p>
+        )}
+      </Section>
 
       {audio.length > 0 && <SceneSoundsSection />}
     </>
@@ -218,12 +220,11 @@ function SceneSoundsSection() {
   if (sounds.length === 0) return null;
 
   return (
-    <>
-      <div className="panel__section">In this scene</div>
+    <Section title="In this scene">
       {sounds.map((sound) => (
         <SceneSoundRow key={sound.id} sound={sound} />
       ))}
-    </>
+    </Section>
   );
 }
 
