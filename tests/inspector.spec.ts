@@ -86,15 +86,19 @@ test('an open section stays open across a selection change', async ({ editor }) 
 });
 
 test('the open sections survive a reload', async ({ editor }) => {
-  await editor.addObject('Rectangle');
-  await editor.toggleSection('Transform');
+  // A scene-panel section rather than a node's. The selection is editor state
+  // and is deliberately not saved, so the panel comes back on `SceneInspector`
+  // after a reload and a node section has nothing to read — which is the
+  // editor behaving correctly, not the preference having been lost.
+  await editor.toggleSection('Snapping');
+  expect(await editor.sectionIsOpen('Snapping')).toBe(true);
 
   await editor.reload();
 
   // The only test of `io/prefs.ts` round-tripping. The marker set by
   // `useShippedSectionDefaults` keeps `open`'s init script from re-seeding on
   // the way back, so what comes back is what was actually written.
-  expect(await editor.sectionIsOpen('Transform')).toBe(true);
+  expect(await editor.sectionIsOpen('Snapping')).toBe(true);
 });
 
 /**
@@ -135,7 +139,7 @@ test('collapsing a section does not touch the saved file', async ({ editor }) =>
   const before = (await editor.saveToFile()).contents;
 
   await editor.toggleSection('Transform');
-  await editor.toggleSection('Appearance');
+  await editor.toggleSection('Arrange');
 
   const after = (await editor.saveToFile()).contents;
   expect(after).toBe(before);
