@@ -718,3 +718,152 @@ test.describe('the emit', () => {
     expect(exported).toContain('this.registry.inc("score", 1);');
   });
 });
+
+/**
+ * Camera effects: the five verbs iteration 18 refused and iteration 28 made a
+ * place for.
+ *
+ * Every claim here is the near side's, for this file's usual reason and one
+ * more of its own. The canvas runs no rule; and the editor's `cameras.main` is
+ * the *user's view* of the scene, so an effect run here would move where the
+ * user is looking — which is the thing "drawn, never applied" rules out. The
+ * positive runtime claim is in `export.spec.ts`, where anything that has to
+ * actually run belongs.
+ */
+test.describe('camera effects', () => {
+  /** `CAMERA_COLOR` in EditorScene. Nothing else on this canvas is violet. */
+  const CAMERA = '#9b7bff';
+
+  test('a camera effect round-trips, and names nothing to dangle', async ({
+    editor,
+  }, testInfo) => {
+    await oneBox(editor);
+
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Shake the camera');
+    await editor.setField('Rule 1 do 1 duration', 300);
+
+    const document = await saved(editor);
+    expect(document.schemaVersion).toBe(SCHEMA);
+    const scene = (document.scenes as { rules?: { do: unknown[] }[] }[])[0];
+    // No `nodeId`, no `variableId`, no `sceneId` — the whole of why nothing in
+    // this block can cost a rule, and why `ruleNames` and `remapActionRefs`
+    // needed no edit.
+    expect(scene.rules?.[0].do).toEqual([
+      { kind: 'cameraShake', duration: 300, intensity: 0.05 },
+    ]);
+
+    const path = testInfo.outputPath('shaken.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.numberValue('Rule 1 do 1 duration')).toBe(300);
+  });
+
+  test('a pan and a zoom move nothing the editor is looking through', async ({
+    editor,
+  }) => {
+    await oneBox(editor);
+    const before = await editor.findDrawnBox(FILL);
+    const zoomBefore = await editor.zoom();
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Pan the camera');
+    await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+    await editor.setChoice('Rule 1 do 2', 'Zoom the camera');
+    await editor.closePanels();
+    await editor.settle();
+
+    // The sharpest negative available: if anybody ever wires an effect into
+    // `EditorScene`, the user's own view moves and both of these change.
+    expect(await editor.zoom()).toBeCloseTo(zoomBefore, 5);
+    const after = await editor.findDrawnBox(FILL);
+    expect(after.x).toBeCloseTo(before.x, 0);
+    expect(after.width).toBeCloseTo(before.width, 0);
+
+    // And nothing new is drawn for one. The violet frame is the shot the scene
+    // *opens* on, and this scene's camera is still at its default — an effect
+    // is what happens afterwards, which this canvas does not show.
+    expect((await editor.findDrawn(CAMERA)).count).toBe(0);
+  });
+
+  test('the five effects emit five calls on the one camera', async ({ editor }) => {
+    await oneBox(editor);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    const add = editor.panel('inspect').getByTitle('Add an action to rule 1');
+    for (const [at, kind] of [
+      'Shake the camera',
+      'Flash the camera',
+      'Fade the camera',
+      'Pan the camera',
+      'Zoom the camera',
+    ].entries()) {
+      if (at > 0) await add.click();
+      await editor.setChoice(`Rule 1 do ${at + 1}`, kind);
+    }
+    await editor.settle();
+
+    const exported = (await editor.exportCode('ts')).contents;
+    // Whole, defaults included — the camera prologue's call and the emitter
+    // config's, and here not even a choice: these are positional arguments
+    // with no chain to leave one out of.
+    expect(exported).toContain('this.cameras.main.shake(100, 0.05);');
+    expect(exported).toContain('this.cameras.main.flash(250, 255, 255, 255);');
+    expect(exported).toContain('this.cameras.main.fade(250, 0, 0, 0);');
+    expect(exported).toContain('this.cameras.main.zoomTo(2, 1000, "Linear");');
+    // Panned somewhere it is not already looking, which is `defaultTween`'s
+    // rule: a pan seeded on the current centre runs for a second and arrives
+    // where it started, which reads as the feature being broken.
+    expect(exported).toMatch(/this\.cameras\.main\.pan\(\d+, \d+, 1000, "Linear"\);/);
+    expect(exported).not.toContain('this.cameras.main.pan(480, 270,');
+
+    // A direction rather than a second kind, `setVisible`'s show/hide call.
+    await editor.openPanel('inspect');
+    await editor.setChoice('Rule 1 do 3 direction', 'Fade in');
+    expect((await editor.exportCode('ts')).contents).toContain(
+      'this.cameras.main.fadeIn(250, 0, 0, 0);',
+    );
+  });
+
+  test('a hand-edited effect is repaired, never dropped', async ({
+    editor,
+  }, testInfo) => {
+    await oneBox(editor);
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Zoom the camera');
+
+    const document = await saved(editor);
+    const scene = (document.scenes as { rules: { do: Record<string, unknown>[] }[] }[])[0];
+    // Only a hand-edited file can hold any of this: a zoom Phaser would clamp
+    // to 0.001 behind your back, an ease `GetEaseFunction` would silently
+    // resolve to `Power0`, and a duration that finishes on the frame it starts.
+    scene.rules[0].do[0] = { kind: 'cameraZoom', zoom: 0, duration: 0, ease: 'Banana' };
+
+    const path = testInfo.outputPath('bent.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    await editor.deselect();
+
+    // The rule survives, which is the asymmetry worth asserting rather than
+    // assuming: a `setVar` naming a variable that is gone costs the whole rule,
+    // because a variable is the one thing a rule names that another rule reads.
+    // An effect reaches nothing, so every field repairs and nothing is lost.
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.numberValue('Rule 1 do 1 zoom')).toBe(1);
+    expect(await editor.numberValue('Rule 1 do 1 duration')).toBe(1000);
+    expect(await editor.selectValue('Rule 1 do 1 easing')).toBe('Linear');
+  });
+});

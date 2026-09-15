@@ -20,6 +20,7 @@ import {
   VARIABLE_KINDS,
   type VariableKind,
   cameraOf,
+  cameraViewOf,
   canBeTapped,
   canHavePhysics,
   coerceVariableValue,
@@ -65,6 +66,7 @@ import {
   type TextProps,
   type TileMap,
   type TileSpriteProps,
+  type TweenEase,
   type TweenProperty,
 } from '../core/schema';
 import { variableKeysOf } from '../io/exportPhaser';
@@ -540,6 +542,11 @@ const ACTION_LABEL: Record<RuleAction['kind'], string> = {
   stopSound: 'Stop a sound',
   playAnimation: 'Play an animation',
   startTween: 'Start a movement',
+  cameraShake: 'Shake the camera',
+  cameraFlash: 'Flash the camera',
+  cameraFade: 'Fade the camera',
+  cameraPan: 'Pan the camera',
+  cameraZoom: 'Zoom the camera',
   setVar: 'Set a variable',
   addVar: 'Add to a variable',
   startScene: 'Go to a scene',
@@ -1014,6 +1021,34 @@ function defaultAction(
         ? { kind: 'addVar', variableId: counter.id, by: 1 }
         : { kind: 'restartScene' };
     }
+    // The five camera effects are the only kinds here that cannot fall back,
+    // because they are the only ones that name nothing which might not exist —
+    // `restartScene`'s own property, arriving on actions that do something.
+    // Every seed is chosen to be **visibly** something, which is `defaultTween`'s
+    // rule and its reason: an action that runs perfectly and changes nothing is
+    // indistinguishable from the feature being broken.
+    case 'cameraShake':
+      return { kind: 'cameraShake', duration: 100, intensity: 0.05 };
+    case 'cameraFlash':
+      return { kind: 'cameraFlash', duration: 250, color: '#ffffff' };
+    case 'cameraFade':
+      return { kind: 'cameraFade', duration: 250, color: '#000000', fadeIn: false };
+    case 'cameraPan': {
+      // Offset from where the camera already looks, never equal to it — the
+      // tween destination's rule. A pan seeded on the current centre is a pan
+      // that runs for a second and arrives where it started.
+      const view = cameraViewOf(scene);
+      return {
+        kind: 'cameraPan',
+        x: Math.round(view.x + view.width * 0.75),
+        y: Math.round(view.y + view.height / 2),
+        duration: 1000,
+        ease: 'Linear',
+      };
+    }
+    case 'cameraZoom':
+      // 2, never the camera's own zoom, for the reason above.
+      return { kind: 'cameraZoom', zoom: 2, duration: 1000, ease: 'Linear' };
     case 'startScene': {
       const other = project.scenes.find((entry) => entry.id !== scene.id);
       return other
@@ -1351,6 +1386,141 @@ function ActionFields({
         </div>
       );
     }
+
+    // The five camera effects. No "nothing eligible" hint anywhere below,
+    // unlike `setText` and `addVar`: every scene has a camera, so there is no
+    // empty state to explain. Two controls to a `field-row` at most, which is
+    // the 390px rule the whole card is built on.
+    case 'cameraShake':
+      return (
+        <div className="field-row">
+          <NumberField
+            label={`${label} duration`}
+            value={action.duration}
+            min={1}
+            onChange={(duration) => onChange({ ...action, duration })}
+          />
+          {/* A fraction of the viewport, which is Phaser's own unit — hence the
+              step and the ceiling rather than a pixel count. */}
+          <NumberField
+            label={`${label} strength`}
+            value={action.intensity}
+            step={0.01}
+            min={0.01}
+            max={1}
+            onChange={(intensity) => onChange({ ...action, intensity })}
+          />
+        </div>
+      );
+
+    case 'cameraFlash':
+      return (
+        <div className="field-row">
+          <NumberField
+            label={`${label} duration`}
+            value={action.duration}
+            min={1}
+            onChange={(duration) => onChange({ ...action, duration })}
+          />
+          <ColorField
+            label={`${label} colour`}
+            value={action.color}
+            onChange={(color) => onChange({ ...action, color })}
+          />
+        </div>
+      );
+
+    case 'cameraFade':
+      return (
+        <>
+          <div className="field-row">
+            <NumberField
+              label={`${label} duration`}
+              value={action.duration}
+              min={1}
+              onChange={(duration) => onChange({ ...action, duration })}
+            />
+            <ColorField
+              label={`${label} colour`}
+              value={action.color}
+              onChange={(color) => onChange({ ...action, color })}
+            />
+          </div>
+          <SelectField
+            label={`${label} direction`}
+            value={action.fadeIn ? 'in' : 'out'}
+            options={[
+              { value: 'out', label: 'Fade out' },
+              { value: 'in', label: 'Fade in' },
+            ]}
+            onChange={(way) => onChange({ ...action, fadeIn: way === 'in' })}
+          />
+        </>
+      );
+
+    case 'cameraPan':
+      return (
+        <>
+          {/* "centre", never "x": `pan` moves the camera's midPoint where
+              `SceneCamera.scrollX` is its top-left, so a field reading like the
+              Camera X a few sections up would be wrong by half a viewport with
+              nothing saying so — and `Camera X` is that other field's exact
+              label, on this same panel. */}
+          <div className="field-row">
+            <NumberField
+              label={`${label} centre x`}
+              value={action.x}
+              onChange={(x) => onChange({ ...action, x })}
+            />
+            <NumberField
+              label={`${label} centre y`}
+              value={action.y}
+              onChange={(y) => onChange({ ...action, y })}
+            />
+          </div>
+          <div className="field-row">
+            <NumberField
+              label={`${label} duration`}
+              value={action.duration}
+              min={1}
+              onChange={(duration) => onChange({ ...action, duration })}
+            />
+            <SelectField
+              label={`${label} easing`}
+              value={action.ease}
+              options={TWEEN_EASES.map((ease) => ({ value: ease, label: ease }))}
+              onChange={(ease) => onChange({ ...action, ease: ease as TweenEase })}
+            />
+          </div>
+        </>
+      );
+
+    case 'cameraZoom':
+      return (
+        <>
+          <div className="field-row">
+            <NumberField
+              label={`${label} zoom`}
+              value={action.zoom}
+              step={0.1}
+              min={0.05}
+              onChange={(zoom) => onChange({ ...action, zoom })}
+            />
+            <NumberField
+              label={`${label} duration`}
+              value={action.duration}
+              min={1}
+              onChange={(duration) => onChange({ ...action, duration })}
+            />
+          </div>
+          <SelectField
+            label={`${label} easing`}
+            value={action.ease}
+            options={TWEEN_EASES.map((ease) => ({ value: ease, label: ease }))}
+            onChange={(ease) => onChange({ ...action, ease: ease as TweenEase })}
+          />
+        </>
+      );
 
     case 'startScene':
       return (

@@ -3542,6 +3542,16 @@ export function countFontUses(project: Project, family: string): number {
  * — a still frame, the one the game opens on, exactly as the camera frame is
  * drawn and never applied. It cannot change here, so there is nothing for a ▶
  * to start or to stop.
+ *
+ * And blind to a rule's camera effects, which is the eighth refusal and the one
+ * a reader will expect to be wrong hardest of all, since an effect is *nothing
+ * but* a thing the camera does over time. Two refusals meet in it. The canvas
+ * runs no rule, per the paragraph above. And the editor's `cameras.main` is the
+ * **user's own view** of the scene — "drawn, never applied" — so a `pan` or a
+ * `zoomTo` run here would move where the user is looking, which is exactly what
+ * iteration 18 ruled out, and a `fade` would black out the canvas being edited.
+ * There is nothing new drawn for one either: the violet frame is the shot the
+ * scene *opens* on, and an effect is what happens after that.
  */
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;

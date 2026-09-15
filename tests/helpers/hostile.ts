@@ -475,6 +475,39 @@ export function hostileProject(): Project {
               // The same action with no variable, which is the commonest shape
               // and the one that must not take the whole rule with it.
               { kind: 'setText' as const, nodeId: 'd', text: `over ${breakout}` },
+              // The five camera effects, every field at a non-default value,
+              // because that is the whole of what they are here for: this is
+              // the only place the emitted calls meet
+              // `Phaser.Cameras.Scene2D.Camera` under `tsc --strict`, and none
+              // of them carries a hostile string to escape — they name nothing
+              // the document holds, which is the property the reader rests on.
+              // They ride on this rule for `NO_MOTION`'s reason: nothing in the
+              // suite taps `a`, so an effect that actually ran would have
+              // `export.spec.ts`' colour assertions racing a fade that is
+              // correct behaviour and is not what those assertions are about.
+              { kind: 'cameraShake' as const, duration: 420, intensity: 0.13 },
+              { kind: 'cameraFlash' as const, duration: 380, color: '#ff00aa' },
+              // Fading *in* rather than out, so the `fadeIn` branch is the one
+              // under the compiler — `fade` is what every other fixture emits.
+              {
+                kind: 'cameraFade' as const,
+                duration: 640,
+                color: '#0a1b2c',
+                fadeIn: true,
+              },
+              {
+                kind: 'cameraPan' as const,
+                x: 137,
+                y: 249,
+                duration: 1234,
+                ease: 'Cubic.easeInOut' as const,
+              },
+              {
+                kind: 'cameraZoom' as const,
+                zoom: 1.75,
+                duration: 987,
+                ease: 'Expo.easeOut' as const,
+              },
               { kind: 'startScene' as const, sceneId: 'scene-2' },
               { kind: 'restartScene' as const },
             ],

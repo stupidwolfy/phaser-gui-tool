@@ -1003,6 +1003,94 @@ test('the exported page destroys what a tap rule names', async ({
   await run.close();
 });
 
+test('the exported page runs the camera effects a rule names', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **Only this side can make the claim at all.** The editor runs no rule, and
+  // its own `cameras.main` is the user's view of the scene — so a `fade` or a
+  // `zoomTo` on the near side would move where the user is looking, which is
+  // what "drawn, never applied" rules out. `rules.spec.ts` asserts that it does
+  // not; this asserts that the export does.
+  //
+  // A fade rather than a flash, and the instrument is the reason: a fade is
+  // monotonic and it *stays*, where a flash is a race with the poll — the
+  // "what frame is up at any instant" trap, one effect over.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Width', 400);
+  await editor.setField('Height', 300);
+  await editor.deselect();
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'the scene starts');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Fade the camera');
+  await editor.setField('Rule 1 do 1 duration', 200);
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(page.context(), testInfo.outputPath('fade'), exported.contents);
+
+  // Nothing else in this fixture paints black, and a no-op emit leaves the
+  // rectangle there for ever.
+  const gone = await reaches(
+    async () =>
+      (await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL)).count,
+    (count) => count === 0,
+  );
+  expect(gone).toBe(0);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('an exported zoom acts on the camera rather than painting over it', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // An **extent**, because what is asserted is how big something is drawn — and
+  // it is the claim a fade cannot make: a camera effect that acted on the
+  // picture rather than on the camera would darken the canvas and never widen
+  // anything on it.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Width', 120);
+  await editor.setField('Height', 90);
+  await editor.deselect();
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'the scene starts');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Zoom the camera');
+  await editor.setField('Rule 1 do 1 zoom', 2.5);
+  // Four seconds, which is not padding: `runExportedPage` already waits for the
+  // canvas and a frame, so a 200ms zoom is **over** before the first screenshot
+  // comes back and both readings are of the finished state — which reads as the
+  // effect not having run. A long ramp is what makes "before" mean before.
+  await editor.setField('Rule 1 do 1 duration', 4000);
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(page.context(), testInfo.outputPath('zoom'), exported.contents);
+
+  const before = await findColorBox(
+    run.page,
+    await run.page.locator('canvas').screenshot(),
+    RECT_FILL,
+  );
+  // 1.6 rather than the nominal 2.5: the first reading is already a little way
+  // up the ramp, so the multiplier is deliberately below what the whole zoom
+  // would give. A no-op emit is exactly 1.0 and fails it by a mile.
+  const after = await reaches(
+    async () =>
+      findColorBox(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL),
+    (box) => box.width > before.width * 1.6,
+  );
+  expect(after.width).toBeGreaterThan(before.width * 1.6);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
 test('a Matter collision runs its rule, whichever way round the pair arrives', async ({
   editor,
   page,

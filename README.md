@@ -113,7 +113,9 @@ on a desktop.
   panel — say when something happens and what it does. *When* is the scene starting, two
   objects touching, an object being tapped, a key being pressed or a timer firing; *what* is
   removing an object, showing or hiding one, setting an object's text, playing a sound or an
-  animation, starting a movement, going to another scene, or changing a number. Declare
+  animation, starting a movement, going to another scene, changing a number — or moving the
+  camera: shake it when something is hit, flash or fade it in a colour of your choosing, pan
+  it somewhere, zoom it in or out, each over a time and an easing you set. Declare
   those numbers under Variables — a score, a lives count — and a rule can check one before
   it runs (`only if Score is at least 3`). Variables survive a change of scene, so a score
   carries from level to level. The editor never runs a rule, because a rule deletes things:
