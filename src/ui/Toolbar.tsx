@@ -80,6 +80,34 @@ function PreviewIcon({ playing }: { playing: boolean }) {
 }
 
 /**
+ * Run the game: a triangle inside a screen.
+ *
+ * Drawn rather than typed for the reason the three above it are, and shaped
+ * against `PreviewIcon` rather than in isolation. Preview and Play are two
+ * different things — one animates the *document's* canvas, the other runs a
+ * *game* in a document of its own — and a second bare triangle beside the first
+ * would say they were the same thing at a glance. The frame around it is the
+ * whole distinction: something else's screen, with something playing on it.
+ */
+function PlayIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <rect
+        x="1.6"
+        y="2.6"
+        width="12.8"
+        height="10.8"
+        rx="1.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+      />
+      <path d="M6.6 5.6 11 8l-4.4 2.4Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+/**
  * Top bar.
  *
  * On a phone this keeps only what you reach for mid-edit — history, fit, save —
@@ -111,6 +139,7 @@ export function Toolbar({
   // the toolbar rather than a panel, because on a phone a panel is a sheet
   // covering the canvas you are trying to watch.
   const hasMotion = useEditorStore((s) => hasMotionIn(s.project));
+  const setPlaying = useEditorStore((s) => s.setPlaying);
 
   return (
     <header className="toolbar">
@@ -183,6 +212,23 @@ export function Toolbar({
             <PreviewIcon playing={previewMotion} />
           </button>
         )}
+        {/* In both layouts, where every other export control is desktop-only.
+            Play is worth most on the device where downloading an .html and
+            finding something to open it with is hardest — and unlike the three
+            Export buttons it produces nothing to file away, so it costs the
+            File sheet nothing to leave it here.
+
+            An action rather than a toggle: the overlay covers this whole bar,
+            so the way out belongs on the surface the mode has taken, which is
+            the rule that put the way out of paint mode on the tile bar. */}
+        <button
+          className="btn"
+          onClick={() => setPlaying(true)}
+          title="Run this project"
+          aria-label="Play game"
+        >
+          <PlayIcon />
+        </button>
       </div>
 
       <div className="toolbar__group">

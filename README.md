@@ -119,7 +119,7 @@ on a desktop.
   those numbers under Variables — a score, a lives count — and a rule can check one before
   it runs (`only if Score is at least 3`). Variables survive a change of scene, so a score
   carries from level to level. The editor never runs a rule, because a rule deletes things:
-  press Export and play the page it gives you
+  press **Play** and the game does
 - **Show what the game counts**: a variable can hold a line of text as well as a number, and
   a rule that sets an object's text can put a variable's value on the end of it — so a text
   object reading `Score: 0` in the editor reads `Score: 7` in the game. The editor leaves the
@@ -137,6 +137,13 @@ on a desktop.
   step
 - Save and open `.phaser.json` project files from your device, with an autosaved draft in
   the browser so a closed tab doesn't lose your work
+- **Play it, without leaving the editor.** The Play button in the toolbar runs your
+  project — the real exported game, the same one the `.html` export gives you, in a frame
+  over the editor. Physics falls, rules fire, tweens run, keys and on-screen buttons drive
+  things: everything the canvas deliberately refuses to do while you are placing objects.
+  Nothing it does touches your project — Stop throws the running game away and the scene is
+  exactly as you left it, down to the last number. Restart plays it again from the top.
+  Phaser comes from the editor's own copy, so Play works with no connection at all
 - Export the project as real Phaser code: a Scene class per scene in TypeScript or
   JavaScript, or a self-contained runnable HTML page — images included, so an export needs
   no files alongside it. The scene you are editing is the module's default export and the
@@ -158,6 +165,10 @@ on a desktop.
 | Ctrl/Cmd + D, C, V | Duplicate, copy, paste |
 | Ctrl/Cmd + Z, Shift+Z | Undo, redo |
 | Ctrl/Cmd + S, O | Save, open |
+
+While the game is playing, none of these do anything: the game has the keyboard, which is
+how a driven object reads the arrow keys. Stop is the way back, and it is a button rather
+than a shortcut for exactly that reason.
 
 On a phone, tapping an object selects it and only a second drag moves it — a fingertip
 covers enough of the screen that honouring the first touch as a drag moved whichever
@@ -215,7 +226,7 @@ The editor **draws** the body and never runs it. Its green box is where the body
 because an Arcade body is axis-aligned it stays square to the screen however the object is
 turned — which is the one thing about physics the canvas can tell you and the docs cannot.
 Nothing moves while you are placing it: the document is what you are editing, so the
-simulation belongs to the game you export. Export the runnable page to watch it go.
+simulation belongs to the game you export. Press **Play** to watch it go.
 
 The export is the real thing — `this.physics.add.existing(...)` with every setter written
 out, `this.physics.world.gravity.set(...)` and `setBounds(...)` per scene. The runnable
@@ -260,8 +271,8 @@ against the scene rectangle, and the keys still work alongside them — one expo
 desktop and on a phone.
 
 None of it runs in the editor. Nothing moves, nothing collides and no key does anything
-while you are placing objects: the document is what you are editing. Export the runnable
-page to play it.
+while you are placing objects: the document is what you are editing. Press **Play** to
+play it — that runs the game rather than the canvas, so your scene is untouched by it.
 
 What is still deliberately yours is what *happens* — a coin that disappears, a scene that
 starts the next one. The export hands you the overlap and the handles; the line inside it is
@@ -276,7 +287,7 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; twenty-four iterations in, it is
+The goal is to eventually cover the whole Phaser surface; thirty-two iterations in, it is
 a working editor but a small one.
 
 **Not built yet** — text has typography and its own imported fonts, with four limits: a
@@ -314,6 +325,12 @@ Scenes are in, with one limit: nothing in the editor starts one scene from anoth
 that is a line of game logic rather than a piece of layout — the export registers them all
 and leaves `this.scene.start('Level 2')` to you. Prefabs are in, with two limits: a prefab cannot contain another prefab,
 and an instance cannot override part of what it draws — detach it and edit the copy.
+
+Play is in, with four limits: it plays a
+snapshot, so an edit reaches the game on the next Restart rather than live; errors go to
+the browser console rather than to the editor, because what runs is the exported page
+unchanged; there is no pause, step or inspect, which is a debugger and a different tool;
+and it always starts the scene you are editing, which is the scene the export starts too.
 
 **Verified by** a Playwright suite that drives the production build in Chromium at both
 1440×900 and 390×844, and by CI on every pull request. It checks the editing round trip
@@ -359,6 +376,7 @@ tests/
   nineslice.spec.ts   a panel whose corners hold, and a texture that repeats
   typography.spec.ts  a stroke, a wrap, an alignment, and a style that round-trips
   assets.spec.ts      image import, drawing, save/reopen, removal
+  play.spec.ts        the game run in the editor: it falls, and the document does not
   export.spec.ts      the runnable page, run in a browser
   export-toolchain.spec.ts  the .ts through tsc --strict, the .js through Vite
   helpers/            the page object, pixel readback, fixtures

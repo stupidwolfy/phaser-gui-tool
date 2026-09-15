@@ -85,7 +85,11 @@ Iteration 31 (shipped) let the camera do something at a moment: five rule action
 flash, fade, pan and zoom — which is the refusal iteration 18 made arriving at the door
 iteration 28 built, with no new format, no new table, no new emitted helper and an
 `EditorScene.ts` untouched for the fourth time, because here the canvas's refusal to run a
-rule and the camera's "drawn, never applied" are the same refusal twice.
+rule and the camera's "drawn, never applied" are the same refusal twice. Iteration 32
+(shipped) let the user press play: the exported page, run in a sandboxed iframe over the
+editor, so sixteen iterations of emitted behaviour the canvas refuses to run are finally
+visible without a download — and the first iteration in this list that changes the document
+not at all, because the thing that simulates is a different document.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -3796,6 +3800,156 @@ Generated code is built from free user text, and the escaping is not optional:
 - The document title, the CSS background colour and the CDN version all come from the
   project file, so they are escaped or validated rather than interpolated raw.
 
+## Play
+
+The Play button runs `generateRunnableHtml`'s output in a sandboxed iframe over the editor,
+and Stop throws that document away. It closes the hole every "drawn, never run" paragraph
+above has been leaving open since iteration 16: the editor emits physics, colliders, keys,
+touch buttons, rules, camera effects and an `update()`, and until now the only way to see
+any of it was to download a file and find something to open it with — which on a phone is
+most of the way to impossible, in an editor whose first claim is that mobile is a
+first-class target.
+
+- **This is the first iteration that changes the document not at all**, and that is the
+  sentence the rest of it follows from. Every one before added a type, a table or a field.
+  There is no `SCHEMA_VERSION` question to answer, no new reader in the `guidesOf` /
+  `tileMapOf` family, no parser, no `collect*`, no `EmitContext` field, no inspector
+  section — and `EditorScene.ts` is untouched for the fifth time, after Audio, Rules,
+  iteration 29 and iteration 31. What it adds is a window.
+- **Not one refusal weakens, because none of this happens on that canvas.** The line
+  physics drew — *a step rewrites the numbers the document is made of, so there is no
+  version of "run it for a moment" that leaves the document alone* — is about the
+  **editor's** canvas, and the editor's canvas is not what is running. The game is a
+  different document with a different Phaser in it, and the thing that ends it is the
+  DOM node going away. `hasMotionIn` is untouched and records its **ninth** refusal, which
+  is the one a reader will expect hardest of all to be wrong: a game is nothing but motion.
+  But that toggle exists so a canvas moving *by itself* can be stopped, and nothing here
+  moves the canvas at all — the canvas is behind the overlay, drawing what it always drew.
+- **The exported page is the product, so Play runs it unmodified.** Not a second renderer,
+  not "the editor's scene with physics switched on", and not a reduced build: the bytes in
+  the frame are the bytes of the `.html` the Export button downloads, one URL apart. That
+  is what makes this a *window* rather than a second implementation, and it is the property
+  every decision below is protecting.
+- **`generateRunnableHtml` gained one optional parameter and nothing else.** `phaserSrc`
+  overrides where the runtime is fetched from; omitted, the CDN URL is built exactly as it
+  was, so every exported file is byte for byte what it was — the rule the asset table, the
+  tilemap helper and the prefab factories all follow. An argument rather than a second
+  generator is `EmitContext.receiver`'s call one layer out: one page, two places it can
+  run, and a second copy of the composer is precisely the drift that sharing
+  `buildCreateBody` exists to prevent.
+- **Play does not touch the network, and that is what the parameter is for.** This editor
+  is served from Pages, works offline, and has never made a request in its life; a Play
+  button that fails on a plane is not this editor's Play button. So the frame loads the
+  copy of Phaser the app itself ships, which is the same `phaser.min.js`
+  `tests/export.spec.ts` has been answering the CDN with since the export existed — Play is
+  that harness, in the editor. `play.spec.ts` counts jsDelivr requests and asserts zero,
+  *fulfilling* rather than aborting them, because an aborted request makes a broken Play
+  look like a passing test.
+- **The runtime is imported by path, not by specifier, and the reason is worth keeping.**
+  Phaser's package `exports` map has no deep entry — `"."` and `"./package.json"` only — so
+  `import 'phaser/dist/phaser.min.js?url'` does not resolve at all, and the relative
+  `../../node_modules/…?url` is what reaches the file. It is the minified **IIFE** build
+  rather than the ESM one because the page is unchanged: a classic `<script>` expecting
+  `window.Phaser`. `tsconfig.app.json` already carries `"types": ["vite/client"]`, so `?url`
+  needs no declaration. The cost is ~1.4 MB of asset in `dist/`, fetched only on a press.
+- **The one honest difference, recorded rather than hidden**: a downloaded export runs
+  under the Phaser the *project* pins, and Play runs under the Phaser the *editor* bundles.
+  For anything made in this editor they are the same version; for an old file they can
+  differ. Fetching the pinned one instead would be the network dependency above.
+- **`sandbox="allow-scripts"` and nothing else.** An opaque origin, so the game cannot
+  reach `parent`, `localStorage` or the autosaved draft. A classic script from this origin
+  still loads (no CORS on those), WebGL still works, and the `?url` import is absolute so
+  srcdoc's inherited base URL is not a question. `srcdoc` rather than a blob URL: no
+  origin-partitioning question and nothing to revoke, and the ~5 MB localStorage draft
+  already caps a project inside what an attribute holds.
+- **What the sandbox costs is an error channel, and that is a refusal rather than a
+  to-do.** The overlay cannot read an opaque-origin frame, and giving the page a
+  `postMessage` would mean changing the bytes the export ships — the one property this
+  whole feature exists to preserve. Errors reach the browser console named by frame, which
+  is where a developer tool should put them.
+- **`position: fixed; inset: 0`, never a slot in the layout**, and this one is load-bearing
+  rather than convenient. Giving the game a share of the flow would resize `.app__center`,
+  and resizing the viewport re-fits the editor's camera — which is the
+  `game.scale.getParentBounds()` trap, entered on the way in and again on the way out.
+  Nothing underneath moves, so there is nothing to put back.
+- **Restart is a new realm, not a resumed one.** It re-keys the iframe, which discards
+  every texture, timer, tween, listener, `FontFace` and sound the old one held. That is why
+  there is no teardown here at all — the four bookkeeping maps `EditorScene` keeps on
+  SHUTDOWN exist because a texture belongs to the *game* and a face to the *page*, and
+  nothing outlives a discarded document. It is the widest version of that rule and the one
+  where it costs nothing.
+- **The game takes the keyboard, so Stop is a button and there is no Escape.** This is the
+  one place Play breaks a convention this editor keeps everywhere else — Escape backs out
+  of paint mode and out of a selection, and it does not back out of a running game. Phaser
+  focuses its own canvas as it boots, so the iframe becomes the editor's `activeElement`
+  and every key after that belongs to the game, which is **correct**: a driven object is
+  read with the arrow keys, and an editor stealing one back would be an editor breaking the
+  game it is running. A shortcut would therefore work for the moment between the press and
+  the boot and never again, and a half-present behaviour reads as a broken one — this
+  file's most-repeated lesson, arriving on a keyboard. `App.tsx` still returns early on
+  `playing`, because focus *does* come back out: the overlay's own bar is in this document,
+  and a press on Restart leaves it holding the keyboard until the next boot. Found by a
+  test, not by reasoning — the first version had an Escape branch and it failed on the
+  first run.
+- **The page is a snapshot, and there is no hot-reload question to answer.** The overlay
+  covers the toolbar, the tree and the inspector, so *nothing on screen can make an edit
+  while the game runs* — which means the snapshot property is not a rule anybody has to
+  remember, and also that it cannot be asserted through the UI. `PlayFrame` reads the
+  project through `getState()` rather than a selector for that reason: a subscription could
+  only ever cost a re-render and a regenerated multi-megabyte string on a store change
+  nobody asked for, an autosave landing being the obvious one.
+- **`playing` is editor state in the `previewMotion` / `snapEnabled` / `lockAspect`
+  family** — never saved, never dirty, never undoable — and deliberately **not** persisted
+  through `io/prefs.ts` the way the section state is: the shape of a tidied panel is worth
+  having back after a reload, and a running game is not. Nothing prunes it the way
+  `paintingId` is pruned, because there is nothing here to dangle; `loadProject` and
+  `resetProject` do clear it, since a game whose project has been replaced is a game no
+  document describes.
+- **It is not `previewMotion` and the toolbar says so with a different mark.** Preview
+  animates the *document's* canvas and is the one moment that canvas stops mirroring the
+  document; Play runs a *game*. `PlayIcon` is a triangle inside a screen rather than a
+  second bare triangle, because a project with something that moves has both controls on
+  screen at once — and the accessible names are `Play game` and `Preview motion`, never a
+  bare `Play`, by the rule that already gives prefab buttons a `+ ` prefix and scene chips
+  a `Switch to `.
+- **In both layouts, where every Export control is desktop-only.** Play is worth most on
+  the device where downloading an `.html` and finding something to open it with is hardest,
+  and unlike the three Export buttons it produces nothing to file away, so it costs the
+  File sheet nothing to leave it in the toolbar. A 390px toolbar already clips when
+  everything is shown, which is why `play.spec.ts` asserts the button's right edge is
+  inside the viewport rather than only that it exists.
+- **The suite's instrument is `EditorPage.findInPlay`, and it is the first reading in this
+  harness that does not go through `shot`.** It screenshots the **iframe element**, because
+  the editor's canvas is behind the overlay and reading that reports the scene the game was
+  generated *from* rather than the game. There is no band to clip — the move bar and the
+  toast are the editor's and the overlay covers both — and, the simplification worth saying
+  out loud, **an export draws no editor chrome at all**, so the fixture-colour clearance
+  list every other spec is shaped by does not apply in there.
+- **Every claim about the game is about travel, in scene units, through
+  `EditorPage.playScale`.** The exported page asks for `Scale.FIT`, so a 960x540 scene
+  letterboxed into the mobile project's 390x792 frame draws about 219 pixels tall — a
+  threshold measured against the *frame* is most of the game on one project and a fifth of
+  it on the other, which is the shape of a test that passes on one and quietly measures
+  something else on the other. It cost the first run of `play.spec.ts` two tests.
+  `playScale` is `zoom`'s sibling and derived the same way: from the arithmetic the thing
+  being measured actually uses.
+- **`reaches` moved to `tests/helpers/poll.ts`.** A simulation is now reached by two
+  specs — `export.spec.ts` running the page as a file and `play.spec.ts` running it in the
+  editor — and it is the instrument both need for the reason it records: what a running
+  game is doing at one wall-clock instant is a race with the frame rate.
+- **The load-bearing claim is the negative one**, and it is the assertion that fails the
+  day somebody wires a simulation into `EditorScene`: the faller falls in the frame, and
+  when Stop comes the object is drawn where the document put it, the inspector reads the
+  authored `y`, and the saved bytes hold it. `tweens.spec.ts`' byte-for-byte claim one
+  level up — there a preview was allowed precisely because its result was thrown away, and
+  here nothing was ever written to throw away.
+- **What Play refuses.** **No hot reload** — see the snapshot note above; Stop then Play is
+  the edit-to-run path. **No pause, step or inspect** — that is a debugger and a different
+  tool. **No choosing a scene** — Play boots the active scene because that is what Export
+  already decides, and a second answer is two fields over one number. **No error panel** —
+  the sandbox note above. And **nothing reads anything back out of the game**: a running
+  game cannot edit the document, which is the whole reason it is allowed to run.
+
 ## Verification
 
 `npm test` runs a committed Playwright suite against the **production build** (its
@@ -3842,6 +3996,8 @@ tests/
   camera.spec.ts            a camera drawn, clamped, followed, saved and exported
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
+  play.spec.ts              that page run in the editor: a body that falls, and a
+                            document that does not move while it does
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
   helpers/editor.ts         the page object: panels, fields, gestures, downloads
@@ -4113,6 +4269,23 @@ gives a blank page with 404ing assets — the single most likely deploy failure.
 with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
+
+Play shipped in iteration 32, and what it leaves is short because it adds nothing to the
+document to leave holes in. **No hot reload** — the overlay covers every control that could
+make an edit, so this is not deferred work but a question the shape answers; a loosening
+would mean the game and the editor side by side, which is a layout this editor has nowhere
+to put on a 390px screen. **No error panel** — see "Play" above: reading an opaque-origin
+frame means giving the exported page a reporting channel, and the export's bytes being
+exactly what runs is the property the feature exists for. **No pause, step, slow-motion or
+inspector**, which is a debugger and is a different tool rather than more of this one; the
+shape it would take is a second window onto a game the editor deliberately cannot see
+inside. **No editing while it runs, and nothing read back out of the game** — the second is
+the one to keep refusing hardest, because "drag it in the running game and keep the
+position" is the obvious next ask and it is the physics refusal exactly: a running game
+that can write to the document is a document that simulates. And **no choosing which scene
+to play** — a second answer to what Export already decides, though if it ever arrives it is
+a one-field loosening rather than a shape change, since `generateRunnableHtml` already
+emits every scene and boots the active one.
 
 Text variables and `setText` shipped in iteration 29, which closed the first hole iteration
 28 left — and it is worth reading the prediction beside the work, because the prediction was

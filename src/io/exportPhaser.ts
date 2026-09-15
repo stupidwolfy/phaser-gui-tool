@@ -4308,8 +4308,17 @@ export default ${boot.className};
  * A self-contained page that runs the project. Phaser comes from a CDN pinned
  * to the version the project records, so an old project keeps working against
  * the Phaser it was built for.
+ *
+ * `phaserSrc` overrides where that runtime is fetched from, and exists for one
+ * caller: the editor's own Play overlay, which runs this very page in a
+ * sandboxed iframe and cannot reach the network to do it — see "Play" in
+ * CLAUDE.md. It is an argument rather than a second generator for
+ * `EmitContext.receiver`'s reason: one page, two places it can run, and a
+ * second copy of this function is exactly the drift that sharing
+ * `buildCreateBody` exists to prevent. Omitted, the CDN URL is built as it
+ * always was, so every exported file is byte for byte what it was.
  */
-export function generateRunnableHtml(project: Project): string {
+export function generateRunnableHtml(project: Project, phaserSrc?: string): string {
   const { scenes, ctx, boot, physics, touch, rules, labels } = prepare(project);
   // phaserVersion comes from the project file, so it is not trustworthy input
   // for a URL. Anything that is not a plain version falls back to the version
@@ -4317,7 +4326,10 @@ export function generateRunnableHtml(project: Project): string {
   const version = /^[0-9]+\.[0-9]+\.[0-9]+$/.test(project.phaserVersion)
     ? project.phaserVersion
     : TARGET_PHASER_VERSION;
-  const cdn = `https://cdn.jsdelivr.net/npm/phaser@${version}/dist/phaser.min.js`;
+  // Named for what it is rather than for where it usually comes from: with
+  // `phaserSrc` given it is not a CDN at all.
+  const runtimeSrc =
+    phaserSrc ?? `https://cdn.jsdelivr.net/npm/phaser@${version}/dist/phaser.min.js`;
 
   const table =
     ctx.assets.size > 0 ? `${buildAssetTable(ctx.assets, '      ')}\n\n` : '';
@@ -4426,7 +4438,7 @@ ${arcadeConfig(physics.arcade)}        scale: {
     </style>
   </head>
   <body>
-    <script src="${cdn}"></script>
+    <script src="${runtimeSrc}"></script>
     <script>
       ${escapeForScriptTag(script)}
     </script>
