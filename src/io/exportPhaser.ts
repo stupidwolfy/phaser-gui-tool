@@ -931,6 +931,80 @@ function buildBindLabelHelper(
 }
 
 /**
+ * The one function every `varChange` rule listens through.
+ *
+ * It rides on `changedata-<key>`, which is the same moment `bindLabel` above
+ * already subscribes to — **a moment Phaser delivers of its own accord**, which
+ * is the whole of why this trigger is on the near side of the line iteration 28
+ * drew and why `update()` gains nothing for it.
+ *
+ * Three facts about Phaser's `DataManager` shape this, and all three were read
+ * out of `src/data/DataManager.js` rather than remembered:
+ *
+ * **`changedata-<key>` and never `setdata-<key>`.** A key's *first* write emits
+ * `setdata` alone; every later one emits `changedata` and `changedata-<key>`.
+ * The variable helper sets every key in `create()`'s prologue, above this, so a
+ * rule listener is never in place for the first write — which is correct, since
+ * a variable coming into existence is not a change to it and a `sceneStart`
+ * rule is what a project uses to act at the boot.
+ *
+ * **A write of the value already there still emits.** There is no equality
+ * check in `setValue` at all: `registry.set('score', 0)` on a score that is
+ * already 0 fires this. That is a thing to know rather than a thing to fix — a
+ * `setVar` is an instruction and the document says it happened.
+ *
+ * **And the emit is synchronous, inside `set`** — which is what makes the guard
+ * below load-bearing rather than defensive. A rule that writes the variable it
+ * watches would otherwise re-enter its own handler with no bottom: a stack
+ * overflow in the player's game, on the first change. The flag is per listener,
+ * so a cycle of any length terminates — rule A writes B, rule B writes A, and
+ * A's handler finds its own flag still set and returns. `MIN_TIMER_DELAY`'s job
+ * one trigger over: the whole protection against the one thing this vocabulary
+ * can run away with.
+ *
+ * The guard lives here rather than in `rulesOf` on purpose. Refusing a
+ * self-writing rule would cost the rule, and `addVar` on the watched variable is
+ * a thing people legitimately write — a counter that clamps itself. This makes
+ * it terminate; it does not make it unsayable.
+ *
+ * **And it unsubscribes on shutdown**, which matters more here than it does for
+ * a label: the registry is the *game's*, and `restartScene` is one of this
+ * vocabulary's own actions — so without this, every restart leaves another
+ * listener behind holding bindings to objects that are gone.
+ *
+ * The handler takes **no arguments**, for `buildKeyHelper`'s reason to the
+ * character: Phaser types `EventEmitter#on`'s second parameter as the bare
+ * `Function`, so a named parameter there is an implicit `any` the exported `.ts`
+ * refuses, and the `create()` body is the same plain JavaScript in all three
+ * outputs and can carry no annotation.
+ */
+function buildOnVarHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const signature = typed
+    ? `function ${fn}(scene: Phaser.Scene, key: string, handler: () => void): void {`
+    : `function ${fn}(scene, key, handler) {`;
+  const lines = [
+    signature,
+    '  let busy = false;',
+    '  const run = () => {',
+    '    if (busy) return;',
+    '    busy = true;',
+    '    try {',
+    '      handler();',
+    '    } finally {',
+    '      busy = false;',
+    '    }',
+    '  };',
+    "  scene.registry.events.on('changedata-' + key, run);",
+    '  scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {',
+    "    scene.registry.events.off('changedata-' + key, run);",
+    '  });',
+    '}',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
  * A font each scene draws some text in, by the family it is registered under.
  *
  * `collectAudio`' sibling, and **the one of the three tables with no `Used…`
@@ -2098,6 +2172,11 @@ interface EmitContext {
   /** What a bound label subscribes through, allocated like `tilemapFn`. */
   bindLabelFn: string;
   /**
+   * What a `varChange` rule subscribes through — the same `changedata-<key>`
+   * moment `bindLabelFn` above already rides on, one consumer over.
+   */
+  onVarFn: string;
+  /**
    * What each scene's `super(...)` registers it as, by scene id.
    *
    * A `startScene` action names a scene the document holds and has to emit the
@@ -2758,6 +2837,7 @@ function buildFactories(
       ctx.matterHitFn,
       ctx.labelValueFn,
       ctx.bindLabelFn,
+      ctx.onVarFn,
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
@@ -3007,6 +3087,7 @@ function buildUpdateBody(
     ctx.matterHitFn,
     ctx.labelValueFn,
     ctx.bindLabelFn,
+    ctx.onVarFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
 
@@ -3439,6 +3520,26 @@ function buildRuleLines(
         lines.push('});');
         break;
       }
+
+      case 'varChange': {
+        // `this` hardcoded rather than `${ctx.receiver}`, for `buildSoundLines`'
+        // reason: a rule only ever runs in a Scene's `create()`, and writing the
+        // receiver would read as though a prefab factory could reach one.
+        const key = ctx.variables.get(when.variableId)?.key;
+        if (key === undefined) {
+          // Unreachable from a file this editor wrote — `rulesOf` drops a rule
+          // whose trigger names a missing variable, and `collectVariables` is
+          // unfiltered so every declared one is here. A comment rather than a
+          // throw all the same: `missingReason`'s treatment, and the camera
+          // follow's.
+          lines.push('// A rule watches a variable that is not in the table.');
+          break;
+        }
+        lines.push(`${ctx.onVarFn}(this, ${str(key)}, () => {`);
+        lines.push(...body.map((line) => `  ${line}`));
+        lines.push('});');
+        break;
+      }
     }
   }
   return lines;
@@ -3492,6 +3593,7 @@ function buildCreateBody(
     ctx.matterHitFn,
     ctx.labelValueFn,
     ctx.bindLabelFn,
+    ctx.onVarFn,
     ...[...ctx.prefabs.values()].map((entry) => entry.fn),
   ]);
   const lines: string[] = [
@@ -3969,7 +4071,7 @@ interface Emission {
    */
   touch: boolean;
   /** Which rule helpers this file needs, each gated like every table above. */
-  rules: { keys: boolean; taps: boolean; matterHits: boolean };
+  rules: { keys: boolean; taps: boolean; matterHits: boolean; vars: boolean };
   /**
    * Whether anything binds a label, and whether anything formats a value.
    *
@@ -4018,6 +4120,11 @@ function prepare(project: Project): Emission {
   // which is what the specs asserting four of them by name depend on.
   const labelValueFn = toIdentifier('label value', moduleNames);
   const bindLabelFn = toIdentifier('bind label', moduleNames);
+  // And a fifteenth, after all fourteen above it, by that same rule once more.
+  // The rule is not stylistic: `toIdentifier` suffixes a clash, so drawing a
+  // new name earlier moves the suffix some *earlier* helper was given — and
+  // four of those are asserted by name in the suite. A new helper goes last.
+  const onVarFn = toIdentifier('on variable change', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
@@ -4066,6 +4173,7 @@ function prepare(project: Project): Emission {
       matterHitFn,
       labelValueFn,
       bindLabelFn,
+      onVarFn,
       variables,
       sceneKeys: new Map(scenes.map((entry) => [entry.scene.id, entry.key])),
       // Placeholders the per-scene context overwrites, exactly as `engine` is:
@@ -4106,6 +4214,9 @@ function prepare(project: Project): Emission {
         (scene) =>
           scenePhysicsOf(scene).engine === 'matter' &&
           rulesOf(project, scene).some((rule) => rule.when.kind === 'collide'),
+      ),
+      vars: project.scenes.some((scene) =>
+        rulesOf(project, scene).some((rule) => rule.when.kind === 'varChange'),
       ),
     },
   };
@@ -4291,13 +4402,14 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   const bindLabelFn = labels.bind
     ? `\n${buildBindLabelHelper(ctx.bindLabelFn, ctx.labelValueFn, language, '')}\n`
     : '';
+  const onVarFn = rules.vars ? `\n${buildOnVarHelper(ctx.onVarFn, language, '')}\n` : '';
   const classes = scenes
     .map((entry) => buildSceneClass(project, entry, ctx, language, true))
     .join('\n\n');
 
   return `${header(project)}${physicsNote(physics.arcade)}
 import Phaser from 'phaser';
-${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${factories}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -4380,6 +4492,9 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
   const bindLabelFn = labels.bind
     ? `${buildBindLabelHelper(ctx.bindLabelFn, ctx.labelValueFn, 'js', '      ')}\n\n`
     : '';
+  const onVarFn = rules.vars
+    ? `${buildOnVarHelper(ctx.onVarFn, 'js', '      ')}\n\n`
+    : '';
   const classes = scenes
     .map((entry) =>
       buildSceneClass(project, entry, ctx, 'js', false).replace(/^(?!$)/gm, '      '),
@@ -4411,7 +4526,7 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

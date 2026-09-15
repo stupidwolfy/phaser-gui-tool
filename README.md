@@ -111,7 +111,8 @@ on a desktop.
   reopens on the scene you left it on
 - Make the game actually **play**: under Rules in the scene panel — or on any object's own
   panel — say when something happens and what it does. *When* is the scene starting, two
-  objects touching, an object being tapped, a key being pressed or a timer firing; *what* is
+  objects touching, an object being tapped, a key being pressed, a timer firing or a variable
+  changing; *what* is
   removing an object, showing or hiding one, setting an object's text, playing a sound or an
   animation, starting a movement, going to another scene, changing a number — or moving the
   camera: shake it when something is hit, flash or fade it in a colour of your choosing, pan
@@ -120,6 +121,11 @@ on a desktop.
   it runs (`only if Score is at least 3`). Variables survive a change of scene, so a score
   carries from level to level. The editor never runs a rule, because a rule deletes things:
   press **Play** and the game does
+- **Act on a number reaching something**: pick *a variable changes* as a rule's moment and
+  add a check, and you have `when Score changes, only if Score is at least 10, go to the Win
+  scene`. The rule runs on every change from 10 upwards rather than only the first time, so
+  a one-shot ending is a rule that also switches scene. Nothing is checked frame by frame —
+  the game is told when the number moves
 - **Show what the game counts**: a variable can hold a line of text as well as a number, and
   a rule that sets an object's text can put a variable's value on the end of it — so a text
   object reading `Score: 0` in the editor reads `Score: 7` in the game. The editor leaves the

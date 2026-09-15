@@ -1563,13 +1563,28 @@ function unusedVariableName(project: Project): string {
  *   caller.
  *
  * A `setText` naming the variable needs no migration at all — it shows whatever
- * the value is, which is the whole point of it.
+ * the value is, which is the whole point of it. Nor does a **`varChange`
+ * trigger**, for the same reason one step further out: it watches for the value
+ * changing and never reads it, so there is nothing there to be in the wrong
+ * kind. Said out loud, because beside a function that rewrites every condition
+ * and every `setVar` in the project, not rewriting a trigger reads exactly like
+ * a step that was missed.
  *
  * Returns the rule *by identity* when nothing about it mentions the variable, so
- * `editProject`'s "nothing happened, no undo step" contract holds.
+ * `editProject`'s "nothing happened, no undo step" contract holds. The guard is
+ * deliberately **not** `ruleUsesVariable`, which since iteration 33 answers true
+ * for a trigger this function does not touch — that would rebuild an untouched
+ * rule, and `setVariableKind` reads the identity back to decide whether a scene
+ * changed at all.
  */
 function migrateRuleToKind(rule: SceneRule, id: string, kind: VariableKind): SceneRule {
-  if (!ruleUsesVariable(rule, id)) return rule;
+  const migratable =
+    rule.conditions.some((condition) => condition.variableId === id) ||
+    rule.do.some(
+      (action) =>
+        (action.kind === 'setVar' || action.kind === 'addVar') && action.variableId === id,
+    );
+  if (!migratable) return rule;
 
   const conditions = rule.conditions.map((condition) => {
     if (condition.variableId !== id) return condition;
@@ -1667,7 +1682,15 @@ function mapRule(
   return { ...scene, rules: next };
 }
 
-/** A trigger with its node references put through a mapping. */
+/**
+ * A trigger with its node references put through a mapping.
+ *
+ * A `varChange` trigger falls through untouched and needs no case, which is
+ * worth a line because its only caller is `duplicateScene`: a variable is
+ * *project*-level, so the copy and the original name the same one and there is
+ * nothing to remap. The camera's `followId` needed this treatment precisely
+ * because it names a node, which a copied scene does not share.
+ */
 function remapTriggerNodes(
   when: RuleTrigger,
   node: (id: string) => string,

@@ -423,6 +423,164 @@ test.describe('rules', () => {
     expect(exported).not.toContain('function onKey');
     expect(exported).not.toContain('function onTap');
     expect(exported).not.toContain('function onMatterHit');
+    expect(exported).not.toContain('function onVariableChange');
+  });
+});
+
+/**
+ * The sixth trigger: when the value behind a variable changes.
+ *
+ * Iteration 28 named this one as the thing on the far side of its own line —
+ * *"'while…' or 'when the score passes ten' is the first that has to be watched
+ * for every frame"* — and the second half of that example was wrong. Phaser's
+ * `DataManager` emits `changedata-<key>` itself, and iteration 30's labels have
+ * been listening to it ever since. So every claim here is a version of one
+ * claim: **this is a moment Phaser already delivers**, and `update()` still
+ * gains nothing.
+ *
+ * No positive claim, for this file's reason — the editor runs no rule. The one
+ * that needs a running game is in `export.spec.ts`.
+ */
+test.describe('a variable changing', () => {
+  /** One box and one number for a rule to watch. */
+  async function oneCounter(editor: EditorPage): Promise<void> {
+    await oneBox(editor);
+    await editor.addVariable();
+    await editor.setVariable(1, 'Score', 0);
+  }
+
+  test('the trigger is offered only once a variable exists', async ({ editor }) => {
+    await oneBox(editor);
+    const name = await editor.addRule();
+    await editor.openRule(name);
+
+    // Withheld rather than offered and then silently falling back to
+    // `sceneStart`, which is what `defaultTrigger` would have to do with
+    // nothing to name. An option that leaves the picker where it was reads as a
+    // broken control.
+    await editor.openPanel('inspect');
+    const when = editor.choice('Rule 1 when');
+    await expect(when.getByRole('option', { name: 'a variable changes' })).toHaveCount(0);
+
+    await editor.addVariable();
+    await editor.setVariable(1, 'Score', 0);
+    await editor.openRule(name);
+    await expect(when.getByRole('option', { name: 'a variable changes' })).toHaveCount(1);
+  });
+
+  test('a varChange rule round-trips, and the editor draws nothing for it', async ({
+    editor,
+  }, testInfo) => {
+    await oneCounter(editor);
+    const before = await editor.findDrawn(FILL);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'a variable changes');
+    await editor.deselect();
+    await editor.closePanels();
+
+    // `EditorScene.ts` is untouched by this whole feature, for the sixth time
+    // after Audio, Rules, iteration 29 and iteration 31 — and the canvas has
+    // nothing to draw for a moment it never reaches.
+    const after = await editor.findDrawn(FILL);
+    expect(Math.abs(after.x - before.x)).toBeLessThan(2);
+    expect(after.count).toBeGreaterThan(before.count * 0.9);
+
+    const document = await saved(editor);
+    // Still 14 — the guides case, tenth time. No new `NodeType`, and the
+    // trigger rides in on `scenes`, which `parseProject` passes through
+    // verbatim, so a v14 build carries it back out on a re-save.
+    expect(document.schemaVersion).toBe(SCHEMA);
+    const scene = (document.scenes as { rules?: { when: { kind: string } }[] }[])[0];
+    expect(scene.rules?.[0].when.kind).toBe('varChange');
+
+    const path = testInfo.outputPath('watched.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    expect(await editor.ruleCount()).toBe(1);
+  });
+
+  test('deleting the watched variable takes the rule whole', async ({ editor }) => {
+    await oneCounter(editor);
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'a variable changes');
+    expect(await editor.ruleCount()).toBe(1);
+
+    await editor.removeVariable('Score');
+
+    // The trigger is the one reference `'variableId' in action` cannot see, so
+    // this is the whole of what `ruleUsesVariable`'s new first line buys:
+    // without it the document would keep a rule whose *moment* names nothing,
+    // and `rulesOf` would drop it on the next read with nothing having said so.
+    expect(await editor.ruleCount()).toBe(0);
+    const scene = (await saved(editor)).scenes as { rules?: unknown[] }[];
+    expect(scene[0].rules ?? []).toHaveLength(0);
+  });
+
+  test('it emits a subscription to a moment Phaser delivers, never an update()', async ({
+    editor,
+  }) => {
+    await oneCounter(editor);
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'a variable changes');
+
+    const exported = (await editor.exportCode('ts')).contents;
+
+    // The same `changedata-<key>` a bound label rides on, one consumer over —
+    // which is the whole argument that this trigger is on the near side of
+    // iteration 28's line.
+    expect(exported).toContain('function onVariableChange');
+    expect(exported).toContain("scene.registry.events.on('changedata-' + key, run)");
+    expect(exported).toContain('onVariableChange(this, "score", () => {');
+
+    // Nothing is polled, so nothing needs a frame.
+    expect(exported).not.toContain('update(): void');
+
+    // The guard, which is the whole protection against the one thing this
+    // vocabulary can now run away with: `registry.set` emits synchronously, so
+    // a rule that writes the variable it watches would re-enter its own handler
+    // with no bottom.
+    expect(exported).toContain('if (busy) return;');
+
+    // And the unsubscribe, which matters more here than for a label: the
+    // registry belongs to the *game*, and `restartScene` is one of this
+    // vocabulary's own actions — so every restart would otherwise leave another
+    // listener behind holding objects that are gone.
+    expect(exported).toContain("scene.registry.events.off('changedata-' + key, run)");
+  });
+
+  test('a threshold is the condition that already existed', async ({ editor }) => {
+    await oneCounter(editor);
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'a variable changes');
+    await editor.openRule(name);
+    await editor.panel('inspect').getByTitle('Add a check to rule 1').click();
+    await editor.settle();
+    await editor.setChoice('Rule 1 check 1 is', 'is at least');
+    await editor.setField('Rule 1 check 1 value', 10);
+
+    // "When the score reaches ten" is this trigger plus a gate this vocabulary
+    // already had — read once, at the moment, never polled. That split is not a
+    // convenience; it is what keeps the whole feature on the near side of the
+    // line.
+    const exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('onVariableChange(this, "score", () => {');
+    expect(exported).toContain('if (this.registry.get("score") >= 10) {');
+  });
+
+  test('it puts no preview button on the toolbar', async ({ editor }) => {
+    await oneCounter(editor);
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'a variable changes');
+    await editor.closePanels();
+
+    // `hasMotionIn`'s tenth refusal. A rule that fires by itself is the hardest
+    // one yet to expect false — but that toggle exists so a canvas moving by
+    // itself can be stopped, and this canvas never fires one.
+    await expect(
+      editor.page.getByRole('button', { name: 'Preview motion' }),
+    ).toHaveCount(0);
   });
 });
 

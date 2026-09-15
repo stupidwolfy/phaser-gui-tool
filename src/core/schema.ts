@@ -2821,7 +2821,34 @@ export type RuleTrigger =
   | { kind: 'collide'; aId: string; bId: string }
   | { kind: 'tap'; nodeId: string }
   | { kind: 'keyDown'; key: string }
-  | { kind: 'timer'; delay: number; loop: boolean };
+  | { kind: 'timer'; delay: number; loop: boolean }
+  /**
+   * When the value behind a variable changes.
+   *
+   * **This is the trigger iteration 28 named as the thing on the far side of
+   * its own line, and it named it wrongly.** That paragraph said a sixth
+   * trigger "of the form 'while…' or 'when the score passes ten' is the first
+   * that has to be watched for every frame, which is the first that needs an
+   * emitted `update()`". The first half of that example is still true and still
+   * refused. The second half is this: Phaser's `DataManager` emits
+   * `changedata-<key>` of its own accord, and iteration 30's bound labels have
+   * been listening to that exact moment ever since. So this is a moment Phaser
+   * already delivers — the same one, one consumer over — and `update()` gains
+   * nothing.
+   *
+   * **The trigger is the moment; the threshold is the condition that already
+   * exists.** "When the score reaches ten" is this trigger plus a
+   * `RuleCondition` of `score >= 10`, which is a gate read *once, at a moment*
+   * rather than polled — so the split is not a convenience, it is the whole of
+   * what keeps this on the near side of the line.
+   *
+   * What follows from that is worth stating rather than engineering around: the
+   * rule fires on **every change at or above ten**, not on the *crossing*. A
+   * crossing needs the previous value, which is the document holding state
+   * about its own past, which is a program rather than a list. The panel says
+   * so; the reader does not pretend otherwise.
+   */
+  | { kind: 'varChange'; variableId: string };
 
 /** The comparisons a condition may make. */
 export type RuleOperator = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
@@ -3054,6 +3081,10 @@ export const RULE_TRIGGER_KINDS: readonly RuleTrigger['kind'][] = [
   'tap',
   'keyDown',
   'timer',
+  // Last, after the four moments that are about the world, because this one is
+  // about a number the project keeps. The order is free either way: the suite
+  // picks an option by its label.
+  'varChange',
 ];
 
 /**
@@ -3154,6 +3185,9 @@ export function rulesOf(project: Project, scene: SceneDoc): SceneRule[] {
   const sounds = new Set(soundsOf(project, scene).map((sound) => sound.id));
   const scenes = new Set(project.scenes.map((entry) => entry.id));
   const matter = scenePhysicsOf(scene).engine === 'matter';
+  // A `varChange` trigger names one of these, and a trigger naming nothing
+  // costs the whole rule — see `ruleTriggerOf`.
+  const variables = new Set(project.variables.map((variable) => variable.id));
 
   const rules: SceneRule[] = [];
   const seen = new Set<string>();
@@ -3165,7 +3199,7 @@ export function rulesOf(project: Project, scene: SceneDoc): SceneRule[] {
     // a press on one row edit another, and React would key two rows the same.
     if (seen.has(row.id)) continue;
 
-    const when = ruleTriggerOf(row.when, byId, colliders, matter);
+    const when = ruleTriggerOf(row.when, byId, colliders, matter, variables);
     if (when === null) continue;
 
     const conditions = ruleConditionsOf(row.conditions, project);
@@ -3195,6 +3229,7 @@ function ruleTriggerOf(
   byId: Map<string, GameObjectNode>,
   colliders: SceneCollider[],
   matter: boolean,
+  variables: Set<string>,
 ): RuleTrigger | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const when = raw as Partial<RuleTrigger> & Record<string, unknown>;
@@ -3267,6 +3302,20 @@ function ruleTriggerOf(
         delay: Number.isFinite(delay) ? Math.max(MIN_TIMER_DELAY, delay) : 1000,
         loop: when.loop === true,
       };
+    }
+
+    case 'varChange': {
+      const variableId = typeof when.variableId === 'string' ? when.variableId : '';
+      // It costs the **whole rule**, which is `keyDown`'s treatment rather than
+      // a `setText`'s. A trigger is a moment and there is exactly one of them,
+      // so a trigger naming nothing leaves the rest of the rule with nothing to
+      // attach to — where an action naming nothing is one line of a list the
+      // rest of which still means something.
+      //
+      // The store keeps it from ever firing on a file this editor wrote:
+      // `removeVariable` drops every rule that names the variable, in the same
+      // undo step, and `ruleUsesVariable` is what tells it this trigger counts.
+      return variables.has(variableId) ? { kind: 'varChange', variableId } : null;
     }
 
     default:
@@ -3557,7 +3606,16 @@ export function rulesNaming(
   return rulesOf(project, scene).filter((rule) => ruleNames(rule, nodeId));
 }
 
-/** Whether one rule names a node, in its trigger or in any of its actions. */
+/**
+ * Whether one rule names a node, in its trigger or in any of its actions.
+ *
+ * A `varChange` trigger needs **no case here**, and that absence is worth a
+ * sentence because on this list "no edit needed" and "forgot the edit" read
+ * identically. It names a variable and no object at all, so a rule triggered by
+ * one shows in the scene's own list and on no object's panel — which is the
+ * camera effects' consequence arriving on a trigger, and is correct for their
+ * reason: it is about no object.
+ */
 export function ruleNames(rule: SceneRule, nodeId: string): boolean {
   const when = rule.when;
   if (when.kind === 'tap' && when.nodeId === nodeId) return true;
@@ -3567,8 +3625,20 @@ export function ruleNames(rule: SceneRule, nodeId: string): boolean {
   );
 }
 
-/** Whether one rule reads or writes a variable, in a condition or an action. */
+/**
+ * Whether one rule reads or writes a variable, in its trigger, a condition or
+ * an action.
+ *
+ * The trigger half is the one reference-walking function iteration 33 could not
+ * inherit for free, where the camera effects inherited all three. `'variableId'
+ * in action` cannot see a trigger, so without the first line `removeVariable`
+ * would leave behind a rule whose *moment* names a variable that is gone —
+ * `rulesOf` would then drop the whole rule on the next read, and a rule
+ * vanishing with nothing having said so is exactly the dangling reference
+ * `removeAsset`'s rule says no action in this editor may create.
+ */
 export function ruleUsesVariable(rule: SceneRule, variableId: string): boolean {
+  if (rule.when.kind === 'varChange' && rule.when.variableId === variableId) return true;
   if (rule.conditions.some((condition) => condition.variableId === variableId)) return true;
   return rule.do.some(
     (action) => 'variableId' in action && action.variableId === variableId,
