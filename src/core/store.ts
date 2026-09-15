@@ -256,6 +256,31 @@ export interface EditorState {
   setPreviewMotion: (previewMotion: boolean) => void;
 
   /**
+   * Whether the Play overlay is up: the exported game, running over the editor.
+   *
+   * Editor state in the `previewMotion` / `snapEnabled` / `lockAspect` family —
+   * never saved, never dirty, never undoable. Unlike the section state it is
+   * deliberately *not* persisted through `io/prefs.ts`: the shape of a tidied
+   * panel is worth having back after a reload, and a running game is not.
+   * Coming back to a game covering the document is coming back to a document
+   * you cannot see.
+   *
+   * It is not `previewMotion` and does not touch it, which is the distinction
+   * worth keeping sharp. Preview animates the *document's* canvas and is the
+   * one moment that canvas stops mirroring the document exactly; Play runs a
+   * *game*, in a document of its own, and the editor's canvas goes on refusing
+   * to simulate underneath it because the editor's canvas is not what is
+   * running. See "Play" in CLAUDE.md.
+   *
+   * Nothing prunes it the way `paintingId` is pruned, because there is nothing
+   * here to dangle — the overlay holds a snapshot of the page, not a reference
+   * into the document. `loadProject` and `resetProject` do clear it, since a
+   * game whose project has been replaced is a game no document describes.
+   */
+  playing: boolean;
+  setPlaying: (playing: boolean) => void;
+
+  /**
    * Which sections of the inspector are open.
    *
    * Editor state, in the `lockAspect` / `snapEnabled` family — it is a
@@ -1773,6 +1798,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     angleStep: DEFAULT_ANGLE_STEP,
     guidesVisible: true,
     previewMotion: false,
+    playing: false,
     sectionsOpenByDefault: false,
     sectionOverrides: {},
     paintingId: null,
@@ -1799,6 +1825,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       }),
     setGuidesVisible: (guidesVisible) => set({ guidesVisible }),
     setPreviewMotion: (previewMotion) => set({ previewMotion }),
+    setPlaying: (playing) => set({ playing }),
 
     // An override is written for the section that was pressed and nothing else,
     // so a later Expand-all still reaches every section this one does not name.
@@ -1857,6 +1884,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         moveOrigins: [],
         paintingId: null,
         activeLayerId: null,
+        playing: false,
       }),
 
     resetProject: () =>
@@ -1871,6 +1899,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         moveOrigins: [],
         paintingId: null,
         activeLayerId: null,
+        playing: false,
       }),
 
     markSaved: (fileName) => set({ fileName, dirty: false }),

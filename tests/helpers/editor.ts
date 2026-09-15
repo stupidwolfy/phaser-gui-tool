@@ -915,6 +915,112 @@ export class EditorPage {
     await this.settle();
   }
 
+  // -- play ------------------------------------------------------------------
+
+  /**
+   * The frame the game runs in, or an empty locator when nothing is playing.
+   *
+   * Reached by class rather than by role, the way a section head is: the
+   * overlay's own `role="dialog"` carries the accessible name `Play game`,
+   * which is also the toolbar button's — matching by role would be ambiguous
+   * the moment both are on the page, which is every moment after the press.
+   */
+  playFrame(): Locator {
+    return this.page.locator('.play__frame');
+  }
+
+  /**
+   * Presses Play and waits for the game to have drawn a frame.
+   *
+   * `closePanels` first for the reason every canvas gesture needs it on mobile:
+   * a sheet is a modal over the canvas and the toolbar button is behind it.
+   */
+  async play(): Promise<void> {
+    await this.closePanels();
+    await this.page.getByRole('button', { name: 'Play game' }).click();
+    await this.waitForPlay();
+  }
+
+  /** Throws the running game away and returns to the editor. */
+  async stopPlay(): Promise<void> {
+    await this.page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(this.playFrame()).toHaveCount(0);
+    await this.settle();
+  }
+
+  /** Discards the running game and starts the same page over in a fresh frame. */
+  async restartPlay(): Promise<void> {
+    await this.page.getByRole('button', { name: 'Restart', exact: true }).click();
+    await this.waitForPlay();
+  }
+
+  /**
+   * Waits until the frame holds a booted game.
+   *
+   * The canvas is the signal rather than the iframe's `load`, which fires when
+   * the document has parsed and says nothing about whether Phaser started —
+   * `runExportedPage` in `export.spec.ts` waits on exactly the same thing for
+   * exactly that reason. The rAF is the parent's, which is enough: it is a
+   * frame of wall-clock time, and the game's own loop is running by then.
+   */
+  private async waitForPlay(): Promise<void> {
+    await expect(this.playFrame()).toBeVisible();
+    await expect(
+      this.page.frameLocator('.play__frame').locator('canvas'),
+    ).toBeVisible();
+    await this.settle();
+  }
+
+  /**
+   * How many frame pixels one scene unit is, inside the running game.
+   *
+   * Derived rather than read out of the game, exactly as `zoom` is derived from
+   * `zoomToFit`: the exported page asks for `Phaser.Scale.FIT`, so the canvas
+   * takes the larger scale that still fits the scene in the frame, and it stays
+   * there because nothing here resizes the frame mid-run.
+   *
+   * It is what makes a claim about a running game portable between the two
+   * projects, and the mobile one is why it exists. A 960x540 scene letterboxed
+   * into a 390x792 frame draws about 219 pixels tall — so a threshold measured
+   * against the *frame* is most of the game on one project and a fifth of it on
+   * the other, which is the shape of a test that passes on one and quietly
+   * measures something else on the other.
+   */
+  async playScale(): Promise<number> {
+    const box = await this.playFrame().boundingBox();
+    if (!box) throw new Error('the play frame has no box — did the overlay not mount?');
+    return Math.min(box.width / SCENE.width, box.height / SCENE.height);
+  }
+
+  /**
+   * Where a colour is drawn *inside the running game*, in frame pixels.
+   *
+   * The instrument for every claim here, and the first in this file that does
+   * not go through `shot`. Three differences from `findDrawn` are worth knowing
+   * before writing a claim with it:
+   *
+   * - It screenshots the **iframe element**, because the editor's canvas is
+   *   behind the overlay and reading that would report the scene the game was
+   *   generated from rather than the game.
+   * - There is no band to clip. The move bar and the toast are the editor's,
+   *   and the overlay covers both — which is also why `OVERLAY_BAND` has no
+   *   part in this.
+   * - The reading is in the *game's* own scale, not the editor's zoom: the
+   *   exported page asks for `Scale.FIT`, so it letterboxes itself into
+   *   whatever box the frame happens to be. Assert relative travel, never an
+   *   absolute landing point.
+   *
+   * One simplification in its favour: an export draws no editor chrome at all —
+   * no selection outline, no handles, no guides, no grid — so the fixture
+   * clearance every other spec is shaped around does not apply in here. Said
+   * out loud because "no clearance needed" and "forgot the clearance" read
+   * identically.
+   */
+  async findInPlay(hex: string, tolerance?: number): Promise<ColorBlob> {
+    const png = await this.playFrame().screenshot();
+    return findColor(this.page, png, hex, tolerance);
+  }
+
   /**
    * Where the rotate knob is, in page coordinates, for an object centred on
    * `pivot` whose own half-height is `halfHeight` scene units.

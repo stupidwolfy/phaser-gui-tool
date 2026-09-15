@@ -12,6 +12,7 @@ import {
 import { Viewport, fitView } from './editor/Viewport';
 import { Inspector } from './ui/Inspector';
 import { Layout } from './ui/Layout';
+import { PlayOverlay } from './ui/PlayOverlay';
 import { SceneTree } from './ui/SceneTree';
 import { FilePanel, Toolbar, type ToolbarActions } from './ui/Toolbar';
 import { useIsMobile } from './ui/useMediaQuery';
@@ -146,6 +147,35 @@ export default function App() {
         target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
       const store = useEditorStore.getState();
 
+      // While the game is running there is no editor to drive: the overlay
+      // covers the canvas, the tree and every panel, so a nudge or a delete
+      // here would edit a document nobody can see. Every shortcut below is off.
+      //
+      // Above the field check and above the modifier block on purpose. Ctrl+Z
+      // is deliberately not exempt the way it is inside an input — undoing a
+      // step the user cannot see is worse than a shortcut that does nothing —
+      // and Ctrl+S is the one thing genuinely lost, where pressing Stop first
+      // is a press and an unnoticed undo is work.
+      //
+      // **And there is no Escape here**, which is the one place Play breaks
+      // this editor's own convention: Escape backs out of paint mode, and out
+      // of a selection, and it does not back out of a running game. The reason
+      // is that the game takes the keyboard the moment it boots — Phaser
+      // focuses its own canvas, so the iframe becomes this document's
+      // `activeElement` and every key after that goes to the game rather than
+      // here. That is correct: a driven object is read with the arrow keys, and
+      // an editor that stole a key back would be an editor breaking the game it
+      // is running.
+      //
+      // So a shortcut would work for the moment between the press and the boot
+      // and never again, which is worse than one that never works — a
+      // half-present behaviour reads as a broken one. The way out is the Stop
+      // button the overlay draws, which is where a phone would have put it
+      // anyway. This block stays because focus does come back out here: the
+      // overlay's own bar is in this document, and a press on Restart leaves it
+      // holding the keyboard until the next boot.
+      if (store.playing) return;
+
       if (event.ctrlKey || event.metaKey) {
         const key = event.key.toLowerCase();
         if (key === 's') {
@@ -279,6 +309,7 @@ export default function App() {
         inspector={<Inspector />}
         fileMenu={<FilePanel actions={actions} />}
       />
+      <PlayOverlay />
       {toast && (
         <div className="toast" role="status">
           {toast}
