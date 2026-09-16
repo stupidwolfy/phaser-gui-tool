@@ -1332,6 +1332,147 @@ test('the exported page keeps a label following a variable', async ({
   await run.close();
 });
 
+test('the exported page acts on a variable reaching a number', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The positive claim for the `varChange` trigger, and the only place it can
+  // be made** — the editor runs no rule, so `rules.spec.ts` can only say that
+  // the subscription is emitted and that nothing is drawn for it.
+  //
+  // It is the claim iteration 28 said would need an emitted `update()`: *"when
+  // the score passes ten"*. Nothing here is polled. A looping timer adds to a
+  // number, and a second rule triggered by that number *changing* — gated on it
+  // having reached 3 — writes a caption. So the caption appears **late**, which
+  // is the one thing neither a `sceneStart` rule nor a set-once emit can fake:
+  // the fixture's timer has to fire three times first.
+  await editor.clearScene();
+  await editor.addObject('Text');
+  await editor.setField('Name', 'Label');
+  // A full stop, so the label inks a few pixels before the rule fires and the
+  // reading below is a *growth* rather than an appearance out of nothing.
+  await editor.setField('Content', '.');
+  await editor.setField('Font size', 64);
+  await editor.setField('Text colour', LABEL_FILL);
+  await editor.setField('X', 480);
+  await editor.setField('Y', 270);
+  await editor.deselect();
+
+  await editor.addVariable();
+  await editor.setVariable(1, 'Score', 0);
+
+  // The counter: one number, moved by something that is not the rule under test.
+  const counter = await editor.addRule();
+  await editor.setRuleTrigger(counter, 1, 'a timer fires');
+  await editor.openRule(counter);
+  await editor.setField('Rule 1 every', 60);
+  await editor.page.getByLabel('Rule 1 repeats').check();
+  await editor.settle();
+  await editor.setChoice('Rule 1 do 1', 'Add to a variable');
+  await editor.setField('Rule 1 do 1 by', 1);
+
+  // The rule under test: a moment Phaser delivers, plus the gate this
+  // vocabulary already had.
+  const watcher = await editor.addRule();
+  await editor.setRuleTrigger(watcher, 2, 'a variable changes');
+  await editor.openRule(watcher);
+  await editor.panel('inspect').getByTitle('Add a check to rule 2').click();
+  await editor.settle();
+  await editor.setChoice('Rule 2 check 1 is', 'is at least');
+  await editor.setField('Rule 2 check 1 value', 3);
+  await editor.setChoice('Rule 2 do 1', "Set an object's text");
+  await editor.setField('Rule 2 do 1 text', 'REACHED');
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain("scene.registry.events.on('changedata-' + key, run)");
+  expect(exported.contents).toContain('if (this.registry.get("score") >= 3) {');
+  // Nothing polled, so nothing in a frame.
+  expect(exported.contents).not.toContain('update()');
+
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('variable-reached'),
+    exported.contents,
+  );
+
+  // An **extent**, `labels.spec.ts`' instrument: text is one colour however
+  // much of it there is, so how wide it is drawn is the only thing a screenshot
+  // can say about a string. A full stop at 64px inks some twenty pixels across;
+  // "REACHED" inks well over two hundred. Polled, because what a running game
+  // is doing at one wall-clock instant is a race with the frame rate.
+  const grown = await reaches(
+    async () =>
+      findColorBox(run.page, await run.page.locator('canvas').screenshot(), LABEL_FILL),
+    (reading) => reading.width > 150,
+  );
+  expect(grown.width).toBeGreaterThan(150);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('a rule that writes the variable it watches does not run away', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // `registry.set` emits `changedata-<key>` **synchronously and with no
+  // equality check at all** — both read out of Phaser's `DataManager`, not
+  // remembered. So a rule that adds to the variable it watches re-enters its own
+  // handler, and without the guard in the emitted helper that is an unbounded
+  // recursion: a stack overflow in the player's game on the very first change.
+  //
+  // This is the one claim in the suite that can only be made by *running* it.
+  // The emitted text is identical either way but for one `if`, and `tsc` and
+  // Vite both accept the version that hangs.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Box');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 270);
+  await editor.deselect();
+
+  await editor.addVariable();
+  await editor.setVariable(1, 'Score', 0);
+
+  // One external nudge, once, so there is exactly one change from outside.
+  const kick = await editor.addRule();
+  await editor.setRuleTrigger(kick, 1, 'a timer fires');
+  await editor.openRule(kick);
+  await editor.setField('Rule 1 every', 60);
+  await editor.settle();
+  await editor.setChoice('Rule 1 do 1', 'Add to a variable');
+  await editor.setField('Rule 1 do 1 by', 1);
+
+  // And the rule that would eat its own tail.
+  const loop = await editor.addRule();
+  await editor.setRuleTrigger(loop, 2, 'a variable changes');
+  await editor.openRule(loop);
+  await editor.setChoice('Rule 2 do 1', 'Add to a variable');
+  await editor.setField('Rule 2 do 1 by', 1);
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain('if (busy) return;');
+
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('self-writing-rule'),
+    exported.contents,
+  );
+
+  // The page is still drawing after the change has been through both rules,
+  // and nothing threw. A recursion would have taken the whole game down with a
+  // RangeError, which `run.errors` is what catches.
+  const drawn = await reaches(
+    async () =>
+      findColorBox(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL),
+    (reading) => reading.width > 0,
+  );
+  expect(drawn.width).toBeGreaterThan(0);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
 test('the exported page plays the object it was given controls', async ({
   editor,
   page,

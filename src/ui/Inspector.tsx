@@ -531,6 +531,7 @@ const TRIGGER_LABEL: Record<RuleTrigger['kind'], string> = {
   tap: 'an object is tapped',
   keyDown: 'a key is pressed',
   timer: 'a timer fires',
+  varChange: 'a variable changes',
 };
 
 /** How each action kind reads on a picker. */
@@ -568,7 +569,7 @@ function nodeOptions(scene: SceneDoc, only?: (node: GameObjectNode) => boolean) 
  * name is still what the expand toggle is *titled* by, since a title has to be
  * stable for a test locator and a summary changes as the rule is edited.
  */
-function ruleSummary(rule: SceneRule, scene: SceneDoc): string {
+function ruleSummary(rule: SceneRule, scene: SceneDoc, project: Project): string {
   const name = (id: string) =>
     scene.children.find((node) => node.id === id)?.name ?? 'something';
   const when = rule.when;
@@ -581,7 +582,9 @@ function ruleSummary(rule: SceneRule, scene: SceneDoc): string {
           ? `${when.key} is pressed`
           : when.kind === 'timer'
             ? `every ${when.delay}ms`
-            : 'the scene starts';
+            : when.kind === 'varChange'
+              ? `${findVariable(project, when.variableId)?.name ?? 'a variable'} changes`
+              : 'the scene starts';
   const count = rule.do.length;
   return `When ${trigger} — ${count} ${count === 1 ? 'action' : 'actions'}`;
 }
@@ -744,7 +747,7 @@ function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
         onClick={() => setOpen(!open)}
         title={`Edit ${rule.name}`}
       >
-        {open ? '▾' : '▸'} {ruleSummary(rule, scene)}
+        {open ? '▾' : '▸'} {ruleSummary(rule, scene, project)}
       </button>
 
       {open ? (
@@ -758,12 +761,23 @@ function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
           <SelectField
             label={`Rule ${index} when`}
             value={rule.when.kind}
-            options={RULE_TRIGGER_KINDS.map((kind) => ({
+            // "a variable changes" is withheld rather than offered and then
+            // falling back to `sceneStart`, which is what `defaultTrigger` would
+            // have to do with nothing to name — an option that silently leaves
+            // the picker where it was reads as a broken control, which is the
+            // failure this file records more often than any other. The Variables
+            // panel's own empty state is what says where to go, exactly as it
+            // already does for a condition.
+            options={RULE_TRIGGER_KINDS.filter(
+              (kind) => kind !== 'varChange' || variables.length > 0,
+            ).map((kind) => ({
               value: kind,
               label: TRIGGER_LABEL[kind],
             }))}
             onChange={(kind) =>
-              updateRule(rule.id, { when: defaultTrigger(kind as RuleTrigger['kind'], scene) })
+              updateRule(rule.id, {
+                when: defaultTrigger(kind as RuleTrigger['kind'], scene, project),
+              })
             }
           />
 
@@ -771,6 +785,7 @@ function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
             rule={rule}
             index={index}
             scene={scene}
+            project={project}
             onChange={(when) => updateRule(rule.id, { when })}
           />
 
@@ -939,7 +954,11 @@ function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
 }
 
 /** A trigger of the given kind, already naming something this scene holds. */
-function defaultTrigger(kind: RuleTrigger['kind'], scene: SceneDoc): RuleTrigger {
+function defaultTrigger(
+  kind: RuleTrigger['kind'],
+  scene: SceneDoc,
+  project: Project,
+): RuleTrigger {
   const tappable = scene.children.filter((node) => canBeTapped(node.type));
   switch (kind) {
     case 'collide': {
@@ -956,6 +975,17 @@ function defaultTrigger(kind: RuleTrigger['kind'], scene: SceneDoc): RuleTrigger
       return { kind: 'keyDown', key: 'SPACE' };
     case 'timer':
       return { kind: 'timer', delay: 1000, loop: false };
+    case 'varChange': {
+      // Seeded with a real variable, `defaultTween`'s rule: a trigger that
+      // arrived naming nothing is one `rulesOf` drops on the very next read, so
+      // there would be nothing on screen left to fill in. With no variable at
+      // all there is nothing to seed it with, so it falls back — and
+      // `TriggerFields` says why rather than leaving the picker looking stuck.
+      const variable = project.variables[0];
+      return variable
+        ? { kind: 'varChange', variableId: variable.id }
+        : { kind: 'sceneStart' };
+    }
     default:
       return { kind: 'sceneStart' };
   }
@@ -1065,11 +1095,13 @@ function TriggerFields({
   rule,
   index,
   scene,
+  project,
   onChange,
 }: {
   rule: SceneRule;
   index: number;
   scene: SceneDoc;
+  project: Project;
   onChange: (when: RuleTrigger) => void;
 }) {
   const when = rule.when;
@@ -1133,6 +1165,26 @@ function TriggerFields({
           onChange={(loop) => onChange({ ...when, loop })}
         />
       </div>
+    );
+  }
+
+  if (when.kind === 'varChange') {
+    return (
+      <>
+        <SelectField
+          label={`Rule ${index} watches`}
+          value={when.variableId}
+          options={project.variables.map((variable) => ({
+            value: variable.id,
+            label: variable.name || 'Variable',
+          }))}
+          onChange={(variableId) => onChange({ ...when, variableId })}
+        />
+        <p className="hint">
+          This runs every time the value changes, so a check of “is at least 10”
+          runs on every change from 10 upwards rather than only the first.
+        </p>
+      </>
     );
   }
 

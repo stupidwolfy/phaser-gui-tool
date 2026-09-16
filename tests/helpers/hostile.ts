@@ -664,6 +664,47 @@ export function hostileProject(): Project {
             conditions: [{ variableId: 'var-4', op: 'gt' as const, value: 'a' }],
             do: [{ kind: 'restartScene' as const }],
           },
+          // A `varChange` trigger on the **hostilely named** variable, which is
+          // the point of it: its derived registry key reaches `str()` in a
+          // third place — an `onVariableChange` argument, beside the object
+          // literal key in the variable table and a condition's `registry.get`.
+          //
+          // At rest, `NO_MOTION`'s rule one trigger over: `var-3` is the one
+          // variable nothing in this fixture ever writes, so the listener is
+          // registered, type-checked and bundled without ever firing — and
+          // `export.spec`'s colour assertions never race a rule that is correct
+          // behaviour and is not what they are about.
+          {
+            id: 'rule-x12',
+            name: `Watch ${breakout}`,
+            when: { kind: 'varChange' as const, variableId: 'var-1' },
+            conditions: [{ variableId: 'var-1', op: 'gte' as const, value: 10 }],
+            do: [{ kind: 'setVar' as const, variableId: 'var-2', value: 1 }],
+          },
+          // And one that writes the variable it watches. It cannot run away —
+          // the emitted helper's per-listener guard is what stops that, and
+          // `export.spec.ts` proves it by running one — but it is here for the
+          // shape rather than the behaviour: this is the only place that guard
+          // meets `tsc --strict` and a Vite bundle inside a rule whose body is
+          // the same plain JavaScript in all three outputs.
+          {
+            id: 'rule-x13',
+            name: 'Watches its own tail',
+            when: { kind: 'varChange' as const, variableId: 'var-3' },
+            conditions: [],
+            do: [{ kind: 'addVar' as const, variableId: 'var-3', by: 1 }],
+          },
+          // A trigger naming a variable the table has not got, which only a
+          // hand-edited file can hold: it costs the **whole rule**, where a
+          // dangling `setText` node costs only the action. A trigger is a moment
+          // and there is exactly one, so there is nothing left to attach to.
+          {
+            id: 'rule-x14',
+            name: 'Watches nothing',
+            when: { kind: 'varChange' as const, variableId: 'var-gone' },
+            conditions: [],
+            do: [{ kind: 'restartScene' as const }],
+          },
         ],
         children: [
           {

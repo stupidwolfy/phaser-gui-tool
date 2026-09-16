@@ -89,7 +89,12 @@ rule and the camera's "drawn, never applied" are the same refusal twice. Iterati
 (shipped) let the user press play: the exported page, run in a sandboxed iframe over the
 editor, so sixteen iterations of emitted behaviour the canvas refuses to run are finally
 visible without a download — and the first iteration in this list that changes the document
-not at all, because the thing that simulates is a different document.
+not at all, because the thing that simulates is a different document. Iteration 33 (shipped)
+let a rule watch a number: a `varChange` trigger, which is the example iteration 28 gave for
+what lay on the far side of its own line — and which turned out to be on the near side of it,
+because `changedata-<key>` is a moment Phaser already delivers and iteration 30's labels had
+been riding it for two iterations. One trigger kind, one emitted helper, no table, no format
+change and no `update()`, on a canvas that still fires no rule.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -3269,6 +3274,129 @@ the interest is entirely in what it cost, which was almost nothing.
   about a sequence. **Nothing reads whether an effect is running, and there is no
   `resetFX`** — that is a rule about rules.
 
+### Watching a number: the `varChange` trigger
+
+Iteration 33 closes the hole iteration 28 named as being on the far side of its own line,
+and it closes it by finding that the line was never in the way. A rule could count a score,
+a label could show it, and **nothing in a project could act on it reaching a number** — so
+"when the score reaches ten, go to the win scene" was two rows this vocabulary already had
+with no moment to hang them on. `RuleTrigger` gains one member and that is the whole format
+change.
+
+- **Iteration 28's own example was wrong, and reading the prediction beside the work is
+  half of what a reader needs.** That paragraph said a sixth trigger *"of the form 'while…'
+  or 'when the score passes ten' is the first that has to be watched for every frame, which
+  is the first that needs an emitted `update()`."* The first half is still true and still
+  refused. The second half is not: Phaser's `DataManager` emits `changedata-<key>` of its
+  own accord, and **iteration 30's labels have been subscribing to that exact moment ever
+  since**. So this is a moment Phaser already delivers — the same one, one consumer over —
+  and `update()` **gains nothing**. The line does not move; what moved is one example that
+  turned out to be on the near side of it all along. That is the Web fonts lesson for the
+  second time: the prediction was made from what a feature *sounded* like rather than from
+  the loader, and "Phaser 4, not 3" says to read the source instead.
+- **The trigger is the moment; the threshold is the condition that already existed.** "When
+  the score reaches ten" is this trigger plus a `RuleCondition` of `score >= 10` — a gate
+  read **once, at a moment**, exactly as every other rule's is. That split is not a
+  convenience, it is the whole of what keeps the feature on the near side of the line: a
+  threshold that had its own trigger kind would be a thing watched for, and a thing watched
+  for is polled.
+- **So it fires on every change at or above ten, not on the *crossing*.** A crossing needs
+  the previous value, which is the document holding state about its own past — a program
+  rather than a list. The panel says so in a sentence rather than the reader pretending
+  otherwise, which is the tween-versus-dynamic-body call and the `setText`-versus-label one:
+  a combination explained beats a combination silently refused.
+- **Three facts about `DataManager` shape the emit, and all three were read out of
+  `src/data/DataManager.js` rather than remembered.** `changedata-<key>` fires only for a
+  key that **already exists** — a first write emits `setdata-<key>` alone — which is why the
+  variable helper setting every key in `create()`'s prologue means no rule ever fires at the
+  boot, and why `sceneStart` is still the trigger for acting then. A write of the value
+  already there **still emits**: there is no equality check in `setValue` at all, so
+  `setVar score 0` on a score of 0 fires this. And the emit is **synchronous, inside
+  `set`** — which is the next entry.
+- **A rule that writes the variable it watches would re-enter its own handler with no
+  bottom, and the guard is one flag in the emitted helper.** That is a stack overflow in the
+  *player's* game on the first change, so this is `MIN_TIMER_DELAY`'s job one trigger over:
+  the whole protection against the one thing this vocabulary can run away with. Per listener
+  rather than one shared flag, which is what makes a cycle of **any length** terminate — A
+  writes B, B writes A, and A's handler finds its own flag still set and returns — while two
+  rules legitimately chaining are untouched.
+- **The guard is in the helper and not in `rulesOf`, and that asymmetry is the point.**
+  Refusing a self-writing rule would cost the rule, and `addVar` on the watched variable is
+  something people write on purpose — a counter that clamps itself. The guard makes it
+  terminate; it does not make it unsayable. A reader refusal would also be useless against
+  the two-rule cycle, which no single rule is wrong about.
+- **A dangling trigger variable costs the whole rule**, which is `keyDown`'s treatment and
+  not a `setText`'s: a trigger is a moment and there is exactly one, so a trigger naming
+  nothing leaves the rest with nothing to attach to — where an action naming nothing is one
+  line of a list the rest of which still means something.
+- **`ruleUsesVariable` is the one reference-walking function this could not inherit for
+  free**, where the camera effects inherited all three. It keys off `'variableId' in action`,
+  which cannot see a trigger — and `removeVariable` filters on it, so without the new first
+  line deleting a variable would leave a rule whose *moment* names nothing and `rulesOf`
+  would drop it on the next read with nothing having said so. `removeAsset`'s rule: the
+  document may never hold a dangling reference by any action in the editor.
+- **`ruleNames`, `remapTriggerNodes` and `migrateRuleToKind` need nothing**, and each says so
+  where it stands, because on those lists "no edit needed" and "forgot the edit" read
+  identically. `ruleNames`: the trigger names no object, so such a rule shows in the scene's
+  own list and on no object's panel — the camera effects' consequence arriving on a trigger.
+  `remapTriggerNodes`: a variable is *project*-level, so a duplicated scene shares it and
+  there is nothing to remap — which is exactly why the camera's `followId` did need the
+  treatment. `migrateRuleToKind`: a trigger watches for a change and never reads the value,
+  so there is nothing there to be in the wrong kind.
+- **`migrateRuleToKind`'s guard had to stop being `ruleUsesVariable`, though**, and that is
+  the one edit a reader would not predict. It early-returns the rule *by identity* when
+  nothing about it mentions the variable, and `setVariableKind` reads that identity back to
+  decide whether a scene changed at all — so widening `ruleUsesVariable` would have had a
+  kind switch rebuild rules it does not touch, and push an undo step for a scene nothing
+  happened in.
+- **The emit is a fifteenth module helper and one call.** `buildOnVarHelper` is
+  `buildBindLabelHelper` with a guard: the same `changedata-<key>` subscription, the same
+  no-argument handler (`EventEmitter#on`'s second parameter is the bare `Function`, so a
+  named parameter is an implicit `any` the exported `.ts` refuses), and the same SHUTDOWN
+  unsubscribe — which matters **more** here than for a label, because `restartScene` is one
+  of this vocabulary's own actions and every restart would otherwise leave another listener
+  behind holding objects that are gone. `this` is hardcoded rather than `ctx.receiver`,
+  `buildSoundLines`' reason.
+- **Its name is allocated last of all, after `bindLabelFn`**, by the rule the tenth to
+  fourteenth already state and for its reason rather than for tidiness: `toIdentifier`
+  suffixes a clash, so drawing a new name earlier moves the suffix some *earlier* helper was
+  given, and four of those are asserted by name in the suite. Gated on `rules.vars` beside
+  `keys`, `taps` and `matterHits`, so a project with no such rule emits byte for byte what
+  it emitted before.
+- **The picker withholds the option rather than offering it and falling back.** With no
+  variable declared, `defaultTrigger` would have to answer `sceneStart` — and an option that
+  leaves the picker where it was reads as a broken control, which is this file's
+  most-repeated lesson. The Variables panel's own empty state is what says where to go,
+  exactly as it already does for a condition.
+- **`SCHEMA_VERSION` did not bump — the guides case, tenth time.** No new `NodeType`, and
+  the trigger rides in on `scenes`, which `parseProject` passes through verbatim. One edge
+  worth stating rather than discovering, as iteration 31 did: a v14 build's `ruleTriggerOf`
+  answers null for an unknown kind, so the **whole rule** is absent from that build's panel
+  and emit — but the document still holds it, a re-save loses nothing, and the rule is back
+  the moment a current build opens the file. An old build doing less, not a file breaking.
+- **`EditorScene.ts` is untouched for the sixth time**, after Audio, Rules, iteration 29 and
+  iteration 31, and `hasMotionIn` records its **tenth** refusal — the hardest one yet to
+  expect false, because this is the first trigger that fires without anybody touching
+  anything. But that toggle exists so a canvas moving *by itself* can be stopped, and this
+  canvas fires no rule at all.
+- **The suite splits where the feature's own argument says it must.** `rules.spec.ts` carries
+  the document, the panel, the emitted text and the one claim only the near side can make —
+  nothing is drawn and nothing moves. `export.spec.ts` carries both positive claims, because
+  the editor runs none of it: a caption that appears **late**, after a looping timer has
+  moved a number past a gate, which is the one thing a set-once emit cannot fake; and the
+  guard, which is the only claim in the suite whose two versions differ by a single `if` that
+  both `tsc` and Vite accept. That second test was **run with the guard removed** to check it
+  fails, because a guard test that has never failed is a guard test that asserts nothing.
+- **What stays refused.** **No "while" trigger** — the half of iteration 28's example that
+  was right: a condition watched continuously is the first thing that has to be polled, which
+  is the first that needs an emitted `update()`, which is still exactly where the line falls.
+  **No crossing detection** — see above; it needs the previous value. **No trigger on a live
+  object property** — `x` on a tilemap, `alpha` on a particles wrapper and `width` on a sprite
+  are three different questions, and none of them is announced by anything; that is
+  `RuleCondition`'s own refusal arriving on a trigger. And **nothing about *which* variable
+  changed reaches the body** — the handler takes no arguments, for the typing reason above and
+  because a rule already names everything it acts on.
+
 
 ## The properties panel
 
@@ -3986,8 +4114,9 @@ tests/
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
   rules.spec.ts             a variable declared, a rule built and refused, a caption
-                            written, a camera shaken — and a canvas that runs
-                            none of it, and does not move when the camera does
+                            written, a camera shaken, a number watched — and a
+                            canvas that runs none of it, and does not move when
+                            the camera does
   labels.spec.ts            a caption that follows a variable, formatted, and a
                             binding that falls back when the variable is gone
   inspector.spec.ts         the properties panel's sections: closed by default,
@@ -4365,7 +4494,15 @@ iteration on and the same sentence; `startTween` is allowed precisely because it
 and not an outcome. And **no "while" trigger**, which is the sharpest one: every trigger here
 is a moment Phaser already delivers, and a condition watched continuously is the first that
 would have to be polled — which is the first that needs an emitted `update()`, which is exactly
-where this iteration's line falls.
+where this iteration's line falls. **That paragraph gave two examples and only one of them was
+right, which iteration 33 found out — and it is worth leaving both here rather than quietly
+correcting one.** "While…" is still refused, for the reason above and unchanged. *"When the
+score passes ten"* is not: `changedata-<key>` is a moment Phaser delivers of its own accord,
+and iteration 30's labels had been listening to it for two iterations by the time anybody
+noticed. It shipped as the `varChange` trigger with no polling, no `update()` and no schema
+bump — see "Watching a number" above. The lesson is not about this trigger: it is that the
+line falls where the *loader and the event list* put it, and this file had guessed from what
+a feature sounded like, which is what it tells every reader not to do.
 
 *Not on either list:* relative variable targets are not refused, they are `addVar`; a rule has
 no `enabled` flag, because deleting it is one press and a disabled rule is a document saying two
