@@ -1025,3 +1025,274 @@ test.describe('camera effects', () => {
     expect(await editor.selectValue('Rule 1 do 1 easing')).toBe('Linear');
   });
 });
+
+test.describe('building one', () => {
+  /** The spawn marker's teal, `SPAWN_COLOR` in `EditorScene`. */
+  const MARKER = '#00c2a0';
+  /** The prefab's own fill, distinct from the marker and from every default. */
+  const COIN = '#ff00ff';
+
+  /**
+   * One prefab in the library and nothing placing it.
+   *
+   * `saveAsPrefab` leaves an instance where the object was, and it is cleared
+   * away on purpose: with it on screen "nothing is built here" could not be
+   * said, because the prefab's own fill would be on the canvas for a reason
+   * that is not the rule.
+   */
+  async function onePrefab(editor: EditorPage): Promise<void> {
+    await editor.clearScene();
+    await editor.setSnapping(false);
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', 'Coin');
+    await editor.setField('Fill', COIN);
+    await editor.saveAsPrefab();
+    await editor.clearScene();
+    await editor.deselect();
+    await editor.closePanels();
+  }
+
+  test('a spawn round-trips, and names the prefab rather than a node', async ({
+    editor,
+  }, testInfo) => {
+    await onePrefab(editor);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+    await editor.setField('Rule 1 do 1 x', 320);
+    await editor.setField('Rule 1 do 1 y', 240);
+
+    const document = await saved(editor);
+    // Still 14 — the guides case, eleventh time. No new `NodeType`, and the
+    // action rides in on `scenes`, which `parseProject` passes through verbatim.
+    expect(document.schemaVersion).toBe(SCHEMA);
+    const scene = (document.scenes as { rules?: { do: unknown[] }[] }[])[0];
+    expect(scene.rules?.[0].do).toEqual([
+      { kind: 'spawn', prefabId: expect.any(String), x: 320, y: 240 },
+    ]);
+
+    const path = testInfo.outputPath('spawner.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.numberValue('Rule 1 do 1 x')).toBe(320);
+    expect(await editor.numberValue('Rule 1 do 1 y')).toBe(240);
+  });
+
+  test('the canvas draws the place and builds nothing at it', async ({ editor }) => {
+    await onePrefab(editor);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+    await editor.setField('Rule 1 do 1 x', 300);
+    await editor.setField('Rule 1 do 1 y', 200);
+    await editor.closePanels();
+    await editor.settle();
+
+    // The mark is where the document says it is.
+    const mark = await editor.findDrawnBox(MARKER);
+    expect(mark.count).toBeGreaterThan(20);
+    const middle = await editor.sceneToScreen({ x: 300, y: 200 });
+    // To a few pixels rather than to one, and the slack is the mark's own
+    // making rather than the reading's: this is a *stroked* shape, so each of
+    // the extent's two ends carries a colour boundary's sub-pixel phase and the
+    // two do not cancel — `findColorBox`' own note, one shape over. What is
+    // being claimed is that the ring is centred on the point the document
+    // names, which a mark off by half the scene would fail by three hundred.
+    expect(Math.abs(mark.x + mark.width / 2 - middle.x)).toBeLessThan(4);
+
+    // And **nothing is built**. This is the assertion that fails the day
+    // anybody wires a spawn into `EditorScene`: the prefab's own fill has no
+    // pixels on this canvas, because the canvas runs no rule.
+    expect((await editor.findDrawn(COIN)).count).toBe(0);
+  });
+
+  test('the mark follows the field, and goes when the action does', async ({
+    editor,
+  }) => {
+    await onePrefab(editor);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+    await editor.setField('Rule 1 do 1 x', 200);
+    await editor.closePanels();
+    await editor.settle();
+    const before = await editor.findDrawnBox(MARKER);
+
+    await editor.setField('Rule 1 do 1 x', 600);
+    await editor.closePanels();
+    await editor.settle();
+    const after = await editor.findDrawnBox(MARKER);
+    expect(after.x).toBeGreaterThan(before.x + 20);
+
+    // Changed away, the mark goes with it — one field, one mark, never two
+    // notions of where a rule builds something.
+    await editor.setChoice('Rule 1 do 1', 'Restart this scene');
+    await editor.closePanels();
+    await editor.settle();
+    expect((await editor.findDrawn(MARKER)).count).toBe(0);
+  });
+
+  test('a spawn puts no preview button on the toolbar', async ({ editor }) => {
+    await onePrefab(editor);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+    await editor.closePanels();
+
+    // `hasMotionIn`'s eleventh refusal, and the one a reader looks hardest for
+    // an addition in: this is the first thing the document can say that *makes*
+    // an object, and the first refusal that puts a mark on this canvas. The
+    // mark is a place, not a thing — there is no second state for a ▶ to
+    // toggle between and nothing moving by itself for it to stop.
+    await expect(
+      editor.page.getByRole('button', { name: 'Preview motion' }),
+    ).toHaveCount(0);
+  });
+
+  test('it emits one call to the factory the prefab already had', async ({
+    editor,
+  }) => {
+    await onePrefab(editor);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+    await editor.setField('Rule 1 do 1 x', 320);
+    await editor.setField('Rule 1 do 1 y', 240);
+    await editor.settle();
+
+    const exported = (await editor.exportCode('ts')).contents;
+    // A **statement, never a binding**: nothing reads what comes back, which is
+    // what keeps a rule's actions a list rather than a program.
+    expect(exported).toContain('createCoin(this, 320, 240);');
+    expect(exported).not.toMatch(/const \w+ = createCoin\(this, /);
+    // The factory is emitted although no instance places it — `collectPrefabs`'
+    // rule pass, without which this calls a function that is not declared.
+    expect(exported).toContain(
+      'function createCoin(scene: Phaser.Scene, x: number, y: number)',
+    );
+    // A moment Phaser already delivers, so `update()` gains nothing.
+    expect(exported).not.toContain('update(): void');
+  });
+
+  test('a hand-edited spawn costs the action, never the rule', async ({
+    editor,
+  }, testInfo) => {
+    await onePrefab(editor);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+    await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+    await editor.settle();
+
+    const document = await saved(editor);
+    const scene = (document.scenes as { rules: { do: Record<string, unknown>[] }[] }[])[0];
+    // Only a hand-edited file can hold either: a prefab that is not in the
+    // library, and coordinates Phaser could not be handed.
+    scene.rules[0].do[0] = { kind: 'spawn', prefabId: 'gone', x: 1, y: 2 };
+
+    const path = testInfo.outputPath('bent-spawn.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    await editor.deselect();
+
+    // The rule survives one action lighter — `destroy`'s split rather than
+    // `setVar`'s, because a prefab reaches nothing outside the action naming it
+    // where a variable is the one thing another rule reads.
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    await expect(editor.panel('inspect').getByTitle('Remove action 2 of rule 1')).toHaveCount(0);
+    expect(await editor.selectValue('Rule 1 do 1')).toBe('restartScene');
+    // And nothing is drawn for a spawn the reader dropped.
+    await editor.closePanels();
+    expect((await editor.findDrawn(MARKER)).count).toBe(0);
+  });
+
+  test('a non-finite coordinate is repaired, never dropped', async ({
+    editor,
+  }, testInfo) => {
+    await onePrefab(editor);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+
+    const document = await saved(editor);
+    const scene = (document.scenes as { rules: { do: Record<string, unknown>[] }[] }[])[0];
+    scene.rules[0].do[0] = {
+      ...scene.rules[0].do[0],
+      x: 'over there',
+      y: null,
+    };
+
+    const path = testInfo.outputPath('bent-point.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    await editor.deselect();
+
+    // `cameraPan`'s two coordinates to the character: there is no gate here to
+    // open, so a repair cannot widen what the rule says.
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.numberValue('Rule 1 do 1 x')).toBe(0);
+    expect(await editor.numberValue('Rule 1 do 1 y')).toBe(0);
+  });
+
+  test('deleting the prefab takes the spawn and leaves the rest', async ({
+    editor,
+  }) => {
+    await onePrefab(editor);
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+    await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+    await editor.setChoice('Rule 1 do 2', 'Restart this scene');
+    await editor.settle();
+
+    // Reached through a placement, since the definition's own controls live on
+    // an instance's panel — which is itself a hole this iteration names.
+    await editor.placePrefab('Coin');
+    // `placePrefab` opens the *scene* panel, and on mobile that leaves the
+    // inspector sheet translated off-screen — where it still matches a locator
+    // and cannot be clicked. Every `setField`/`setChoice` helper opens it for
+    // you; a raw `panel('inspect')` press has to say so itself.
+    await editor.openPanel('inspect');
+    await editor.panel('inspect').getByRole('button', { name: 'Delete prefab' }).click();
+    await editor.settle();
+
+    // The action goes and the rule stays, which is the store agreeing with the
+    // reader: a dangling prefab costs the action, so a deletion must cost the
+    // action too.
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.selectValue('Rule 1 do 1')).toBe('restartScene');
+    await expect(
+      editor.panel('inspect').getByTitle('Remove action 2 of rule 1'),
+    ).toHaveCount(0);
+
+    const document = await saved(editor);
+    expect(JSON.stringify(document)).not.toContain('"spawn"');
+  });
+});

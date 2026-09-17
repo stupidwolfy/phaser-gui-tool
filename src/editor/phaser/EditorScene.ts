@@ -29,6 +29,7 @@ import {
   scenePhysicsOf,
   prefabChildrenOf,
   sliceInsetsOf,
+  spawnPointsOf,
   textStyleOf,
   tileLayerOf,
   tileMapOf,
@@ -45,6 +46,7 @@ import {
   type ImageAsset,
   type ParticlesProps,
   type Project,
+  type SpawnPoint,
   type TextProps,
   type TileCell,
   type TileLayer,
@@ -194,6 +196,46 @@ const TWEEN_COLOR = 0x78f000;
 const TWEEN_WIDTH = 2;
 /** Screen pixels of ink and gap in the ghost's dashed outline. */
 const TWEEN_DASH = 8;
+
+/**
+ * Where a rule will build a prefab.
+ *
+ * The first thing a rule says that has a **where**, and a where is the one
+ * thing this canvas has always drawn — the camera frame, the touch rings, the
+ * tween ghost. It is *drawn, never run*: nothing is built here, so the mark
+ * says where something will appear rather than showing it appearing. Without
+ * it a spawn's two coordinates are two numbers typed blind, which is the
+ * failure this codebase warns about more than any other.
+ *
+ * Teal, and picked by the arithmetic `TOUCH_COLOR` and `TWEEN_COLOR` both set
+ * out and both nearly got wrong — run the check rather than trusting an eye.
+ * Against every colour any spec asks `findColor` for, plus every chrome colour
+ * in this file, its worst case is a margin of **61** on its worst channel, the
+ * nearest neighbour being the mint `#00ff6a` (61 on green) and then the cyan
+ * selection outline `0x00e5ff` (95 on blue). Tolerance is 24, so that is two
+ * and a half times clear. Re-run it when a fixture colour is added.
+ *
+ * A ring rather than a ghost of the prefab, and the reason is structural: a
+ * definition's children are drawn nowhere until an instance places them, so
+ * there is no measured box to copy — `containerBounds` is keyed by display key
+ * and a definition has none. A ring says where, which is what the two numbers
+ * mean; what appears there is the prefab's own business, and the label names it.
+ *
+ * Stroked, the touch rings' and the tween ghost's call: it sits over the layout
+ * the thing will land on. The cross is what makes the exact point readable,
+ * since a ring alone states a region.
+ */
+const SPAWN_COLOR = 0x00c2a0;
+const SPAWN_WIDTH = 2;
+/**
+ * The ring's radius in *screen* pixels.
+ *
+ * Screen-constant rather than derived from the scene, which is the rotate
+ * knob's rule and the opposite of the touch rings': those are sized from the
+ * scene because a thumb has a real size, and this marks a **place**, which has
+ * none.
+ */
+const SPAWN_RADIUS = 14;
 /** Shared, because "this tween holds nothing" is answered on most nodes. */
 const EMPTY_HELD: ReadonlySet<TweenProperty> = new Set<TweenProperty>();
 
@@ -949,6 +991,26 @@ export class EditorScene extends Phaser.Scene {
    * zoom, so a pinch has to redraw them, and a pinch is not a store change.
    */
   private touchSignature = '';
+  private spawnGraphics!: Phaser.GameObjects.Graphics;
+  /** The prefab names beside the rings, pooled — one per drawn spawn point. */
+  private spawnLabels: Phaser.GameObjects.Text[] = [];
+  /**
+   * Where the scene's rules will build something, as the last sync read them.
+   *
+   * Held rather than re-read per frame, which is the **`tweenGhosts` pattern**
+   * and deliberately not `drawTouchZones`': `spawnPointsOf` goes through
+   * `rulesOf`, which builds a child map and calls `collidersOf`, `soundsOf` and
+   * `scenePhysicsOf`. A spawn point changes only when the document does, so the
+   * sync is where it belongs and `update()` only has the zoom to react to.
+   */
+  private spawnPoints: SpawnPoint[] = [];
+  /**
+   * What the spawn markers were last drawn for — `touchSignature`'s sibling and
+   * for its reason: the ring's stroke and radius are screen widths divided by
+   * the editor's zoom, so a pinch has to redraw them, and a pinch is not a store
+   * change.
+   */
+  private spawnSignature = '';
   private ghostGraphics!: Phaser.GameObjects.Graphics;
   /**
    * What the tween ghosts were last drawn for — `touchSignature`'s sibling and
@@ -1073,6 +1135,22 @@ export class EditorScene extends Phaser.Scene {
     // redraw onto a Graphics that is no longer the one it drew on.
     this.touchLabels = [];
     this.touchSignature = '';
+
+    // Above the touch rings and their glyphs rather than below them, which is
+    // the emitter marker's rule: those labels are filled and sized in *scene*
+    // units against the button radius, so on a platformer they are large opaque
+    // marks and a screen-constant ring would vanish under one. Still below the
+    // paint grid and the placed guides at 998, the drag guides at 999 and the
+    // selection outline at 1000, so this stays what the camera frame is —
+    // furniture nobody grabs, never covering something that is.
+    this.spawnGraphics = this.add.graphics().setDepth(997.7);
+    // `touchLabels`' reset and for its reason, which that comment states: an
+    // empty pool and an empty signature, or the first frame after a restart
+    // decides nothing changed and skips the redraw onto a Graphics that is no
+    // longer the one it drew on.
+    this.spawnLabels = [];
+    this.spawnSignature = '';
+    this.spawnPoints = [];
 
     // Sits above the outline so it is never the outline that takes the press.
     this.scaleHandle = this.add
@@ -2733,6 +2811,7 @@ export class EditorScene extends Phaser.Scene {
     this.drawCamera();
     this.drawTouchZones();
     this.drawTweenGhosts();
+    this.drawSpawnPoints();
   }
 
   /** Two fingers down: zoom by how much the gap between them changed. */
@@ -2823,6 +2902,11 @@ export class EditorScene extends Phaser.Scene {
     // the same pass rather than leaving one on the canvas until something else
     // redraws.
     this.tweenGhosts.clear();
+    // Read here rather than in `update()`, the `tweenGhosts` pattern: this goes
+    // through `rulesOf`, which is far more work than a per-frame draw should be
+    // doing, and a spawn point changes only when the document does. Nothing is
+    // built from it — the canvas runs no rule — so this is a mark, not a state.
+    this.spawnPoints = spawnPointsOf(state.project, scene);
     this.syncNodes(scene.children, null, seen, '');
 
     for (const [id, object] of this.displayObjects) {
@@ -3138,6 +3222,63 @@ export class EditorScene extends Phaser.Scene {
         this.dashedLine(corners[index], corners[(index + 1) % corners.length], dash);
       }
     }
+  }
+
+  /**
+   * A ring and a cross wherever a rule will build a prefab, with its name.
+   *
+   * In `update()` with `drawGrid`, `drawBodies`, `drawCamera`, `drawTouchZones`
+   * and `drawTweenGhosts`, and for their reason: the stroke and the radius are
+   * *screen* widths divided by the camera zoom, and a pinch changes the zoom
+   * without touching the store. Signature-gated like all of them, because on
+   * almost every frame none of it has moved — and here the gate is cheap in a
+   * way theirs are not, since `spawnPoints` was already resolved by the sync.
+   *
+   * Nothing here is interactive, so there is no gesture, no hit area and no
+   * two-step-touch question. A spawn point is moved by its two fields on the
+   * panel, exactly as the camera's frame is.
+   */
+  private drawSpawnPoints(): void {
+    const { zoom } = this.cameras.main;
+    const signature = this.spawnPoints.length
+      ? `${zoom}:${this.spawnPoints.map((p) => `${p.x},${p.y}/${p.name}`).join('|')}`
+      : '';
+    if (signature === this.spawnSignature) return;
+    this.spawnSignature = signature;
+
+    this.spawnGraphics.clear();
+    // Parked rather than destroyed, the touch glyphs' and the rotate readout's
+    // rule: dragging a coordinate field republishes this several times a second.
+    for (const label of this.spawnLabels) label.setVisible(false);
+    if (!signature) return;
+
+    const radius = SPAWN_RADIUS / zoom;
+    this.spawnGraphics.lineStyle(SPAWN_WIDTH / zoom, SPAWN_COLOR, 1);
+    this.spawnPoints.forEach((point, index) => {
+      this.spawnGraphics.strokeCircle(point.x, point.y, radius);
+      // The cross runs past the ring, so the exact point is readable rather
+      // than merely enclosed — a ring on its own states a region.
+      const arm = radius * 1.6;
+      this.spawnGraphics.lineBetween(point.x - arm, point.y, point.x + arm, point.y);
+      this.spawnGraphics.lineBetween(point.x, point.y - arm, point.x, point.y + arm);
+
+      let label = this.spawnLabels[index];
+      if (label === undefined) {
+        label = this.add
+          .text(0, 0, '', { color: '#00c2a0' })
+          .setOrigin(0.5, 0)
+          .setDepth(997.8);
+        this.spawnLabels.push(label);
+      }
+      // Screen-constant like the ring, so the name stays readable at every
+      // zoom — the handles' treatment rather than the touch glyphs', which are
+      // sized in scene units because the thing they label is.
+      label.setFontSize(12);
+      label.setScale(1 / zoom);
+      label.setText(point.name);
+      label.setPosition(point.x, point.y + arm + SPAWN_WIDTH / zoom);
+      label.setVisible(true);
+    });
   }
 
   /** One edge of a ghost, drawn as a run of dashes of a fixed world length. */

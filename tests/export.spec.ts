@@ -172,11 +172,40 @@ test('a prefab exports as one factory function, called once per instance', async
   const declarations = (exported.contents.match(/^function create\w*\(/gm) ?? []).filter(
     (declaration) => !helpers.some((helper) => declaration.includes(helper)),
   );
-  expect(declarations).toHaveLength(1);
-  const fn = (declarations[0] ?? '').slice('function '.length, -1);
+  // Two definitions now: the one two instances place, and the one only a rule
+  // builds. Their **order** is the node-walk-then-rule-pass claim that keeps
+  // factory-name allocation stable for a project that predates spawning, so it
+  // is asserted here rather than taken on trust — a rule pass that ran first,
+  // or interleaved, would put the spawned one first and move the suffix a
+  // later helper was given.
+  expect(declarations).toHaveLength(2);
+  const names = declarations.map((declaration) =>
+    declaration.slice('function '.length, -1),
+  );
+  const fn = names.find((name) => name.endsWith('Coin')) as string;
+  const spawned = names.find((name) => name.endsWith('Wave')) as string;
+  expect(fn).toBeDefined();
+  expect(spawned).toBeDefined();
+  expect(names[0]).toBe(fn);
   // Two placements, one definition: the whole reason a factory is emitted at
   // all rather than the instance being expanded inline.
   expect(exported.contents.split(`${fn}(this, `)).toHaveLength(3);
+  // And the spawned one exactly once, from inside a rule's callback and from no
+  // placement at all — which is the whole claim `prefab-2` exists to make.
+  expect(exported.contents.split(`${spawned}(this, `)).toHaveLength(2);
+  expect(exported.contents).toContain(`${spawned}(this, 137, 249);`);
+  expect(exported.contents).toContain(
+    `function ${spawned}(scene: Phaser.Scene, x: number, y: number)`,
+  );
+  // Its sprite's texture has to have been preloaded, which is `emittedNodes`'
+  // half of the feature: without the rule pass there the definition is invisible
+  // to every collector and this exports the "no image chosen" stand-in.
+  const spawnedBody = exported.contents.slice(
+    exported.contents.indexOf(`function ${spawned}(`),
+  );
+  expect(spawnedBody.slice(0, spawnedBody.indexOf('\n}'))).not.toContain(
+    'no image chosen in the editor',
+  );
   // Annotated, because the exported .ts is compiled under --strict and bare
   // parameters would be three implicit anys. `export-toolchain.spec` is what
   // actually proves that; this says why the annotations are there.
@@ -1849,4 +1878,56 @@ test('a project with no tween exports none', async ({ editor }) => {
   // which the prefab suite learned the hard way.
   const exported = await editor.exportCode('ts');
   expect(exported.contents).not.toContain('tweens.add');
+});
+
+test('the exported page builds a prefab a rule spawns', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The positive claim for `spawn`, and the only place it can be made.** The
+  // editor runs no rule, so `rules.spec.ts` can only assert the opposite — that
+  // the canvas draws the place and builds nothing at it. This is the other half.
+  //
+  // The prefab is **placed nowhere**: `saveAsPrefab`'s instance is cleared away,
+  // so the only thing naming the definition is the rule. That is what makes the
+  // reading unambiguous — the fill starts at zero pixels and can only arrive by
+  // way of `collectPrefabs`' rule pass emitting a factory and `create()` calling
+  // it. Without either the page throws before anything is drawn.
+  await editor.clearScene();
+  await editor.setSnapping(false);
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Coin');
+  await editor.setField('Fill', PREFAB_FILL);
+  await editor.setField('Width', 200);
+  await editor.setField('Height', 200);
+  await editor.saveAsPrefab();
+  await editor.clearScene();
+  await editor.deselect();
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'the scene starts');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+  await editor.setField('Rule 1 do 1 x', 480);
+  await editor.setField('Rule 1 do 1 y', 270);
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('spawn'),
+    exported.contents,
+  );
+
+  // Polled rather than read once, `reaches`' own reason: what a running game
+  // has drawn at one wall-clock instant is a race with the frame rate. A no-op
+  // emit fails this by the whole reading — the fill is simply never there.
+  const reading = await reaches(
+    async () =>
+      findColor(run.page, await run.page.locator('canvas').screenshot(), PREFAB_FILL),
+    (blob) => blob.count > 200,
+  );
+  expect(reading.count).toBeGreaterThan(200);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
 });

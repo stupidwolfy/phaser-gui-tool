@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  countPrefabSpawns,
   countPrefabUses,
   useActiveScene,
   useEditorStore,
@@ -536,6 +537,7 @@ const TRIGGER_LABEL: Record<RuleTrigger['kind'], string> = {
 
 /** How each action kind reads on a picker. */
 const ACTION_LABEL: Record<RuleAction['kind'], string> = {
+  spawn: 'Build a prefab',
   destroy: 'Remove an object',
   setVisible: 'Show or hide an object',
   setText: "Set an object's text",
@@ -1001,6 +1003,23 @@ function defaultAction(
   const variable = project.variables[0];
   const sound = soundsOf(project, scene)[0];
   switch (kind) {
+    case 'spawn': {
+      // The scene centre, which is `addNode`'s own choice for a new object and
+      // the one point guaranteed to be on screen. `defaultTween`'s rule: an
+      // action that runs perfectly and puts its result somewhere nobody is
+      // looking is indistinguishable from the feature being broken — and here
+      // the marker is drawn at that point the moment the action arrives, so the
+      // seed is also what makes the feature visible at all.
+      const prefab = project.prefabs[0];
+      return prefab
+        ? {
+            kind: 'spawn',
+            prefabId: prefab.id,
+            x: Math.round(scene.width / 2),
+            y: Math.round(scene.height / 2),
+          }
+        : { kind: 'restartScene' };
+    }
     case 'destroy':
       return first ? { kind: 'destroy', nodeId: first.id } : { kind: 'restartScene' };
     case 'setVisible':
@@ -1206,6 +1225,49 @@ function ActionFields({
   onChange: (action: RuleAction) => void;
 }) {
   switch (action.kind) {
+    case 'spawn': {
+      if (project.prefabs.length === 0) {
+        return (
+          <p className="hint">
+            Select some objects and use Save as prefab first. A spawn builds a
+            prefab, which is the one thing this project knows how to make more
+            than one of.
+          </p>
+        );
+      }
+      // Three controls, so two rows — `cameraPan`'s layout and the 390px rule.
+      return (
+        <>
+          <SelectField
+            label={`${label} prefab`}
+            value={action.prefabId}
+            options={project.prefabs.map((entry) => ({
+              value: entry.id,
+              label: entry.name,
+            }))}
+            onChange={(prefabId) => onChange({ ...action, prefabId })}
+          />
+          <div className="field-row">
+            <NumberField
+              label={`${label} x`}
+              value={action.x}
+              onChange={(x) => onChange({ ...action, x })}
+            />
+            <NumberField
+              label={`${label} y`}
+              value={action.y}
+              onChange={(y) => onChange({ ...action, y })}
+            />
+          </div>
+          <p className="hint">
+            Drawn on the canvas as a ring, and built only in the running game.
+            It arrives on top of everything already there, and nothing removes
+            it again — a spawn has no handle for another rule to name.
+          </p>
+        </>
+      );
+    }
+
     case 'destroy':
       return (
         <SelectField
@@ -2121,6 +2183,15 @@ function InstanceSection({ node }: { node: GameObjectNode }) {
       ? countPrefabUses(s.project, node.props.prefabId)
       : 0,
   );
+  // Counted separately and said separately, because `removePrefab` now strips
+  // spawn actions as well as detaching instances. A button that quietly deletes
+  // a rule is the thing this codebase keeps paying for; the count is what makes
+  // the press honest.
+  const spawns = useEditorStore((s) =>
+    node.type === 'instance' && node.props.prefabId
+      ? countPrefabSpawns(s.project, node.props.prefabId)
+      : 0,
+  );
   const updateProps = useEditorStore((s) => s.updateProps);
   const renamePrefab = useEditorStore((s) => s.renamePrefab);
   const removePrefab = useEditorStore((s) => s.removePrefab);
@@ -2185,7 +2256,13 @@ function InstanceSection({ node }: { node: GameObjectNode }) {
         <button
           className="btn btn--block btn--danger"
           onClick={() => removePrefab(prefab.id)}
-          title={`Detaches ${uses} instance${uses === 1 ? '' : 's'} and removes the prefab`}
+          title={
+            `Detaches ${uses} instance${uses === 1 ? '' : 's'}` +
+            (spawns > 0
+              ? `, removes ${spawns} spawn action${spawns === 1 ? '' : 's'}`
+              : '') +
+            ' and removes the prefab'
+          }
         >
           Delete prefab
         </button>

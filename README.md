@@ -113,14 +113,22 @@ on a desktop.
   panel — say when something happens and what it does. *When* is the scene starting, two
   objects touching, an object being tapped, a key being pressed, a timer firing or a variable
   changing; *what* is
-  removing an object, showing or hiding one, setting an object's text, playing a sound or an
-  animation, starting a movement, going to another scene, changing a number — or moving the
+  building a prefab, removing an object, showing or hiding one, setting an object's text,
+  playing a sound or an animation, starting a movement, going to another scene, changing a
+  number — or moving the
   camera: shake it when something is hit, flash or fade it in a colour of your choosing, pan
   it somewhere, zoom it in or out, each over a time and an easing you set. Declare
   those numbers under Variables — a score, a lives count — and a rule can check one before
   it runs (`only if Score is at least 3`). Variables survive a change of scene, so a score
   carries from level to level. The editor never runs a rule, because a rule deletes things:
   press **Play** and the game does
+- **Build things while the game runs**: pick *Build a prefab* as a rule's action and say
+  where. A ring on the canvas shows the spot — the editor never builds anything there, so what
+  you are placing is the instruction, not the object — and the running game makes one every
+  time the rule fires. With *a timer fires* as the moment, that is a wave of enemies from one
+  row of settings. Two things worth knowing: what appears lands on top of everything already
+  in the scene, and nothing takes it away again, so a rule that builds on a fast loop builds
+  for ever
 - **Act on a number reaching something**: pick *a variable changes* as a rule's moment and
   add a check, and you have `when Score changes, only if Score is at least 10, go to the Win
   scene`. The rule runs on every change from 10 upwards rather than only the first time, so
