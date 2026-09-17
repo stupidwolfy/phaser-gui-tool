@@ -300,6 +300,83 @@ export function hostileProject(): Project {
           },
         ],
       },
+      {
+        id: 'prefab-2',
+        // **Placed nowhere.** No `instance` node in any scene names it; the
+        // only thing that does is `rule-1`'s `spawn`, and that is the whole
+        // reason it exists. Without `collectPrefabs`' rule pass it gets no
+        // factory at all, so the emitted `create()` calls a function that is
+        // not declared — a compile error in the `.ts` and a `ReferenceError`
+        // in the page, which is the one failure in this feature that is not a
+        // wrong picture.
+        //
+        // Its name is hostile like every other, but its *identifier stem* is
+        // chosen to collide with nothing: factory names come out of
+        // `moduleNames` before the fifteen helper names, so a prefab called
+        // "on key" or "init variables" would take `onKey`/`initVariables` and
+        // push the helper to a `2` suffix — and four of those are asserted by
+        // name in the suite.
+        name: `${breakout} wave`,
+        children: [
+          {
+            id: 'p4',
+            // A **sprite**, and it is the load-bearing child: `emittedNodes`
+            // has to descend into a rule-named definition or this exports the
+            // "no image chosen in the editor" stand-in for an image that *is*
+            // chosen, and the page draws a missing-texture square. The same
+            // claim `p2` makes for a *placed* definition, arriving from the
+            // side no node walk can reach.
+            name: 'wave sprite',
+            type: 'sprite',
+            visible: true,
+            transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: {
+              assetId: 'sheet-1',
+              alpha: 1,
+              tint: '#ffffff',
+              flipX: false,
+              flipY: false,
+              frame: 2,
+              animationId: null,
+            },
+            children: [],
+          },
+          {
+            id: 'p5',
+            // A labelled text child, for `p3`'s reason and one step further
+            // out: `collectLabels` is the only one of `emittedNodes`' six
+            // callers that did not already take a `project`, so without that
+            // parameter this definition's `bindLabel(...)` call is emitted
+            // inside a factory while the helper is never declared — the gate
+            // that missed one emitting the call and not the function it calls.
+            name: 'wave count',
+            type: 'text',
+            visible: true,
+            transform: { x: 0, y: 30, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: {
+              text: 'wave ',
+              label: { variableId: 'var-2', decimals: 0, pad: 0 },
+              fontSize: 16,
+              color: '#ffffff',
+              fontFamily: 'system-ui, sans-serif',
+              alpha: 1,
+              bold: false,
+              italic: false,
+              align: 'left' as const,
+              wordWrapWidth: 0,
+              lineSpacing: 0,
+              letterSpacing: 0,
+              strokeColor: '#000000',
+              strokeThickness: 0,
+              shadowColor: '#000000',
+              shadowOffsetX: 0,
+              shadowOffsetY: 0,
+              shadowBlur: 0,
+            },
+            children: [],
+          },
+        ],
+      },
     ],
     // Three variables, and each is here for its own reason.
     //
@@ -442,6 +519,14 @@ export function hostileProject(): Project {
             ],
             do: [
               { kind: 'destroy' as const, nodeId: 'b' },
+              // The one thing in this list that *builds* rather than changes,
+              // and it names the prefab nothing places. Non-default
+              // coordinates, like every other field on this rule, because its
+              // whole job here is the emitted call's shape meeting the
+              // factory's `(scene: Phaser.Scene, x: number, y: number)` under
+              // `tsc --strict` — and, in the runnable page, a factory that has
+              // to exist and have had its texture preloaded.
+              { kind: 'spawn' as const, prefabId: 'prefab-2', x: 137, y: 249 },
               { kind: 'setVisible' as const, nodeId: 'c', visible: false },
               { kind: 'playSound' as const, soundId: 'snd-1' },
               { kind: 'stopSound' as const, soundId: 'snd-3' },
@@ -704,6 +789,31 @@ export function hostileProject(): Project {
             when: { kind: 'varChange' as const, variableId: 'var-gone' },
             conditions: [],
             do: [{ kind: 'restartScene' as const }],
+          },
+          // Two spawns naming a prefab the library has not got, and they are
+          // **a pair on purpose**: one of them alone cannot tell "a dangling
+          // prefab costs the action" from "it costs the rule". This one keeps
+          // its sibling, so the rule survives one action lighter — `rule-x6`'s
+          // shape, and the half that says a dropped action *narrows* what a
+          // rule says rather than widening it.
+          {
+            id: 'rule-x15',
+            name: 'Builds half of nothing',
+            when: { kind: 'keyDown' as const, key: 'Q' },
+            conditions: [],
+            do: [
+              { kind: 'spawn' as const, prefabId: 'prefab-gone', x: 10, y: 20 },
+              { kind: 'addVar' as const, variableId: 'var-2', by: 3 },
+            ],
+          },
+          // And one where it is the *only* action, so the empty-`do` check
+          // takes the whole rule — `rule-x7`'s shape, one action over.
+          {
+            id: 'rule-x16',
+            name: 'Builds nothing at all',
+            when: { kind: 'keyDown' as const, key: 'R' },
+            conditions: [],
+            do: [{ kind: 'spawn' as const, prefabId: 'prefab-gone', x: 30, y: 40 }],
           },
         ],
         children: [

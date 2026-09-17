@@ -2596,8 +2596,49 @@ export const useEditorStore = create<EditorState>((set, get) => {
             ? detachedNode(project, node)
             : null,
         );
+        // And the rules that build it go too, in the same undo step — the
+        // other half of "the document may never hold a dangling reference by
+        // any action in the editor", which is what keeps `ruleActionsOf`'s
+        // drop-on-read a guard against hand-edited files rather than a thing
+        // the editor routinely relies on.
+        //
+        // **The actions are stripped and only an emptied rule is dropped**,
+        // which is `setVariableKind`'s shape rather than `removeVariable`'s,
+        // and the reason is the reader's own cost model said back to it: a
+        // dangling prefab costs the *action*, so a deletion here must cost the
+        // action too. `removeVariable` drops whole rules because a dangling
+        // *variable* costs the whole rule. If the store and the reader
+        // disagreed about that, a delete would make rules vanish that a
+        // re-open would have kept.
+        //
+        // Scenes and rules are both handed back by identity when nothing in
+        // them named the prefab, or `editProject`'s "nothing happened, no undo
+        // step" contract breaks.
+        const scenes = detached.scenes.map((scene) => {
+          const rules = scene.rules;
+          if (!Array.isArray(rules)) return scene;
+          let changed = false;
+          const next: SceneRule[] = [];
+          for (const rule of rules) {
+            const actions = Array.isArray(rule.do) ? rule.do : [];
+            const kept = actions.filter(
+              (action) => !(action.kind === 'spawn' && action.prefabId === id),
+            );
+            if (kept.length === actions.length) {
+              next.push(rule);
+              continue;
+            }
+            changed = true;
+            // An emptied `do` is a rule `rulesOf` would drop on the next read
+            // anyway, so keeping it would be a row in the panel that is not in
+            // the emit — `removeCollider`'s reason for taking its rules with it.
+            if (kept.length > 0) next.push({ ...rule, do: kept });
+          }
+          return changed ? { ...scene, rules: next } : scene;
+        });
         return {
           ...detached,
+          scenes,
           prefabs: detached.prefabs.filter((prefab) => prefab.id !== id),
         };
       }),
@@ -3604,6 +3645,16 @@ export function countFontUses(project: Project, family: string): number {
  * iteration 18 ruled out, and a `fade` would black out the canvas being edited.
  * There is nothing new drawn for one either: the violet frame is the shot the
  * scene *opens* on, and an effect is what happens after that.
+ *
+ * And blind to a `spawn`, which is the ninth refusal recorded here and the
+ * eleventh this argument has made. It is also the one a reader will look
+ * hardest for an addition in, because it is the first thing the document can
+ * say that **makes an object** — and because, alone among the refusals above,
+ * it now puts a mark on this canvas. But the mark is a place, not a thing:
+ * `spawnPointsOf` draws a ring where a prefab *will* be built and the canvas
+ * builds nothing, so there is no second state for a ▶ to toggle between and
+ * nothing moving by itself for it to stop. A spawn is "drawn, never run", the
+ * body outline's and the camera frame's rule for the fourth time.
  */
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;
@@ -3662,6 +3713,31 @@ export function countPrefabUses(project: Project, prefabId: string): number {
     }
   };
   for (const scene of project.scenes) walk(scene.children);
+  return count;
+}
+
+/**
+ * How many rule actions across the project build this prefab.
+ *
+ * `countPrefabUses`' sibling, and it exists because that function's own comment
+ * — "what makes 'Delete prefab' honest about how much it is about to detach" —
+ * stopped being the whole truth the moment `removePrefab` also began stripping
+ * spawn actions and dropping the rules they emptied. A count nobody is shown is
+ * a press that quietly deletes a rule, which is precisely the hand-matched-list
+ * failure this codebase keeps paying for.
+ *
+ * Read through `rulesOf` rather than `scene.rules`, so a spawn the reader has
+ * already dropped is not counted as something about to be removed.
+ */
+export function countPrefabSpawns(project: Project, prefabId: string): number {
+  let count = 0;
+  for (const scene of project.scenes) {
+    for (const rule of rulesOf(project, scene)) {
+      for (const action of rule.do) {
+        if (action.kind === 'spawn' && action.prefabId === prefabId) count += 1;
+      }
+    }
+  }
   return count;
 }
 

@@ -94,7 +94,14 @@ let a rule watch a number: a `varChange` trigger, which is the example iteration
 what lay on the far side of its own line — and which turned out to be on the near side of it,
 because `changedata-<key>` is a moment Phaser already delivers and iteration 30's labels had
 been riding it for two iterations. One trigger kind, one emitted helper, no table, no format
-change and no `update()`, on a canvas that still fires no rule.
+change and no `update()`, on a canvas that still fires no rule. Iteration 34 (shipped) gave
+`destroy` its inverse: a rule may now **build** a prefab at a point, which is the factory
+function iteration 12 has been emitting for twenty-two iterations and nothing has ever called
+but a placement — so the document stopped being able to describe only a level and started
+being able to describe a wave. One `RuleAction` member, no table, no new helper and no schema
+bump; the work was two passes in the exporter, because a prefab nothing *places* was invisible
+to every collector in the file, and the first mark this canvas has ever drawn for a rule —
+a spawn being the first thing a rule says that has a *where*.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -3398,6 +3405,225 @@ change.
   because a rule already names everything it acts on.
 
 
+
+### Making one: the `spawn` action
+
+Iteration 34 gives `destroy` its inverse. Iteration 28 let the document say what *happens*,
+and every iteration since has widened the list of verbs — a caption, a live label, five
+camera effects, a trigger that watches a number — while that list carried a `destroy` from
+the day it was written and never once had the other half. So a project could take a coin off
+the screen and could never put one there: every object a game would ever hold had to be
+placed by hand, in the editor, before it started. **The document could describe a level. It
+could not describe a wave.** And the thing it needed had been sitting in the export since
+iteration 12: `function createCoin(scene, x, y)`, one factory per prefab, called once per
+placement and never again. This calls it a second time.
+
+- **The line iteration 28 drew does not move, and that is the first thing to check.** A spawn
+  is one more verb in a list run at a moment Phaser already delivers, so `update()` **gains
+  nothing** and there is no new trigger, no new table and no new emitted helper. The whole
+  format change is one member of `RuleAction`.
+- **The result is discarded, and that is what keeps the list a list.** The emit is
+  `createCoin(this, 320, 240);` — a statement, never a binding. Binding it would be the first
+  value in this vocabulary that another action could read, which is precisely iteration 28's
+  second half: *a rule's actions are a list, never a program.* `rules.spec.ts` asserts the
+  absence of the binding rather than only the presence of the call.
+- **A spawn names a prefab, never a node.** A node is one object that already exists; a prefab
+  is the one thing in this document that exists *precisely to be built more than once*, which
+  is what `buildFactories` is. Cloning an arbitrary node at runtime would be a second answer to
+  what a prefab is, and Phaser has no call for it. It is also what makes the action cheap
+  everywhere else: a prefab is **project-level**, so `remapActionRefs` has nothing to remap in
+  a duplicated scene — `varChange`'s `remapTriggerNodes` sentence verbatim, and exactly why the
+  camera's `followId` *did* need the treatment.
+- **A dangling prefab costs the action; it is `destroy`'s split rather than `setVar`'s.** The
+  reader's own test, said back to it: *a variable is the one thing a rule names that another
+  rule reads*, so dropping a `setVar` leaves every condition in the project testing a number
+  nothing writes — where a prefab reaches nothing outside the action that names it, so dropping
+  one strictly narrows. If it was the rule's only action the empty-`do` check takes the rule,
+  which is a lone `destroy` of a missing node's treatment already. `hostile.ts` carries **both**
+  cases, `rule-x15` and `rule-x16`, because one of them alone cannot tell the two apart.
+- **`x`/`y` are repaired, never dropped**, through the existing `finiteOr` — `cameraPan`'s own
+  two coordinates to the character, and for the reason the camera effects' whole block is
+  repair-only: there is no gate here to open, so *a repair may narrow what the document says
+  and may never widen it* is satisfied trivially.
+- **`prefabChildrenOf` is deliberately not consulted by the reader.** A definition made only of
+  instances resolves to nothing and `buildFactories` still emits an empty Container for it, so
+  a `length` check here would have the reader and the exporter disagree about whether the
+  action exists at all. An empty spawn is `detachInstance`'s "an empty group, which is honest
+  rather than a failure".
+- **`ruleNames` and `ruleUsesVariable` needed nothing, and the consequence is worth stating
+  rather than discovering:** a rule whose only action is a spawn appears in the scene's own list
+  and on **no object's panel**, because it is about no object. That is the camera effects'
+  consequence arriving on an action that *does* name something — just not something a scene
+  holds.
+
+**The exporter is the load-bearing half, and it is the one place this is not a one-liner.**
+
+- **A prefab that is only spawned is placed nowhere**, so before this it got **no factory at
+  all** — which is not a wrong picture but a `ReferenceError` in the runnable page and a
+  *compile error* in the exported `.ts` — and none of its images were preloaded. Two passes
+  close it, split exactly the way this file already splits `collectAssets` from `usedIn`: the
+  first decides what a factory is *called* across the file, the second what *one scene* loads.
+  `prefabsNamedByRules` is `animationsNamedByRules`' sibling, the established shape for "a rule
+  names something no node walk can reach".
+- **`collectPrefabs`' rule pass runs after the whole node walk, never interleaved with it**,
+  and that ordering is the sharp thing here rather than a tidiness. Factory names come out of
+  `moduleNames` *before* the fifteen helper names and `toIdentifier` suffixes a clash, so a name
+  drawn earlier moves the suffix some *later* helper was given — and four of those are asserted
+  by name in the suite. Running last is what keeps a project that predates spawning exporting
+  byte for byte what it exported before. `export.spec.ts` asserts the two factories' **order**
+  for that reason, so the claim is pinned rather than trusted.
+- **`emittedNodes` is the one gate, so it is the one edit.** It gained a `project` and a
+  trailing pass over `prefabsNamedByRules`, and all six of its callers — `collectAssets`,
+  `collectFonts`, `collectAnimations`, `usedIn`, `collectTilemaps` and `collectLabels` —
+  inherit a spawned definition's contents with **no edit of their own**. Said out loud in the
+  code, because on that list "already covered" and "forgotten" read identically. (Contrast
+  `animationsNamedByRules`, which needs a pass in *two* collectors precisely because a clip is
+  not a list of nodes.)
+- **`collectLabels` was the exception, and it is the silent trap the file half-predicted.**
+  Five of those six already took a `project`; that one did not. Its own doc comment warns that
+  *"a gate that missed one would emit the call and not the function it calls"* — and a
+  spawned-but-never-placed prefab holding a **labelled text child** is exactly that: the factory
+  emits `bindLabel(...)` while `labels.bind` is still false, so the helper is never declared.
+  The hostile project's `prefab-2` carries one for no other reason.
+- **`buildFactories` and `emittedNodes` now read a definition through `withoutInstances`, and
+  that is a real bug this feature would otherwise have shipped.** The *renderer* has always
+  reached a definition through `prefabChildrenOf` and so has always had the cycle argument;
+  the exporter never called either, and was survivable only by accident, because its prefab
+  table held **placed** definitions alone. Widening that table means a nested instance can now
+  resolve — so prefab A's definition holding an instance of B emits a factory that calls B's,
+  and a mutual pair emits two functions that call each other: unbounded recursion in the
+  *player's* game, from a file the editor cannot write but a hand edit can. The fix costs
+  nothing, because `withoutInstances` hands the array back by identity when there is nothing to
+  strip. The lesson is the general one: *`prefabChildrenOf`'s "nothing downstream needs a
+  termination argument" only holds for the things that actually go through it.*
+- **No new module helper, no new `Emission.rules` flag, no new gate in either generator, no
+  `prepare` pre-pass and no `EmitContext` field.** The factory is already module-level and
+  already gated on `ctx.prefabs.size > 0`, which the rule pass now also satisfies — so nothing
+  was added to `buildFactories`' or `buildCreateBody`'s seeded identifier sets either, because
+  no sixteenth name is drawn and nothing above it moves. `this` is hardcoded rather than
+  `ctx.receiver`, `buildSoundLines`' reason: a rule only ever runs in a Scene's `create()`.
+- **`ruleActionLines`' switch has no `default`, so this is the one non-silent step** in the
+  whole feature — a compile error until the case is written. Everything else here is silent,
+  as the whole of physics and cameras were.
+
+**The canvas draws the place, and this is the first iteration since 30 to touch
+`EditorScene.ts`.**
+
+- **A spawn is the first thing a rule says that has a *where*, and a where is the one thing
+  this canvas has always drawn** — the camera frame, the touch rings, the tween ghost. Without
+  a mark the two coordinates are two numbers authored blind, which is the failure this file
+  warns about more than any other. It is *drawn, never run*: the camera's "drawn, never
+  applied" and the body outline's "drawn, never run" for the fourth time.
+- **`spawnPointsOf` is a filter over `rulesOf`, never a second read of `scene.rules`** —
+  `rulesNaming`'s rule and `touchZonesOf`-on-`controlsOf`'s reason, so a spawn the reader
+  dropped cannot come back to life on the canvas. A fresh array per call, so
+  `useEditorStore((s) => spawnPointsOf(...))` is React error #185 — the `tileMapOf` trap,
+  twelfth time. It resolves the prefab's *name* there, so the renderer never touches
+  `project.prefabs`.
+- **The data comes from the sync and the drawing from `update()`, which is the `tweenGhosts`
+  pattern and deliberately not `drawTouchZones`'.** That one calls its reader every frame;
+  `spawnPointsOf` goes through `rulesOf`, which builds a child map and calls `collidersOf`,
+  `soundsOf` and `scenePhysicsOf`. A spawn point changes only when the document does, so
+  `syncFromStore` fills the array and `update()` has only the zoom to react to —
+  signature-gated like every drawer beside it, because the stroke and the radius are *screen*
+  widths divided by the camera zoom and a pinch is not a store change.
+- **A ring and a cross, screen-constant, with the prefab's name under it.** Screen-constant is
+  the rotate knob's rule and the opposite of the touch rings': those are sized from the scene
+  because a thumb has a real size, and this marks a **place**, which has none. Stroked rather
+  than filled, the touch rings' and the tween ghost's call — it sits over the layout the thing
+  will land on. The cross is what makes the exact point readable, since a ring alone states a
+  region. A *ghost of the prefab* was the other shape and is structurally unavailable: a
+  definition's children are drawn nowhere until an instance places them, so there is no
+  measured box to copy — `containerBounds` is keyed by display key and a definition has none.
+- **`SPAWN_COLOR = 0x00c2a0`, picked by arithmetic and not by eye**, which is what
+  `TOUCH_COLOR` and `TWEEN_COLOR` both record having nearly got wrong. Against every colour any
+  spec asks `findColor` for **and** every chrome colour in the file, its worst channel margin is
+  **61** — nearest the mint `#00ff6a`, then the cyan selection outline at 95 on blue — against a
+  tolerance of 24. Re-run the check when a fixture colour is added.
+- **Depth 997.7, above the touch rings rather than below them**, and that was a correction: the
+  touch glyphs at 997.6 are *filled* and sized in **scene** units against the button radius, so
+  on a platformer they are large opaque marks that a screen-constant ring would vanish under.
+  Still below the paint grid and the placed guides at 998, the drag guides at 999 and the
+  selection outline at 1000, so this stays what the camera frame is — furniture nobody grabs,
+  never covering something that is.
+- **Its label pool is its own**, like `touchLabels` and unlike the guide and angle drawers,
+  which share `overlayLabels` through `usedLabels` — a hide loop scoped to one of a shared pool
+  blanks the other's. Reset in `create()` beside the touch pool and for the reason that comment
+  already gives: an empty pool *and* an empty signature, or the first frame after a restart
+  decides nothing changed and skips a redraw onto a `Graphics` that is no longer the one it drew
+  on.
+- **Nothing is interactive**, so there is no gesture, no hit area and no two-step-touch
+  question. A spawn point is moved by its two fields, exactly as the camera's frame is.
+- **`hasMotionIn` records its eleventh refusal**, and it is the one a reader will look hardest
+  for an addition in: this is the first thing the document can say that *makes* an object, and
+  the first refusal that puts a mark on this canvas at all. But the mark is a place, not a
+  thing — nothing is built here, so there is no second state for a ▶ to toggle between and
+  nothing moving by itself for it to stop.
+
+**The store, the panel, and what a deletion costs.**
+
+- **`removePrefab` is the one reference-walking edit**, and it is required by the rule
+  `removeAsset` set: *the document may never hold a dangling reference by any action in the
+  editor*, which is what keeps `ruleActionsOf`'s drop-on-read a guard against hand-edited files
+  rather than something the editor leans on. It already detached every instance; it now strips
+  every spawn action naming the prefab, across every scene, in the same undo step.
+- **It strips the actions and drops only the rules it empties** — `setVariableKind`'s shape
+  rather than `removeVariable`'s, and again the reader's cost model said back to it: a dangling
+  prefab costs the *action*, so a deletion must cost the action too, or a delete makes rules
+  vanish that a re-open would have kept. `removeVariable` drops whole rules because a dangling
+  *variable* costs the whole rule. Scenes and rules come back by identity where nothing named
+  the prefab, or `editProject`'s "nothing happened, no undo step" contract breaks.
+- **`countPrefabSpawns` exists because `countPrefabUses`' own comment stopped being true.** That
+  comment says it is "what makes 'Delete prefab' honest about how much it is about to detach",
+  and the button's title said so — while the press now also deletes rules. A count nobody is
+  shown is exactly the hand-matched-list failure this file keeps paying for, so the title names
+  both numbers.
+- **The panel is `cameraPan`'s layout**: three controls, so the prefab picker on its own row and
+  `x`/`y` in a `field-row` beneath it — at 390px a third control in one row is about 85px and
+  truncates every prefab name to nothing. Labels are `Rule <n> do <m> prefab`/`x`/`y`, matched
+  exactly by the suite. With an empty library the section is a **sentence pointing at Save as
+  prefab**, not an empty picker — `AlignSection`'s rule, and `defaultAction` falls through to
+  `restartScene` silently otherwise.
+- **The seed is the scene centre**, which is `addNode`'s own choice for a new object and the one
+  point guaranteed to be on screen. `defaultTween`'s rule with an extra edge: the marker is
+  drawn at that point the moment the action arrives, so the seed is also what makes the feature
+  visible at all.
+- **`SCHEMA_VERSION` did not bump — the guides case, eleventh time.** No new `NodeType`, and the
+  action rides in on `scenes`, which `parseProject` passes through verbatim. The old-build edge
+  is iterations 31 and 33's exactly: a v14 build's `ruleActionsOf` drops the unknown kind
+  through its `default: break`, so a rule whose *only* action is a spawn fails the empty-`do`
+  check and is absent from **that build's** panel and emit — the document still holds it, a
+  re-save loses nothing, and the rule is back the moment a current build opens the file. An old
+  build doing less, not a file breaking. `rules.spec.ts` asserts the 14.
+- **The suite splits where the feature's own argument says it must.** `rules.spec.ts` carries
+  the document, the panel, the emitted text and the one claim only the near side can make — the
+  marker is drawn at the point the document names **and the prefab's own fill has zero pixels on
+  the canvas**, which is the assertion that fails the day anybody wires a spawn into
+  `EditorScene`. `export.spec.ts` carries the positive runtime claim, and it is deliberately made
+  on a prefab **placed nowhere**: the fill starts at zero and can only arrive by way of the rule
+  pass emitting a factory and `create()` calling it.
+- **What stays refused.** **No lifespan, and nothing destroys a spawned object** — `destroy`
+  names a document node and a spawned one has no id, which is `containerBounds`' "two coins would
+  fight over one map entry" arriving at runtime; a `delayedCall` per spawn is "spawn, *then*
+  destroy", which is `tweens.chain`'s refusal and iteration 28's line verbatim. It is the hole a
+  reader meets first, so the panel says it. **No spawn at an object's position**, which is the
+  obvious next ask and a pure loosening — `at: { x, y } | { nodeId }` — but a second shape the
+  reader, the panel and the canvas mark each have to carry, and a dangling node would then cost
+  the action too. **No random position, no count and no velocity**: the first two are values that
+  depend on nothing the document said, and a velocity is a body on a definition's child, which
+  physics bans for the reason it bans one in a container. **No spawning a plain node**, see
+  above. And **a spawned object lands on top of everything**, because it is added after every
+  object `create()` emitted — Phaser's display list rather than a decision here, there being no
+  `depth` in this schema at all; it is the first thing the document can say that has no position
+  in the array "draw order is the array order" is about.
+- **One hole this iteration *made* rather than inherited, and it is worth naming:** a prefab
+  placed nowhere **has no panel**. `removePrefab`, `renamePrefab` and the use count all live in
+  `InstanceSection`, which renders only with an `instance` node selected, and the scene panel's
+  library only places. That was already true of an unplaced definition; this is the first feature
+  that deliberately produces one — and the name is the exported factory's. The workaround is to
+  place one, edit it and delete the placement; the fix is prefab controls in the library, which is
+  a panel rather than a field.
+
 ## The properties panel
 
 Every section of the inspector is a disclosure — `src/ui/Section.tsx` — and they ship
@@ -4114,9 +4340,10 @@ tests/
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
   rules.spec.ts             a variable declared, a rule built and refused, a caption
-                            written, a camera shaken, a number watched — and a
-                            canvas that runs none of it, and does not move when
-                            the camera does
+                            written, a camera shaken, a number watched, a prefab
+                            marked for building — and a canvas that runs none of
+                            it, builds none of it, and does not move when the
+                            camera does
   labels.spec.ts            a caption that follows a variable, formatted, and a
                             binding that falls back when the variable is gone
   inspector.spec.ts         the properties panel's sections: closed by default,
@@ -4144,7 +4371,12 @@ nested emit and the `add([...])` list, not only the flat one — and holds a hos
 prefab, placed twice plus once danglingly, whose own children include a *sprite*. That
 sprite is not decoration: it is the only thing that fails if `collectAssets` stops
 descending into definitions, and the failure it catches is an export that boots and draws
-a missing-texture square rather than one that errors. It also holds a hostilely-named
+a missing-texture square rather than one that errors. Since iteration 34 it holds a
+**second** prefab that nothing places at all, built only by a rule's `spawn`: that one is the
+only thing in the suite that fails if `collectPrefabs` or `emittedNodes` stops reaching a
+definition a *rule* names — the same failure arriving from the side no node walk can see —
+and its own labelled text child is the only thing that fails if `collectLabels` loses the
+`project` it needs to look inside one. It also holds a hostilely-named
 emitter with a non-default value in all eighteen of its fields, plus one with no image.
 The first carries no free user text to escape and is not there for escaping: it is the
 only place the emitted config literal's *shape* meets `ParticleEmitterConfig` under
@@ -4398,6 +4630,29 @@ gives a blank page with 404ing assets — the single most likely deploy failure.
 with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
+
+Spawning shipped in iteration 34, and it is worth reading beside the list below because it is
+the one entry nothing on that list had ever named. `destroy` had been in `RuleAction` since
+iteration 28 and every "what stays refused" paragraph since had gone looking for a *sequence*
+to refuse, so nobody noticed the vocabulary had a verb for taking something away and none for
+putting one there. The lesson is not about spawning: it is that a refusal list is a list of
+things somebody thought of, and the hole that survives six iterations is the one nothing
+prompted the question. What spawning leaves is short, because it adds no table and no
+trigger. **No lifespan, and nothing destroys a spawned object** — the one a user meets first,
+and it is not deferred work: `destroy` names a document node, a spawned one has no id, and a
+`delayedCall` per spawn is "spawn, *then* destroy", which is `tweens.chain`'s refusal and
+iteration 28's line verbatim. A loosening would need spawned objects to be *addressable*,
+which is the per-instance identity prefabs already refuse. **No spawn at an object's
+position** — the obvious next ask and a genuine pure loosening, `at: { x, y } | { nodeId }`,
+though it is a second shape the reader, the panel and the canvas mark each have to carry.
+**No random position, no count, no velocity** — the first two are values that depend on
+nothing the document said, and the third is a body on a definition's child, which physics
+bans for the reason it bans one in a container. **No spawning a plain node** — a node is one
+object that already exists; the thing this document has for "build another" is a prefab.
+And **no panel for a prefab nothing places**, which is the one hole this iteration *made*:
+the definition's own controls live on an instance's panel, so a spawn-only prefab can be
+neither renamed nor deleted without placing one first — see "Making one" above, and note that
+the shape of the fix is prefab controls in the library rather than a field anywhere.
 
 Play shipped in iteration 32, and what it leaves is short because it adds nothing to the
 document to leave holes in. **No hot reload** — the overlay covers every control that could

@@ -31,6 +31,7 @@ import {
   tileMapOf,
   touchZonesOf,
   tweenOf,
+  withoutInstances,
   type AnimationClip,
   type AudioAsset,
   type FontAsset,
@@ -274,6 +275,35 @@ function collectPrefabs(
   // each. That is the same "one definition, many placements" property inside a
   // file that the prefab itself is, one level up.
   for (const scene of scenes) walk(scene.children);
+
+  // And the prefabs the *rules* build, which no node walk can reach.
+  //
+  // **After the whole node walk, never interleaved with it**, and that ordering
+  // is the sharp thing in this feature rather than a tidiness. These names come
+  // out of `moduleNames` *before* the fifteen helper names below them, and
+  // `toIdentifier` suffixes a clash — so a name drawn earlier moves the suffix
+  // some later helper was given, and four of those are asserted by name in the
+  // suite. Running last means every prefab an existing project already places
+  // keeps the exact identifier it had, and such a project exports byte for byte
+  // what it exported before.
+  //
+  // `scenes` rather than `project.scenes`: they are the same array for the one
+  // caller there is today, and reaching past the parameter would look correct
+  // and silently diverge for any other.
+  for (const scene of scenes) {
+    for (const prefabId of prefabsNamedByRules(project, scene)) {
+      if (used.has(prefabId)) continue;
+      const prefab = findPrefab(project, prefabId);
+      // `rulesOf` has already dropped a spawn whose prefab is gone, so this is
+      // the belt to that reader's braces — `collectAssets`' own treatment of a
+      // clip whose asset did not survive the open.
+      if (!prefab) continue;
+      used.set(prefab.id, {
+        prefab,
+        fn: toIdentifier(`create ${prefab.name}`, moduleNames),
+      });
+    }
+  }
   return used;
 }
 
@@ -286,26 +316,42 @@ function collectPrefabs(
  * without the descent those sprites would each export the "no image chosen"
  * comment for an image that *is* chosen — a plausible-looking export that draws
  * nothing. Definitions cannot nest (see `prefabChildrenOf`), so one level of
- * descent is all of them.
+ * descent is all of them — and `withoutInstances` is what makes that true here
+ * rather than merely likely, `buildFactories` going through it for the same
+ * reason.
+ *
+ * Since iteration 34 a prefab can also be reached by a **rule** rather than by
+ * a node, and this is the one place that has to learn about it: all six callers
+ * — `collectAssets`, `collectFonts`, `collectAnimations`, `usedIn`,
+ * `collectTilemaps` and `collectLabels` — read this rather than walking a scene
+ * themselves, so every one of them inherits a spawned prefab's contents with no
+ * edit of its own. Said out loud because on that list "already covered" and
+ * "forgotten" read identically. (Contrast `animationsNamedByRules`, which needs
+ * a pass in *two* collectors precisely because a clip is not a list of nodes.)
  */
 function emittedNodes(
+  project: Project,
   scene: SceneDoc,
   prefabs: Map<string, UsedPrefab>,
 ): GameObjectNode[][] {
   const bodies: GameObjectNode[][] = [scene.children];
   const seen = new Set<string>();
+  const add = (entry: UsedPrefab | undefined) => {
+    if (!entry || seen.has(entry.prefab.id)) return;
+    seen.add(entry.prefab.id);
+    bodies.push(withoutInstances(entry.prefab.children));
+  };
   const walk = (nodes: GameObjectNode[]) => {
     for (const node of nodes) {
       const id = node.type === 'instance' ? node.props.prefabId : null;
-      const entry = id ? prefabs.get(id) : undefined;
-      if (entry && !seen.has(entry.prefab.id)) {
-        seen.add(entry.prefab.id);
-        bodies.push(entry.prefab.children);
-      }
+      add(id ? prefabs.get(id) : undefined);
       walk(node.children);
     }
   };
   walk(scene.children);
+  for (const prefabId of prefabsNamedByRules(project, scene)) {
+    add(prefabs.get(prefabId));
+  }
   return bodies;
 }
 
@@ -322,6 +368,14 @@ function emittedNodes(
  * helper is never carried into a file with nothing to call it.
  */
 function collectLabels(
+  // The `project` is `emittedNodes`' and nothing else here reads it — and it is
+  // load-bearing rather than a parameter carried along. Without it this gate
+  // cannot see inside a prefab that is only *spawned*, so a definition holding
+  // a labelled text child would have `buildFactories` emit a `bindLabel(...)`
+  // call inside its factory while this answered false and the helper was never
+  // declared. That is precisely the failure the paragraph above names: the gate
+  // that missed one emits the call and not the function it calls.
+  project: Project,
   scenes: SceneDoc[],
   prefabs: Map<string, UsedPrefab>,
   variables: Map<string, UsedVariable>,
@@ -334,7 +388,7 @@ function collectLabels(
           variables.has(node.props.label.variableId)) ||
         walk(node.children),
     );
-  return scenes.some((scene) => emittedNodes(scene, prefabs).some(walk));
+  return scenes.some((scene) => emittedNodes(project, scene, prefabs).some(walk));
 }
 
 /**
@@ -403,7 +457,7 @@ function collectAssets(
   // it — collected per scene they would each take the key "coin" in their own
   // pass and overwrite each other in the shared literal.
   for (const scene of scenes) {
-    for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+    for (const nodes of emittedNodes(project, scene, prefabs)) walk(nodes);
     // And the images behind the clips the *rules* name, which no node walk can
     // reach: a `playAnimation` action can name a clip whose sheet nothing in
     // the scene draws. Without this the asset has no key, so
@@ -1065,7 +1119,7 @@ function familiesIn(
       walk(node.children);
     }
   };
-  for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+  for (const nodes of emittedNodes(project, scene, prefabs)) walk(nodes);
   return families;
 }
 
@@ -1243,7 +1297,7 @@ function collectAnimations(
   // whole file — an animation is registered on the game's manager, which no
   // more belongs to one scene than the texture manager does.
   for (const scene of scenes) {
-    for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+    for (const nodes of emittedNodes(project, scene, prefabs)) walk(nodes);
     fromRules(scene);
   }
   return used;
@@ -1295,7 +1349,7 @@ function usedIn(
       walk(node.children);
     }
   };
-  for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+  for (const nodes of emittedNodes(project, scene, prefabs)) walk(nodes);
 
   // A read rather than a traversal, which is the shape of the feature and not a
   // shortcut: a sound belongs to the scene, so there is no node to walk into.
@@ -1486,7 +1540,7 @@ function collectTilemaps(
     }
   };
   for (const scene of scenes) {
-    for (const nodes of emittedNodes(scene, prefabs)) walk(nodes);
+    for (const nodes of emittedNodes(project, scene, prefabs)) walk(nodes);
   }
   return used;
 }
@@ -2841,7 +2895,15 @@ function buildFactories(
       ...factoryNames,
     ]);
     const lines: string[] = ['const root = scene.add.container(x, y);', ''];
-    const childIds = entry.prefab.children.flatMap(
+    // Through `withoutInstances`, which is the renderer's own view of a
+    // definition and until iteration 34 was the one thing this function did not
+    // share with it. A nested instance that resolves to a prefab in this table
+    // emits a call to that prefab's factory, and a mutual pair emits two
+    // functions that call each other — unbounded recursion in the *player's*
+    // game. It was survivable only because this table held placed definitions
+    // alone; `spawn` widens it. Identical output for every well-formed project,
+    // because the array comes back by identity when there is nothing to strip.
+    const childIds = withoutInstances(entry.prefab.children).flatMap(
       (child) => emitNode(child, inner, used, lines, true) ?? [],
     );
     if (childIds.length > 0) lines.push(`root.add([${childIds.join(', ')}]);`, '');
@@ -3249,6 +3311,29 @@ function animationsNamedByRules(project: Project, scene: SceneDoc): Set<string> 
   return named;
 }
 
+/**
+ * The prefabs the rules of one scene build.
+ *
+ * `animationsNamedByRules`' sibling and the same shape for the same reason: a
+ * rule can name something **no node walk can reach**. A prefab that is only
+ * ever spawned is placed nowhere, so without this it gets no factory at all —
+ * which is not a wrong picture but a `ReferenceError` in the runnable page and
+ * a compile error in the exported `.ts` — and none of its images are preloaded.
+ *
+ * Read by exactly two places, and they are the pair this file keeps splitting:
+ * `collectPrefabs`, which decides what a factory is *called* across the whole
+ * file, and `emittedNodes`, which decides what *this* scene has to load.
+ */
+function prefabsNamedByRules(project: Project, scene: SceneDoc): Set<string> {
+  const named = new Set<string>();
+  for (const rule of rulesOf(project, scene)) {
+    for (const action of rule.do) {
+      if (action.kind === 'spawn') named.add(action.prefabId);
+    }
+  }
+  return named;
+}
+
 /** One action, as the statements it emits. */
 function ruleActionLines(
   action: RuleAction,
@@ -3271,6 +3356,25 @@ function ruleActionLines(
       // whole rather than losing its floor and keeping its walls — the tween's
       // `targets` argument, one action over.
       return (bindings.get(action.nodeId) ?? []).map((id) => `${id}.destroy();`);
+
+    case 'spawn': {
+      const entry = ctx.prefabs.get(action.prefabId);
+      // The expression `constructorFor`'s `'instance'` case already builds, and
+      // that is the whole feature: one factory per prefab has been emitted
+      // since iteration 12, called once per placement and never again.
+      //
+      // **A statement, never a binding.** Nothing reads what comes back, which
+      // is what keeps a rule's actions a list rather than a program — the
+      // moment one action could name what another produced, the list would have
+      // an order that depends on a result.
+      //
+      // `this` hardcoded rather than `ctx.receiver`, `buildSoundLines`' reason:
+      // a rule only ever runs in a Scene's `create()`, and `${ctx.receiver}`
+      // would read as though a prefab factory could reach one.
+      return entry === undefined
+        ? []
+        : [`${entry.fn}(this, ${num(action.x)}, ${num(action.y)});`];
+    }
 
     case 'setVisible':
       return (bindings.get(action.nodeId) ?? []).map(
@@ -4139,7 +4243,7 @@ function prepare(project: Project): Emission {
   const tilemaps = collectTilemaps(project, project.scenes, prefabs, assets);
   const current = activeScene(project);
   const worlds = project.scenes.map(physicsUsedIn);
-  const bound = collectLabels(project.scenes, prefabs, variables);
+  const bound = collectLabels(project, project.scenes, prefabs, variables);
   // A format on a `setText` with no variable is a dial on nothing, which
   // `ruleActionsOf` already refuses to carry — so reading the action's two
   // fields here cannot pick one up.

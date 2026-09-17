@@ -2989,6 +2989,36 @@ export type RuleAction =
   | { kind: 'playAnimation'; nodeId: string; animationId: string }
   | { kind: 'startTween'; nodeId: string }
   /**
+   * `destroy`'s inverse, and the reason it took until iteration 34 is that
+   * nothing was missing: iteration 12 has been emitting one factory function
+   * per prefab since prefabs existed, called once per placement and never
+   * again. This calls it a second time.
+   *
+   * **A spawn names a prefab, never a node.** A node is one object that
+   * already exists; a prefab is the one thing in this document that exists
+   * precisely to be built more than once, which is what `buildFactories` is.
+   * Cloning an arbitrary node at runtime would be a second answer to what a
+   * prefab is, and Phaser has no call for it.
+   *
+   * **The result is discarded, and that is what keeps the list a list.** The
+   * emit is `createCoin(this, x, y);` — a statement, never a binding. Binding
+   * it would be the first value in this vocabulary another action could read,
+   * which is iteration 28's "a rule's actions are a list, never a program".
+   *
+   * `x`/`y` are absolute scene coordinates, the tween's targets' rule: an
+   * absolute value names a *place*, which is what lets the canvas draw it —
+   * and drawing it is half of what makes this editable by eye. See
+   * `spawnPointsOf`.
+   *
+   * Like the camera effects it names nothing *scene*-local, so `ruleNames`,
+   * `ruleUsesVariable` and the store's `remapActionRefs` inherit the right
+   * answer with no edit — a prefab is project-level, so a duplicated scene
+   * shares it and there is nothing to remap. Unlike them it *can* dangle, and
+   * a dangling prefab costs the **action** rather than the rule: see
+   * `ruleActionsOf`.
+   */
+  | { kind: 'spawn'; prefabId: string; x: number; y: number }
+  /**
    * The five camera effects, and they are the first actions besides
    * `restartScene` that **name nothing the document holds** — no node, no
    * sound, no scene, no variable. Everything below follows from that one fact:
@@ -3054,6 +3084,9 @@ const effectEase = (value: unknown): TweenEase =>
 
 /** Every action kind, for the inspector's picker. */
 export const RULE_ACTION_KINDS: readonly RuleAction['kind'][] = [
+  // Beside the verb it is the inverse of, which is the only thing the order
+  // here is for.
+  'spawn',
   'destroy',
   'setVisible',
   'setText',
@@ -3400,6 +3433,33 @@ function ruleActionsOf(
         if (byId.has(nodeId)) actions.push({ kind: 'destroy', nodeId });
         break;
 
+      case 'spawn': {
+        const prefabId = typeof row.prefabId === 'string' ? row.prefabId : '';
+        // A dangling prefab costs the **action**, which is `destroy`'s and
+        // `startScene`'s split rather than `setVar`'s. The reader's own test:
+        // a variable is the one thing a rule names that *another rule reads*,
+        // so dropping a `setVar` leaves every condition elsewhere testing a
+        // number nothing writes — where a prefab reaches nothing outside the
+        // action that names it, so dropping one strictly narrows. If it was
+        // the rule's only action the empty-`do` check takes the rule, which is
+        // the treatment a lone `destroy` of a missing node already gets.
+        if (findPrefab(project, prefabId) === undefined) break;
+        // Repaired, never dropped, and `cameraPan`'s own two coordinates to
+        // the character: there is no gate here to open, so a repair cannot
+        // widen what the rule says. `prefabChildrenOf` is deliberately *not*
+        // consulted — a definition made only of instances resolves to nothing
+        // and `buildFactories` still emits an empty Container for it, so a
+        // length check here would have the reader and the exporter disagree
+        // about whether the action exists at all.
+        actions.push({
+          kind: 'spawn',
+          prefabId,
+          x: finiteOr(row.x, 0),
+          y: finiteOr(row.y, 0),
+        });
+        break;
+      }
+
       case 'setVisible':
         if (byId.has(nodeId)) {
           actions.push({ kind: 'setVisible', nodeId, visible: row.visible === true });
@@ -3604,6 +3664,49 @@ export function rulesNaming(
   nodeId: string,
 ): SceneRule[] {
   return rulesOf(project, scene).filter((rule) => ruleNames(rule, nodeId));
+}
+
+/** Where one `spawn` action will build its prefab, and what that prefab is called. */
+export interface SpawnPoint {
+  x: number;
+  y: number;
+  /** The prefab's own name, resolved here so the renderer never reads the table. */
+  name: string;
+}
+
+/**
+ * Every place a rule in this scene will build something.
+ *
+ * `rulesOf` filtered, never `scene.rules` read a second time — `rulesNaming`'s
+ * rule and `touchZonesOf`-on-`controlsOf`'s reason: a spawn the rules reader
+ * dropped must not come back to life on the canvas.
+ *
+ * It exists because a spawn is **the first thing a rule says that has a
+ * *where***, and a where is the one thing this canvas has always drawn — the
+ * camera frame, the touch rings, the tween ghost. Two numbers with no mark on
+ * the canvas are two numbers authored blind. Nothing is *run* here: the marker
+ * is `drawn, never run`, the body outline's and the camera frame's rule.
+ *
+ * The position is not de-duplicated and the list is not ordered: two spawns at
+ * one point are two marks on top of each other, which is honest — the document
+ * really does say it twice.
+ *
+ * A fresh array every call ⇒ React error #185 in a selector, the `tileMapOf`
+ * trap for the twelfth time.
+ */
+export function spawnPointsOf(project: Project, scene: SceneDoc): SpawnPoint[] {
+  const points: SpawnPoint[] = [];
+  for (const rule of rulesOf(project, scene)) {
+    for (const action of rule.do) {
+      if (action.kind !== 'spawn') continue;
+      // `rulesOf` has already refused a spawn whose prefab is gone, so this
+      // cannot answer undefined — the `?? ` is the belt to that reader's
+      // braces, `rgbArgs`' fallback one module over.
+      const prefab = findPrefab(project, action.prefabId);
+      points.push({ x: action.x, y: action.y, name: prefab?.name ?? 'Prefab' });
+    }
+  }
+  return points;
 }
 
 /**
@@ -4010,7 +4113,23 @@ export function prefabChildrenOf(
   return withoutInstances(prefab.children);
 }
 
-function withoutInstances(nodes: GameObjectNode[]): GameObjectNode[] {
+/**
+ * A definition's children with every nested instance stripped out.
+ *
+ * Exported since iteration 34, and the reason is worth keeping: the *renderer*
+ * has always reached a definition through `prefabChildrenOf` and so has always
+ * had the cycle argument above, while the **exporter never called either** —
+ * `buildFactories` and `emittedNodes` both read `prefab.children` raw. That was
+ * survivable only by accident, because the exporter's prefab table held placed
+ * definitions alone; `spawn` widens that table, so a nested instance that
+ * resolves is now a factory that calls a factory, and a mutual pair is two
+ * emitted functions that call each other — a stack overflow in the *player's*
+ * game, from a file the editor cannot write but a hand edit can. Both sites go
+ * through this now, which costs nothing: the array comes back by identity when
+ * there is nothing to strip, so every well-formed project exports byte for byte
+ * what it exported before.
+ */
+export function withoutInstances(nodes: GameObjectNode[]): GameObjectNode[] {
   if (!containsInstance(nodes)) return nodes;
   return nodes
     .filter((node) => node.type !== 'instance')
