@@ -4460,11 +4460,12 @@ first-class target.
   srcdoc's inherited base URL is not a question. `srcdoc` rather than a blob URL: no
   origin-partitioning question and nothing to revoke, and the ~5 MB localStorage draft
   already caps a project inside what an attribute holds.
-- **What the sandbox costs is an error channel, and that is a refusal rather than a
-  to-do.** The overlay cannot read an opaque-origin frame, and giving the page a
-  `postMessage` would mean changing the bytes the export ships — the one property this
-  whole feature exists to preserve. Errors reach the browser console named by frame, which
-  is where a developer tool should put them.
+- **The sandbox has one narrow channel out.** The overlay still cannot read the
+  opaque-origin frame, but the Play-only page reports readiness and runtime errors through
+  `postMessage`. The parent accepts messages only from the current iframe with its current
+  run id, then validates and bounds every string before rendering it. Nothing about the
+  project or simulation comes back, and downloaded exports get no reporter, so their bytes
+  and behaviour remain unchanged.
 - **`position: fixed; inset: 0`, never a slot in the layout**, and this one is load-bearing
   rather than convenient. Giving the game a share of the flow would resize `.app__center`,
   and resizing the viewport re-fits the editor's camera — which is the
@@ -4544,9 +4545,10 @@ first-class target.
 - **What Play refuses.** **No hot reload** — see the snapshot note above; Stop then Play is
   the edit-to-run path. **No pause, step or inspect** — that is a debugger and a different
   tool. **No choosing a scene** — Play boots the active scene because that is what Export
-  already decides, and a second answer is two fields over one number. **No error panel** —
-  the sandbox note above. And **nothing reads anything back out of the game**: a running
-  game cannot edit the document, which is the whole reason it is allowed to run.
+  already decides, and a second answer is two fields over one number. And **nothing reads
+  simulation state back out of the game**: a running game cannot edit the document, which
+  is the whole reason it is allowed to run. The status/error channel above is deliberately
+  diagnostic only.
 
 ## Verification
 
@@ -4923,9 +4925,10 @@ Play shipped in iteration 32, and what it leaves is short because it adds nothin
 document to leave holes in. **No hot reload** — the overlay covers every control that could
 make an edit, so this is not deferred work but a question the shape answers; a loosening
 would mean the game and the editor side by side, which is a layout this editor has nowhere
-to put on a 390px screen. **No error panel** — see "Play" above: reading an opaque-origin
-frame means giving the exported page a reporting channel, and the export's bytes being
-exactly what runs is the property the feature exists for. **No pause, step, slow-motion or
+to put on a 390px screen. Runtime errors now cross the opaque-origin boundary through a
+one-way, per-run `postMessage` channel; the parent accepts only the current iframe and
+renders sanitized text, while a downloaded export gets no reporter and keeps its original
+bytes. **No pause, step, slow-motion or
 inspector**, which is a debugger and is a different tool rather than more of this one; the
 shape it would take is a second window onto a game the editor deliberately cannot see
 inside. **No editing while it runs, and nothing read back out of the game** — the second is

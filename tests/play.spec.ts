@@ -184,6 +184,51 @@ test('Restart is a new game, not a resumed one', async ({ editor }) => {
   await editor.stopPlay();
 });
 
+test('Play reports runtime failures inside the editor and clears them on restart', async ({
+  editor,
+}) => {
+  await setup(editor);
+  await editor.deselect();
+  await editor.closePanels();
+  await editor.play();
+
+  await expect(editor.page.getByText('Running', { exact: true })).toBeVisible();
+
+  // A page elsewhere cannot forge a runtime failure. The receiver accepts only
+  // the current iframe's WindowProxy and then checks the unguessable run id.
+  await editor.page.evaluate(() => {
+    window.postMessage(
+      {
+        source: 'phaser-gui-runtime',
+        runId: 'not-the-current-run',
+        kind: 'error',
+        message: 'forged failure',
+      },
+      '*',
+    );
+  });
+  await expect(editor.page.getByText('forged failure')).toHaveCount(0);
+
+  const game = editor.page.frames().find((frame) => frame.parentFrame() !== null);
+  if (!game) throw new Error('Play iframe did not attach');
+  await game.evaluate(() => {
+    setTimeout(() => {
+      void Promise.reject(new Error('enemy update exploded'));
+    }, 0);
+  });
+
+  const alert = editor.page.getByRole('alert');
+  await expect(alert).toContainText('Game error');
+  await expect(alert).toContainText('enemy update exploded');
+  await expect(editor.page.getByText('Failed', { exact: true })).toBeVisible();
+
+  await editor.restartPlay();
+  await expect(alert).toHaveCount(0);
+  await expect(editor.page.getByText('Running', { exact: true })).toBeVisible();
+
+  await editor.stopPlay();
+});
+
 test('Play asks the network for nothing', async ({ editor, page }) => {
   /*
    * The offline claim, and it is the reason `generateRunnableHtml` grew a

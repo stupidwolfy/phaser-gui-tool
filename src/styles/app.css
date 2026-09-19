@@ -1279,6 +1279,58 @@ select {
   letter-spacing: 0.08em;
 }
 
+.play__status {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.play__status--starting {
+  color: var(--text-dim);
+}
+
+.play__status--running {
+  color: #7ee787;
+}
+
+.play__status--failed {
+  color: #ff8f8f;
+}
+
+.play__error {
+  z-index: 1;
+  max-height: min(42vh, 340px);
+  overflow: auto;
+  padding: 12px 16px;
+  color: var(--text);
+  background: #321b20;
+  border-bottom: 1px solid #74333f;
+}
+
+.play__errorHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.play__error p {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.play__error summary {
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.play__error pre {
+  margin: 8px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
 /*
  * The game letterboxes itself — the exported page asks for `Scale.FIT` and
  * `CENTER_BOTH` — so the frame only has to be a box for it to fit inside, and

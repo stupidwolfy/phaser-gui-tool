@@ -53,6 +53,7 @@ import {
   type TouchButton,
   type VariableValue,
 } from '../core/schema';
+import { RUNTIME_MESSAGE_SOURCE } from './runtimeMessages';
 
 /**
  * Turns the project document into real Phaser code.
@@ -4703,16 +4704,26 @@ export default ${boot.className};
  * to the version the project records, so an old project keeps working against
  * the Phaser it was built for.
  *
- * `phaserSrc` overrides where that runtime is fetched from, and exists for one
+ * `options.phaserSrc` overrides where that runtime is fetched from, and exists for one
  * caller: the editor's own Play overlay, which runs this very page in a
  * sandboxed iframe and cannot reach the network to do it — see "Play" in
- * CLAUDE.md. It is an argument rather than a second generator for
+ * CLAUDE.md. It is an option rather than a second generator for
  * `EmitContext.receiver`'s reason: one page, two places it can run, and a
  * second copy of this function is exactly the drift that sharing
  * `buildCreateBody` exists to prevent. Omitted, the CDN URL is built as it
  * always was, so every exported file is byte for byte what it was.
  */
-export function generateRunnableHtml(project: Project, phaserSrc?: string): string {
+export interface RunnableHtmlOptions {
+  /** Override the CDN runtime, used by the editor's offline Play iframe. */
+  phaserSrc?: string;
+  /** Enable the Play iframe's one-way status and error channel. */
+  runtimeReporter?: { runId: string };
+}
+
+export function generateRunnableHtml(
+  project: Project,
+  options: RunnableHtmlOptions = {},
+): string {
   const { scenes, ctx, boot, physics, touch, rules, labels, effects } = prepare(project);
   // phaserVersion comes from the project file, so it is not trustworthy input
   // for a URL. Anything that is not a plain version falls back to the version
@@ -4723,7 +4734,7 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
   // Named for what it is rather than for where it usually comes from: with
   // `phaserSrc` given it is not a CDN at all.
   const runtimeSrc =
-    phaserSrc ?? `https://cdn.jsdelivr.net/npm/phaser@${version}/dist/phaser.min.js`;
+    options.phaserSrc ?? `https://cdn.jsdelivr.net/npm/phaser@${version}/dist/phaser.min.js`;
 
   const table =
     ctx.assets.size > 0 ? `${buildAssetTable(ctx.assets, '      ')}\n\n` : '';
@@ -4823,7 +4834,32 @@ ${arcadeConfig(physics.arcade)}        scale: {
           autoCenter: Phaser.Scale.CENTER_BOTH,
         },
         scene: ${registered},
-      });`;
+      });${options.runtimeReporter ? "\n      window.__phaserGuiReport?.('ready');" : ''}`;
+
+  const reporter = options.runtimeReporter
+    ? `<script>
+      (() => {
+        const source = ${str(RUNTIME_MESSAGE_SOURCE)};
+        const runId = ${str(options.runtimeReporter.runId)};
+        const send = (kind, value) => {
+          const error = value instanceof Error ? value : new Error(String(value ?? 'Unknown runtime error'));
+          window.parent.postMessage({
+            source,
+            runId,
+            kind,
+            ...(kind === 'error' ? { message: error.message, stack: error.stack } : {}),
+          }, '*');
+        };
+        window.__phaserGuiReport = send;
+        window.addEventListener('error', (event) => send('error', event.error ?? event.message));
+        window.addEventListener('unhandledrejection', (event) => send('error', event.reason));
+      })();
+    <\/script>
+    `
+    : '';
+  const runtimeLoadError = options.runtimeReporter
+    ? ` onerror="window.__phaserGuiReport('error', new Error('Could not load the Phaser runtime.'))"`
+    : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -4838,7 +4874,7 @@ ${arcadeConfig(physics.arcade)}        scale: {
     </style>
   </head>
   <body>
-    <script src="${runtimeSrc}"></script>
+    ${reporter}<script src="${runtimeSrc}"${runtimeLoadError}></script>
     <script>
       ${escapeForScriptTag(script)}
     </script>

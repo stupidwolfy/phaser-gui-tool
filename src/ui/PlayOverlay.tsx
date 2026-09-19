@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { activeScene, useEditorStore } from '../core/store';
 import { generateRunnableHtml } from '../io/exportPhaser';
+import { runtimeMessageOf, type RuntimeMessage } from '../io/runtimeMessages';
 
 /**
  * The runtime the game runs on, as a URL this page can hand to a `<script>`.
@@ -63,11 +64,10 @@ import phaserRuntimeUrl from '../../node_modules/phaser/dist/phaser.min.js?url';
  *   cannot reach `parent`, `localStorage` or the autosaved draft. A classic
  *   script from this origin still loads (no CORS on those), WebGL still works,
  *   and `phaserRuntimeUrl` is absolute so srcdoc's inherited base URL is not a
- *   question. What it costs is an error channel: the overlay cannot read the
- *   frame, and giving the page one would mean changing the bytes the export
- *   ships — which is the one property this feature exists to preserve. Errors
- *   go to the browser console, named by frame, which is where a developer tool
- *   should put them.
+ *   question. The frame gets one deliberately narrow way out: status and
+ *   sanitized error messages sent with `postMessage`. The parent validates the
+ *   sending window and a per-run id; no project data or runtime state comes
+ *   back, and downloaded exports keep their original bytes and behaviour.
  * - **The game takes the keyboard, and Stop is therefore the only way out.**
  *   Phaser focuses its own canvas as it boots, so the iframe becomes the
  *   editor's `activeElement` and every key after that belongs to the game —
@@ -90,8 +90,13 @@ export function PlayOverlay() {
 function PlayFrame() {
   const setPlaying = useEditorStore((s) => s.setPlaying);
   const stopRef = useRef<HTMLButtonElement>(null);
+  const frameRef = useRef<HTMLIFrameElement>(null);
   /** Bumping this re-keys the iframe, which is the whole of Restart. */
   const [run, setRun] = useState(0);
+  const [status, setStatus] = useState<'starting' | 'running' | 'failed'>('starting');
+  const [runtimeError, setRuntimeError] = useState<
+    Extract<RuntimeMessage, { kind: 'error' }> | null
+  >(null);
 
   /**
    * The document as it was when this run began.
@@ -102,13 +107,36 @@ function PlayFrame() {
    * ever cost a re-render and a regenerated multi-megabyte string on a store
    * change nobody asked for — an autosave landing, say.
    */
-  const { html, sceneName } = useMemo(() => {
+  const { html, sceneName, runId } = useMemo(() => {
     const { project } = useEditorStore.getState();
+    const nextRunId = crypto.randomUUID();
     return {
-      html: generateRunnableHtml(project, phaserRuntimeUrl),
+      html: generateRunnableHtml(project, {
+        phaserSrc: phaserRuntimeUrl,
+        runtimeReporter: { runId: nextRunId },
+      }),
       sceneName: activeScene(project).name,
+      runId: nextRunId,
     };
   }, [run]);
+
+  useEffect(() => {
+    setStatus('starting');
+    setRuntimeError(null);
+    const receive = (event: MessageEvent) => {
+      if (event.source !== frameRef.current?.contentWindow) return;
+      const message = runtimeMessageOf(event.data);
+      if (!message || message.runId !== runId) return;
+      if (message.kind === 'ready') {
+        setStatus('running');
+      } else {
+        setStatus('failed');
+        setRuntimeError(message);
+      }
+    };
+    window.addEventListener('message', receive);
+    return () => window.removeEventListener('message', receive);
+  }, [runId]);
 
   // Focus the way out, for the moment before the game claims the keyboard and
   // for every moment after a press on this bar brings it back. It is not there
@@ -124,6 +152,9 @@ function PlayFrame() {
     <div className="play" role="dialog" aria-label="Play game">
       <div className="play__bar">
         <span className="play__title">{sceneName}</span>
+        <span className={`play__status play__status--${status}`} role="status">
+          {status === 'starting' ? 'Starting…' : status === 'running' ? 'Running' : 'Failed'}
+        </span>
         <button className="btn" onClick={() => setRun((current) => current + 1)}>
           Restart
         </button>
@@ -135,6 +166,23 @@ function PlayFrame() {
           Stop
         </button>
       </div>
+      {runtimeError && (
+        <div className="play__error" role="alert">
+          <div className="play__errorHead">
+            <strong>Game error</strong>
+            <button className="btn" onClick={() => setRuntimeError(null)}>
+              Dismiss
+            </button>
+          </div>
+          <p>{runtimeError.message}</p>
+          {runtimeError.stack && runtimeError.stack !== runtimeError.message && (
+            <details>
+              <summary>Details</summary>
+              <pre>{runtimeError.stack}</pre>
+            </details>
+          )}
+        </div>
+      )}
       {/*
         srcdoc rather than a blob URL: no origin-partitioning question to reason
         about and no URL to revoke, and the ~5 MB localStorage draft already
@@ -142,11 +190,13 @@ function PlayFrame() {
         ever stops being true the swap is one line.
       */}
       <iframe
+        ref={frameRef}
         key={run}
         className="play__frame"
         title={`${sceneName} running`}
         sandbox="allow-scripts"
         srcDoc={html}
+        onLoad={() => setStatus((current) => (current === 'starting' ? 'running' : current))}
       />
     </div>
   );

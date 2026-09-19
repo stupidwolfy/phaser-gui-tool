@@ -348,10 +348,9 @@ that is a line of game logic rather than a piece of layout — the export regist
 and leaves `this.scene.start('Level 2')` to you. Prefabs are in, with two limits: a prefab cannot contain another prefab,
 and an instance cannot override part of what it draws — detach it and edit the copy.
 
-Play is in, with four limits: it plays a
-snapshot, so an edit reaches the game on the next Restart rather than live; errors go to
-the browser console rather than to the editor, because what runs is the exported page
-unchanged; there is no pause, step or inspect, which is a debugger and a different tool;
+Play is in, with three limits: it plays a snapshot, so an edit reaches the game on the next
+Restart rather than live; there is no pause, step or inspect, which is a debugger and a
+different tool;
 and it always starts the scene you are editing, which is the scene the export starts too.
 
 **Verified by** a Playwright suite that drives the production build in Chromium at both
