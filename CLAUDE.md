@@ -101,7 +101,12 @@ but a placement — so the document stopped being able to describe only a level 
 being able to describe a wave. One `RuleAction` member, no table, no new helper and no schema
 bump; the work was two passes in the exporter, because a prefab nothing *places* was invisible
 to every collector in the file, and the first mark this canvas has ever drawn for a rule —
-a spawn being the first thing a rule says that has a *where*.
+a spawn being the first thing a rule says that has a *where*. Iteration 35 (shipped) let an
+object be drawn with something over it: a glow, a blur, a drop shadow or a pixelate, as
+Phaser 4 *filters* — the largest hole this file's own "Not built yet" list never once
+named, and the first feature in a long while where the editor and the exported game do the
+same thing rather than one describing the other, because a filter is a standing fact about
+how an object is drawn rather than a step of a simulation.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -171,7 +176,10 @@ This is the repeating unit of work for most future iterations. Add a `tileSprite
    `emitNode` are not exhaustive, so check them in the same pass as the `EditorScene`
    case. `collectAssets` and `usedIn` are a pair and both are needed: the first decides
    what a texture is called across the file, the second what *one scene* preloads.
-   `countAssetUses` in `src/core/store.ts` is off this checklist entirely and is the same
+   A type that carries `fx` needs nothing extra: `effectsOf` reads it off the node and
+  `emitNode` emits it for every type alike, which is the one part of this checklist that
+  is additive by construction.
+  `countAssetUses` in `src/core/store.ts` is off this checklist entirely and is the same
    kind of hand-matched list — miss it and the image-deletion warning under-reports by a
    whole object type; `removeAsset`'s own patch beside it is a third, and a type missing
    from that one leaves the document holding a dangling `assetId`, which is the invariant
@@ -1558,6 +1566,242 @@ does *over time*, and two decisions carry the rest of it.
   Scale X/Y and the object's own Alpha are a few rows up the same panel, so bare "Scale"
   and "Alpha" would be ambiguous to a reader and to `labelled()`'s exact-match locator
   alike — the "Animation name, not Name" rule.
+
+## Visual effects
+
+A node may carry `fx?: NodeEffect[]` — a glow, a blur, a drop shadow or a pixelate, drawn
+as real Phaser 4 **filters**. It is the largest capability hole the "Not built yet" list
+below never names: `grep` over `src/` found no `setMask`, no `preFX`/`postFX` and no filter
+of any kind, while the "Phaser 4, not 3" bullet has flagged since iteration 4 that *the
+renderer, FX/filters and masks all changed* — an awareness note with no feature behind it.
+That is iteration 34's own closing lesson arriving on schedule: **a refusal list is a list
+of things somebody thought of, and the hole that survives is the one nothing prompted the
+question.**
+
+- **This is the first feature in a long while with nothing to refuse the canvas.** Physics
+  is drawn and never run, a camera is drawn and never applied, a rule fires nowhere, a
+  touch ring is never pressed — every one of those because running it would rewrite the
+  document or move the user's own view. A filter does neither: it is a standing fact about
+  how an object is *drawn*, so the canvas shows exactly what the export gives you, in the
+  same renderer, and there is no "drawn, never …" paragraph to write. `hasMotionIn` is
+  untouched all the same and records its **twelfth** refusal, which is the easy one for
+  once: a glow does not move.
+- **Every fact below was read out of the shipped package, not recalled.**
+  `node_modules/phaser/skills/filters-and-postfx/SKILL.md`, `types/phaser.d.ts` and
+  `src/filters/*.js` — which is what "Phaser 4, not 3" tells every reader to do, and what
+  the Web-fonts iteration records the cost of not doing. A spike then ran the real
+  `phaser.min.js` in the suite's own Chromium before a line of schema was written, because
+  the one thing that could have killed this feature — filters are **WebGL only** and the
+  headless container rasterises on the CPU — is not something to discover at the end.
+- **`fx` is a fourth optional field beside `physics`, `controls` and `tween`**, for
+  `physics`' reason: it is not per-type, so every entry of `NodePropsByType` would carry
+  the same array and `createNode` would have to answer "what is this rectangle's glow".
+- **A list, where `tween` is deliberately one — and the refusal does not transfer.** That
+  one was refused because a second tween means a second *duration*, which is a schedule and
+  therefore a program. A second filter is a second **pass**: a Phaser `FilterList` is
+  defined as an ordered chain where each filter takes the previous one's output, and
+  glow-and-shadow is one look rather than two. The array order is the apply order, which is
+  "draw order is the array order" one level in, and `TilemapProps.layers` is the same shape
+  for the same reason. `MAX_EFFECTS` is 4, which is `MIN_TIMER_DELAY`'s job one field over
+  and the only runaway here: every active filter is another pass, and an unbounded list is
+  the one thing in this feature that can quietly take the frame rate with it.
+- **No top-level rule, which is the tween's case and not physics'.** A body and a
+  drive-scheme are banned inside a container because both read their owner's `x`/`y` as
+  *world* coordinates every step. A filter writes no coordinate at all. So `effectsOf`
+  takes no `topLevel` argument, nothing is stripped on read, `setNodeEffects` reaches
+  through `mapNode`, and an effect in a prefab definition draws in every placement. Worth
+  saying in as many words, because two of its three neighbours ban exactly this and the
+  code reads like a missed guard.
+- **`effectsOf` is the only reader**, in the `physicsOf` / `controlsOf` / `tweenOf` /
+  `guidesOf` / `soundsOf` / `cameraOf` / `tileMapOf` family, answering four questions at
+  once: is there a list, is every kind one this editor can both draw *and* emit, are the
+  numbers ones Phaser can be handed, and is the list within the cap. Its policy is split
+  the way the rule decides — *a repair may narrow what the document says; it may never
+  widen it*. An unknown `kind` costs the **effect**, not the node, which is
+  `ruleActionsOf`'s split: a list of passes still means something without one of them.
+  Numbers are **repaired, never dropped**, which is `cameraOf`'s policy and satisfied
+  trivially, because there is no gate inside an effect to open. A fresh array per call, so
+  `useEditorStore((s) => effectsOf(...))` is React error #185 — the `tileMapOf` trap,
+  thirteenth time.
+- **It is the first reader in that family with no dangling reference to check**, because an
+  effect names nothing the document holds — no node, no asset, no variable, no scene. That
+  is also why `removeAsset`, `removeVariable`, `removePrefab`, `mapProjectNodes`,
+  `mapProjectSprites`, `ruleNames` and `duplicateScene` all needed **no edit at all**,
+  which on those checklists reads exactly like seven forgotten steps.
+- **Four kinds, and the allowlist is stronger here than `TWEEN_EASES`'.** An unknown ease
+  resolves to `Power0` and says nothing; an unknown key registers a listener nothing fires.
+  An unknown kind reaching `filters.internal[...]` is `addBanana is not a function` — a
+  **TypeError inside the player's game**, thrown out of `create()` before anything is
+  drawn. What is left out is left out per reason: `addMask`, `addDisplacement`, `addBlend`,
+  `addGradientMap`, `addCombineColorMatrix` and `addImageLight` take a **texture or another
+  game object**, which is a reference into the document and therefore an `AssetPicker`, a
+  dangling-reference story, a `removeAsset` patch and a `collectAssets` branch — an
+  iteration rather than a member. `addSampler` takes a **callback**, which is code in the
+  document and the emit-zone argument. `addWipe` and `addParallelFilters` are a *progress
+  animated over time*, the `scene.start` argument, and the second is two nested lists where
+  this is one. `addColorMatrix`'s dials are not arguments but calls on a sub-object, so it
+  is a second shape inside the union. Vignette, barrel, bokeh, tilt shift, threshold,
+  quantize, key and blocky are legal, cheap and a **pure loosening** later — one member and
+  one emit case each; the first two are effects on a *view* rather than on an object, which
+  is where iteration 31 already put camera effects.
+- **Each kind's fields are a *prefix* of Phaser's own argument list, and that is what chose
+  them.** `addGlow` takes seven arguments and this document stops after the fourth, so
+  nothing is ever printed that the document does not hold. A dial in the middle would force
+  the exporter to invent every argument before it.
+- **A glow's `quality` and `distance` are not fields, and the reason is a `TypeError`.**
+  Both are `readonly` on Phaser's controller, and the spike confirmed that assigning one
+  throws — so a document that could say them would need a renderer that destroys and
+  rebuilds a filter for two fields, and a crash the day it forgot. They default from the
+  game-config keys `glowQuality`/`glowDistance`, which **neither the editor nor the export
+  sets**, so both take Phaser's 10 and cannot disagree about how a glow looks. That is the
+  one game-config key this feature could have needed, and it is the seventh entry in the
+  comment block above `arcadeConfig` where the audio, camera, keyboard, touch, tween and
+  label refusals already are.
+- **`internal`, not `external`, and not a field.** An internal filter runs before the
+  camera transform, in the object's own local space — so a glow on a turned object turns
+  with it and a blur along X blurs along the object's X, which is what "an effect on this
+  object" means. External is screen space and full-screen: on a per-object effect it is
+  both dearer and wrong. A stored `space` would be a second answer to a question that
+  choosing "on this object" already settles.
+- **The renderer rebuilds the list; it never patches a controller.** `applyEffects` is
+  cache-guarded on the whole list in `nodeEffects`, which is `textStyles`' and
+  `emitterConfigs`' guard for the third time and for their reason — the scene syncs on
+  *every* store change, so an unguarded apply would tear down and rebuild every filter in
+  the scene on every selection. That it rebuilds rather than patches is the readonly trap
+  above: folding everything into a signature and letting one "it changed, so rebuild"
+  branch do the job is `textureKeyForAsset`'s trick, and it costs nothing because it only
+  runs when the signature moved. Deliberately **not** part of `shapeOf`, which rebuilds the
+  display *object* — a glow must not destroy and recreate the sprite under it.
+- **SHUTDOWN needs nothing, and that absence is worth a sentence** beside four neighbours
+  that all do bookkeeping, because here "nothing to do" and "forgot to do it" read
+  identically. A texture belongs to the game, an animation to its manager and a `FontFace`
+  to the *page*, so all three outlive the scene; a `Controller` is destroyed with its
+  `FilterList`, which is destroyed with the game object. The one line that *is* needed is
+  `nodeEffects.delete(key)` in `destroyDisplayObject`, beside the three deletes already
+  there — a stale signature would have the next node to land on that key skip filters it
+  has never been given.
+- **A `particles` node is filtered on its emitter, not on its wrapper, and it is the one
+  case in the feature.** That container also holds the editor's own pink marker, which is
+  chrome the exported game does not have — so filtering it would make the canvas and the
+  export disagree about a picture, which is the single failure this project guards hardest
+  against. An `instance` and a `tilemap` are Containers *of* what the node is, so each
+  takes one pass over the whole prefab and the whole map, which is what an effect on either
+  means. The spike confirmed a filtered Container renders before any of this was written.
+- **Nothing measures differently.** Filters do not touch `object.width`/`height`, so
+  `localRectOf`, `hitAreaFor`, `applyHitArea`, `worldBoundsOf`, `publishMeasuredBounds`,
+  both handles, `bounds.ts` and the whole of `snapping.ts` needed **no edit at all** — said
+  out loud in `applyEffects`, because on that list "no branch needed" and "forgot a branch"
+  read identically.
+- **`enableFilters()` is called only for a node that has effects.** It is idempotent — its
+  first line returns early when a filter camera already exists — so calling it always would
+  be safe, but it allocates a camera per object and a scene where every object carries one
+  is the cost this avoids.
+- **The export is a sixteenth module helper, allocated last of all.** `attachEffects` is
+  four lines, and it exists for `arcadeBody`'s reason to the character: Phaser declares
+  `readonly filters: FiltersInternalExternal | null`, so `coin.filters.internal.addGlow(…)`
+  does not compile under `--strict`, and the `create()` body is the same plain JavaScript in
+  the `.ts`, the `.js` and the runnable page, so it can carry no `!`, no cast and no
+  annotation. Where it parts company with `arcadeBody` is that it answers `null` rather than
+  throwing: filters are WebGL only, so a browser that cannot run them is a legitimate thing
+  for a player's to be, and the object then draws plain — here and in the export alike, so
+  the two still agree. The name is drawn after `onVarFn` by the rule the tenth to fifteenth
+  already state, and for its reason rather than tidiness: `toIdentifier` suffixes a clash,
+  so a new name drawn earlier moves the suffix an *earlier* helper was given, and four of
+  those are asserted by name in the suite.
+- **The emit sits in `emitNode` beside the tween, and needs no `ctx.receiver` at all.** The
+  tween goes there rather than in the epilogue because it names only the binding on the line
+  above, and so does this; but a tween reaches `this.tweens` where a filter list is reached
+  *through the object*, so the same text is correct verbatim inside a prefab factory with
+  nothing to parameterise. The binding is `<name>Filters` out of `create()`'s identifier
+  set, the sound handles' rule and for their reason — an object a user called "coin filters"
+  must not take the binding the line beside it reaches for.
+- **`modifiersFor` gains no branch, and says so**, by the rule that function already invokes
+  three times. `enableFilters()` does return the object and could chain — but the call after
+  it answers with the *controller*, and `filters` is nullable in a way no chain can narrow.
+- **`constructorFor` gains no case, so the one compile error is `effectCallFor`'s
+  exhaustive switch with no `default`** — `ruleActionLines`' arrangement, and the only thing
+  standing between a new effect kind and an exporter quietly falling behind. Everything else
+  here is silent: the renderer, the store, the inspector and the gate alike, exactly as the
+  whole of physics and cameras were.
+- **`collectEffects` is a boolean where every `collect*` beside it is a `Map`**, because
+  there is nothing here to name: an effect is read off the node it is on and points at no
+  table, no texture and no identifier. It takes `emittedNodes`' `project` for
+  `collectLabels`' reason, and the hostile project's spawn-only prefab carries an effect for
+  exactly that: without it, a definition a *rule* names emits the attach call while the
+  helper is never declared — not a wrong picture but a compile error, which only
+  `export-toolchain.spec.ts` could find.
+- **`SCHEMA_VERSION` did not bump — the guides case, twelfth time.** No new `NodeType`, so
+  a v14 `createDisplayObject` has a case for everything in the file. `node.fx` rides in on
+  `scenes`, which `parseProject` passes through verbatim, **and on `prefabs.children`, which
+  `parsePrefabs` also passes through unvalidated** — so both homes survive an old build's
+  re-save. An old build draws the object plain, reads the field nowhere, and carries it back
+  out. Still contingent on `parseProject` not reconstructing scenes or prefab children field
+  by field, exactly as physics, cameras, behaviour, touch, Matter, tweens and labels are.
+  `effects.spec.ts` asserts the 14 in the saved artefact.
+- **A new effect arrives visible.** `defaultEffect` seeds a glow at an outer strength of 8
+  and a spread of 2 rather than at Phaser's 4 and 1, which is `defaultTween`'s rule and its
+  reason: the first thing anybody does after adding an effect is look at the object, and one
+  that arrives doing nothing is indistinguishable from the feature being broken. It is also
+  what lets most of the suite change no field at all.
+- **Switching a kind replaces the effect rather than patching it**, which is what stops a
+  glow's colour surviving underneath a pixelate that has no use for one. `setEffect` takes a
+  whole `NodeEffect` for the same reason a `Partial` would not do: merged onto a union
+  member the compiler loses which member it is, so a patch would have to be typed loosely
+  enough to let a blur take a `decay`.
+- **Every label carries "Effect <n>"** — `Effect 1 kind`, `Effect 1 colour`, `Effect 2
+  amount` — because Alpha, Colour, X, Y, Scale X and Width are all rows further up the same
+  panel and the suite matches a label exactly. The "Animation name, not Name" rule, and
+  `NodeRulesSection`'s `Rule <n> do <m>` shape one feature over. The section is titled
+  `Effects`, which collides with no `SECTION_TITLE` value and with none of the mobile tab
+  bar's exactly-matched `Scene`/`Properties`/`File` — and it is a **storage key** now, since
+  `Section` keys its open state by title.
+- **The panel says effects need WebGL, unconditionally rather than on detection.** The
+  Inspector is React and has no handle on the renderer, and plumbing one into the store to
+  light up a sentence would be editor state existing for a sentence. A silently absent
+  feature reads as a broken one, and a sentence is the cheap half of that fix.
+- **The suite's instrument is a colour count, and the glow is what makes it work.** A glow
+  puts a colour on the canvas that is on nothing else, *outside* the object's own box — so
+  "it is drawn at all" is `count > 0` where a feature silently doing nothing gives exactly
+  0, and "it is a glow rather than a recolour" is an extent strictly larger than the
+  object's own. A blur is the opposite reading and needs one, having no colour of its own:
+  what is asserted is that the *exact* fill stops being on screen while the object plainly
+  still is. A pixelate is asserted through the document and the export instead, and
+  deliberately — a solid rectangle pixelates to the same solid rectangle, so a pixel claim
+  about it would be a claim about the fixture. Typography's call for weight and slant.
+  `GLOW` is `#997722`, picked by arithmetic rather than by eye, which `TOUCH_COLOR`,
+  `TWEEN_COLOR` and `SPAWN_COLOR` all record nearly getting wrong: its worst channel margin
+  against all forty-eight fixture colours and all ten chrome colours is **85**, against a
+  tolerance of 24.
+- **A live filter is dear on a software renderer, and that shapes the suite more than
+  anything else here.** `enableFilters` puts the frame through a framebuffer, which the
+  headless container rasterises on the CPU — so every screenshot taken while one is on costs
+  real seconds, and the cost scales with the viewport, which the desktop project pays twice
+  over. Three things follow, and all three are in the file: each test touches as few fields
+  as it can once an effect is live, the glow test keeps the screenshot its poll succeeded on
+  and reads it three ways rather than taking three, and the file carries a
+  `describe.configure({ timeout })` — `export-toolchain.spec.ts`' line with a GPU in place
+  of a compiler. `expect.poll` takes its own budget rather than the test's, so that is said
+  separately.
+- **The hostile project carries a pixelate in the booted scene and the other three kinds in
+  a scene that is registered and never started.** The split is not tidiness: the emitted
+  `.ts` carries every scene, so `tsc --strict` still meets all four filter shapes, while
+  only one cheap pass is ever rendered — four of them in the booted scene timed
+  `export.spec.ts`'s hostile run out at sixty seconds. The pixelate is there so
+  `attachEffects` is a function the running game really calls rather than only one the
+  compiler reads, and it sits on the object named `arcade body` — the one fill in the
+  project nothing measures, and a name that already collides with a helper, so the
+  `arcadeBodyFilters` binding beside it is a free test of the suffix rule.
+- **What stays refused.** **No masks**, which is the obvious next ask and is a genuine
+  iteration: `addMask` takes a texture or another game object, so it needs a picker, a
+  dangling-reference story and a `removeAsset` patch — and it would be the first thing in
+  this document that points *at another node*. **No camera-wide effects here** — a filter on
+  `cameras.main` is a property of the view, and iteration 31 already put what happens to a
+  view on a rule. **No custom shader**, which is code in the document, the emit-zone
+  argument and the gradient fill's. **No animating an effect** — a tween's `to` is six
+  properties that are one shape across the whole union, and an effect's dials are per-kind,
+  which is exactly the refusal that keeps a seventh tween property out. And **no effect on a
+  tilemap layer, a prefab child from outside, or a group's children individually**: an
+  effect is on a node, and a layer is not one.
 
 ## Tweens
 
@@ -4329,6 +4573,8 @@ tests/
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
   tweens.spec.ts            a destination drawn, a preview that runs it, and a
                             document that never moves
+  effects.spec.ts           a glow drawn outside the object it is on, a blur that
+                            takes its fill away, and a list that keeps its order
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
   fonts.spec.ts             a font imported, drawn, round-tripped, removed and exported
@@ -4630,6 +4876,25 @@ gives a blank page with 404ing assets — the single most likely deploy failure.
 with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
+
+Visual effects shipped in iteration 35, and they are the entry worth reading first, because
+nothing on this list had ever named them. Masks, filters and blend modes were absent from
+`src/` entirely while the "Phaser 4, not 3" bullet had been saying for thirty iterations
+that those three had all changed — which is iteration 34's own closing lesson arriving on
+schedule. What the feature leaves is short, because it adds no table, no node type and no
+reference. **No masks**, which is the obvious next ask and is an iteration rather than a
+member: `addMask` takes a texture or another game object, so it needs a picker, a
+dangling-reference story and a `removeAsset` patch — and it would be the first thing in
+this document that points at *another node*. **No camera-wide effects here**, since a
+filter on `cameras.main` is a property of the view and iteration 31 already put what
+happens to a view on a rule. **No custom shader**, which is code in the document — the
+emit-zone argument and the gradient fill's. **No animating an effect**: a tween's `to` is
+six properties that are one shape across the whole union, and an effect's dials are
+per-kind, which is exactly the refusal that keeps a seventh tween property out. And the
+eight remaining built-in filters — vignette, barrel, bokeh, tilt shift, threshold,
+quantize, key, blocky — are a **pure loosening**, one union member and one emit case each;
+the first two are effects on a view rather than on an object, and the rest are dials nobody
+has asked for yet.
 
 Spawning shipped in iteration 34, and it is worth reading beside the list below because it is
 the one entry nothing on that list had ever named. `destroy` had been in `RuleAction` since

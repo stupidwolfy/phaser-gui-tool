@@ -94,6 +94,14 @@ on a desktop.
 - Repeat one image across a box with `+ Tiled`: a wall, water or a parallax background
   layer. Tile offset scrolls the pattern inside the box and tile scale changes how big one
   repeat is, neither of which moves or resizes the object itself
+- Put a **visual effect** on anything: under Effects in the inspector, give an object a
+  glow, a blur, a drop shadow or a pixelate — as many as four, run in the order you list
+  them, so a glow under a drop shadow and a shadow under a glow are two different pictures.
+  They are real Phaser filters and the canvas draws them exactly as the exported game does,
+  which makes this the one thing in the editor you can tune by eye and trust. They work on
+  every kind of object, groups and prefabs included, and export as
+  `object.enableFilters()` plus a real `addGlow(...)`. Effects need WebGL; a browser
+  without it draws the object plain, here and in the game alike
 - Give a scene **sound**: import an MP3, OGG, WAV, M4A or WebM under Audio in the scene
   panel, press ▶ on its row to hear it, and add it to the scene to set its volume, whether
   it loops and whether it starts with the scene. Exported code preloads exactly the sounds

@@ -32,7 +32,9 @@ import {
   containsNode,
   controlsOf,
   defaultControls,
+  defaultEffect,
   defaultTween,
+  effectsOf,
   findAsset,
   findNode,
   findParent,
@@ -66,7 +68,9 @@ import {
   MAX_TILEMAP_SIDE,
   tileLayerOf,
   tileMapOf,
+  MAX_EFFECTS,
   RAW_DECIMALS,
+  type NodeEffect,
   type NodeTween,
   type VariableLabel,
   type TweenProperty,
@@ -710,6 +714,31 @@ export interface EditorState {
    * property as one this tween is not about and a zero as a destination.
    */
   setTweenTarget: (id: string, property: TweenProperty, value: number | null) => void;
+  /**
+   * Appends an effect of `kind`, seeded by `defaultEffect`, or does nothing at
+   * the cap.
+   *
+   * Through `mapNode` rather than `scene.children`, which is `setNodeTween`'s
+   * difference from `setNodePhysics` and for its reason: an effect on a node
+   * inside a group is a perfectly ordinary thing to want, and on a node inside
+   * a prefab definition it draws in every placement.
+   */
+  addEffect: (id: string, kind: NodeEffect['kind']) => void;
+  /**
+   * Replaces one effect outright.
+   *
+   * Whole rather than a patch, unlike `setNodeTween`, and the union is why: a
+   * `Partial<NodeEffect>` cannot be merged onto a member without the compiler
+   * losing which member it is, so a patch would have to be typed loosely enough
+   * to let a blur take a `decay`. The panel holds the effect it is editing
+   * anyway, so a spread at the call site costs it nothing — and switching the
+   * *kind* is this same call with `defaultEffect(kind)`, which is what stops a
+   * glow's fields surviving underneath a pixelate.
+   */
+  setEffect: (id: string, index: number, effect: NodeEffect) => void;
+  removeEffect: (id: string, index: number) => void;
+  /** Moves one effect along the list, which is the order the passes run in. */
+  moveEffect: (id: string, index: number, delta: number) => void;
   /**
    * Binds a text node's caption to a variable, edits the format, or unbinds it
    * with `null`.
@@ -3109,6 +3138,80 @@ export const useEditorStore = create<EditorState>((set, get) => {
               return stripped;
             }
             return { ...current, tween: { ...base, to } } as GameObjectNode;
+          }),
+        };
+      }),
+
+    // The four effect actions share one shape: find the node first so that an
+    // id naming nothing pushes no undo step (`mapNode` allocates whether or not
+    // it finds anything — `setNodeTween`'s reason), then rebuild the list
+    // through `effectsOf` so the document can only ever hold what the reader
+    // would have answered with. That is "strip on read, refuse on write" for
+    // the fifth time, and it is what keeps `effectsOf`'s repairs a guard
+    // against hand-edited files rather than something the editor leans on.
+    //
+    // A list that empties `delete`s the field rather than storing `[]`, because
+    // `effectsOf` reads both as "no effects" and two spellings of one state is
+    // how a document comes to disagree with itself — `setNodeLabel`'s reason,
+    // and the reason `updateProps` could not do any of this.
+    addEffect: (id, kind) =>
+      editScene((scene) => {
+        const node = findNode(scene.children, id);
+        if (!node || effectsOf(node).length >= MAX_EFFECTS) return scene;
+        return {
+          ...scene,
+          children: mapNode(scene.children, id, (current) => ({
+            ...current,
+            fx: [...effectsOf(current), defaultEffect(kind)],
+          })),
+        };
+      }),
+
+    setEffect: (id, index, effect) =>
+      editScene((scene) => {
+        const node = findNode(scene.children, id);
+        if (!node || index < 0 || index >= effectsOf(node).length) return scene;
+        return {
+          ...scene,
+          children: mapNode(scene.children, id, (current) => ({
+            ...current,
+            fx: effectsOf(current).map((existing, at) => (at === index ? effect : existing)),
+          })),
+        };
+      }),
+
+    removeEffect: (id, index) =>
+      editScene((scene) => {
+        const node = findNode(scene.children, id);
+        if (!node || index < 0 || index >= effectsOf(node).length) return scene;
+        return {
+          ...scene,
+          children: mapNode(scene.children, id, (current) => {
+            const fx = effectsOf(current).filter((_, at) => at !== index);
+            if (fx.length === 0) {
+              const stripped = { ...current } as GameObjectNode;
+              delete stripped.fx;
+              return stripped;
+            }
+            return { ...current, fx } as GameObjectNode;
+          }),
+        };
+      }),
+
+    moveEffect: (id, index, delta) =>
+      editScene((scene) => {
+        const node = findNode(scene.children, id);
+        if (!node) return scene;
+        const effects = effectsOf(node);
+        const to = index + delta;
+        if (index < 0 || index >= effects.length || to < 0 || to >= effects.length) return scene;
+        return {
+          ...scene,
+          children: mapNode(scene.children, id, (current) => {
+            const fx = effectsOf(current);
+            const [moved] = fx.splice(index, 1);
+            fx.splice(to, 0, moved);
+            return { ...current, fx } as GameObjectNode;
           }),
         };
       }),

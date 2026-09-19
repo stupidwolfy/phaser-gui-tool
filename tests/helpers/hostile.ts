@@ -352,6 +352,17 @@ export function hostileProject(): Project {
             name: 'wave count',
             type: 'text',
             visible: true,
+            // And an effect, for this child's own reason one table over:
+            // `collectEffects` takes `emittedNodes`' `project` so that it can
+            // see inside a definition a *rule* names and nothing places. Without
+            // it this factory emits the attach call while the helper is never
+            // declared — which is not a wrong picture but a compile error in the
+            // emitted `.ts`, and only `export-toolchain.spec.ts` could find it.
+            //
+            // A pixelate because it puts no colour on the canvas at all, so the
+            // two instances' own fill readings a few lines up stay exactly what
+            // they were.
+            fx: [{ kind: 'pixelate' as const, amount: 1 }],
             transform: { x: 0, y: 30, rotation: 0, scaleX: 1, scaleY: 1 },
             props: {
               text: 'wave ',
@@ -1517,6 +1528,23 @@ export function hostileProject(): Project {
             visible: true,
             transform: { x: 780, y: 120, rotation: 0, scaleX: 1, scaleY: 1 },
             props: { width: 60, height: 60, fill: '#8b5cf6', alpha: 1 },
+            // A pixelate, and *only* a pixelate, in the scene the exported
+            // page actually boots. It is here so that `attachEffects` is a
+            // function the running game really calls rather than only one the
+            // compiler reads — and it is alone because each live filter puts
+            // the whole frame through a framebuffer, which the headless
+            // container rasterises on the CPU. Four of them here timed
+            // `export.spec.ts`'s hostile run out. The other three kinds sit in
+            // `scene-2` below, which is registered and never started: the
+            // emitted `.ts` carries every scene, so `tsc --strict` still meets
+            // all four shapes.
+            //
+            // On *this* node because its fill is the one in the project nothing
+            // measures, and because its name already collides with the
+            // `arcadeBody` helper — so the binding emitted beside it,
+            // `arcadeBodyFilters`, is a free test that the suffix rule holds
+            // for this feature's binding too.
+            fx: [{ kind: 'pixelate' as const, amount: 2 }],
             children: [],
           },
           {
@@ -1633,6 +1661,30 @@ export function hostileProject(): Project {
             // `scenePhysicsOf`'s default branch reaches the exporter in the
             // same file as the scene above, which sets one.
             physics: { kind: 'static' as const, ...NO_MOTION },
+            // The three effect kinds the booted scene does not carry, with a
+            // non-default value in every field of each. They carry no hostile
+            // string — numbers are numbers and the colours go through
+            // `hexLiteral` — so escaping is not what they are for: this is the
+            // only place the emitted calls' *shape* meets `Phaser.Filters.Glow`,
+            // `Blur` and `Shadow` under `tsc --strict`, which is where an
+            // argument renamed between Phaser versions fails and nowhere else.
+            //
+            // Here rather than in `scene-1` because this scene is registered and
+            // never started, so the compiler reads them and no frame ever pays
+            // for them. Three filters in the booted scene is a tax on every test
+            // in `export.spec.ts`, and it is one that bought nothing the
+            // pixelate above does not already buy.
+            fx: [
+              {
+                kind: 'glow' as const,
+                color: '#997722',
+                outerStrength: 2,
+                innerStrength: 1,
+                scale: 1,
+              },
+              { kind: 'blur' as const, quality: 1, x: 1, y: 1, strength: 2 },
+              { kind: 'shadow' as const, x: 2, y: 3, decay: 0.2, power: 2, color: '#123456' },
+            ],
             children: [],
           },
         ],

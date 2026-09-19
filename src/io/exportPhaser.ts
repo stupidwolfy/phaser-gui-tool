@@ -30,12 +30,14 @@ import {
   textStyleOf,
   tileMapOf,
   touchZonesOf,
+  effectsOf,
   tweenOf,
   withoutInstances,
   type AnimationClip,
   type AudioAsset,
   type FontAsset,
   type GameObjectNode,
+  type NodeEffect,
   type ImageAsset,
   type NodeControls,
   type PhysicsBody,
@@ -388,6 +390,31 @@ function collectLabels(
           variables.has(node.props.label.variableId)) ||
         walk(node.children),
     );
+  return scenes.some((scene) => emittedNodes(project, scene, prefabs).some(walk));
+}
+
+/**
+ * Whether anything the file emits carries a visual effect.
+ *
+ * `collectLabels`' shape and its `project` for its reason: without it this gate
+ * cannot see inside a prefab that is only *spawned*, so a definition holding a
+ * glowing child would have `buildFactories` emit the attach call while this
+ * answered false and the helper was never declared — the gate that missed one
+ * emitting the call and not the function it calls.
+ *
+ * A boolean rather than a `Map`, unlike every `collect*` above it, because
+ * there is nothing here to name: an effect is read straight off the node it is
+ * on and points at no table, no texture and no identifier. On that checklist a
+ * collector with no `Used…` beside it reads exactly like a missed step, which
+ * is why it says so.
+ */
+function collectEffects(
+  project: Project,
+  scenes: SceneDoc[],
+  prefabs: Map<string, UsedPrefab>,
+): boolean {
+  const walk = (nodes: GameObjectNode[]): boolean =>
+    nodes.some((node) => effectsOf(node).length > 0 || walk(node.children));
   return scenes.some((scene) => emittedNodes(project, scene, prefabs).some(walk));
 }
 
@@ -1053,6 +1080,83 @@ function buildOnVarHelper(fn: string, language: SceneLanguage, indent: string): 
     '  scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {',
     "    scene.registry.events.off('changedata-' + key, run);",
     '  });',
+    '}',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
+/**
+ * One effect, as the `FilterList` call that builds it.
+ *
+ * **Exhaustive with no `default`, which makes this the one compile error in the
+ * whole feature.** Every other step — the renderer, the inspector, the store,
+ * the gate — is silent, exactly as the whole of physics and cameras were, so
+ * this switch is the only thing standing between a new effect kind and an
+ * exporter quietly falling behind. `ruleActionLines`' arrangement, one union
+ * over.
+ *
+ * Every call is a **prefix of Phaser's own argument list**, which is why
+ * `NodeEffect` carries the dials it does: `addGlow` takes seven arguments and
+ * stopping after the fourth means nothing is printed that the document does not
+ * hold. The alternative is a dial in the middle, which would force a literal
+ * for every argument before it.
+ *
+ * Emitted whole, defaults included — the emitter config's and the physics
+ * body's rule rather than `modifiersFor`'s, because these dials only mean
+ * anything beside each other: a glow's inner strength says nothing without its
+ * outer one, and a shadow's decay nothing without its power. Here it is also
+ * mechanical rather than chosen, as it was for the camera effects: these are
+ * positional, so a later argument cannot be passed without an earlier one.
+ */
+function effectCallFor(effect: NodeEffect): string {
+  switch (effect.kind) {
+    case 'glow':
+      return `addGlow(${hexLiteral(effect.color)}, ${num(effect.outerStrength)}, ${num(
+        effect.innerStrength,
+      )}, ${num(effect.scale)})`;
+    case 'blur':
+      return `addBlur(${num(effect.quality)}, ${num(effect.x)}, ${num(effect.y)}, ${num(
+        effect.strength,
+      )})`;
+    case 'shadow':
+      return `addShadow(${num(effect.x)}, ${num(effect.y)}, ${num(effect.decay)}, ${num(
+        effect.power,
+      )}, ${hexLiteral(effect.color)})`;
+    case 'pixelate':
+      return `addPixelate(${num(effect.amount)})`;
+  }
+}
+
+/**
+ * The narrowing an object's filter list needs, and the reason it is a function.
+ *
+ * `arcadeBody`'s situation to the character: Phaser declares
+ * `readonly filters: FiltersInternalExternal | null`, so
+ * `coin.filters.internal.addGlow(...)` does not compile under `--strict`. A cast
+ * would fix that in TypeScript and be a *syntax error* in the runnable page,
+ * whose `create()` body is the same plain JavaScript — and that shared body is
+ * the property which stops the two outputs drifting, so it is not one to spend
+ * here.
+ *
+ * It answers `null` rather than throwing, which is where it parts company with
+ * `arcadeBody`: filters are **WebGL only** and `enableFilters` returns early
+ * when the renderer has no `gl`, so a browser that cannot run them is a
+ * legitimate thing for a player's to be. The object then draws plain — here and
+ * on the editor's canvas alike, so the two still agree. An object with no body,
+ * by contrast, is a bug worth naming.
+ *
+ * `internal` rather than `external`: an internal filter runs in the object's own
+ * local space, so a glow on a turned object turns with it, and it is sized to
+ * the object rather than to the screen.
+ */
+function buildEffectsHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  const lines = [
+    typed
+      ? `function ${fn}(object: Phaser.GameObjects.GameObject): Phaser.GameObjects.Components.FilterList | null {`
+      : `function ${fn}(object) {`,
+    '  object.enableFilters();',
+    '  return object.filters ? object.filters.internal : null;',
     '}',
   ];
   return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
@@ -2231,6 +2335,11 @@ interface EmitContext {
    */
   onVarFn: string;
   /**
+   * What an object's visual effects are attached through, allocated like
+   * `tilemapFn` and drawn **last of all** — see `prepare`.
+   */
+  effectsFn: string;
+  /**
    * What each scene's `super(...)` registers it as, by scene id.
    *
    * A `startScene` action names a scene the document holds and has to emit the
@@ -2551,6 +2660,12 @@ function textStyleLines(style: TextStyle): string[] {
  * `physics.add.existing` answers with the *object*, not the body, and the body
  * does not exist until that call has been made. They are emitted as their own
  * statements by `bodyLines` instead.
+ *
+ * And no visual-effects branch, for a third turn of the same screw.
+ * `enableFilters()` does answer with the object and could chain — but the call
+ * that follows it, `filters.internal.addGlow(...)`, answers with the
+ * *controller*, and `filters` is nullable in a way no chain can narrow. They
+ * are emitted as their own statements by `emitNode` instead.
  */
 function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimation>): string[] {
   const out: string[] = [];
@@ -2706,6 +2821,42 @@ function emitNode(
   // project with no tween emits byte for byte what it emitted before, and a
   // tween on a node that emitted no object never reaches this line at all —
   // which is why `missingReason` needs no branch for one.
+  // The effects, before the tween and after everything that built the object.
+  //
+  // Here rather than in the epilogue where the camera's `startFollow` and the
+  // collider rows go, for the tween's reason: those name bindings the object
+  // list has not made yet, and this names only the binding on the line above.
+  // And unlike the tween it needs no `ctx.receiver` at all, which is what makes
+  // the same emit correct verbatim inside a prefab factory: a filter list is
+  // reached through the object rather than through the scene.
+  //
+  // `modifiersFor` gains nothing for this, and that is worth saying because on
+  // that function "no branch needed" and "forgot a branch" look identical:
+  // `enableFilters()` returns the object and could chain, but
+  // `filters.internal.addGlow()` answers with the *controller*, and `filters`
+  // is nullable in a way no chain can narrow.
+  //
+  // No gate here and nothing to suppress — a node with no effects never reaches
+  // the line, and one that emitted no object never reaches it either, which is
+  // why `missingReason` needs no branch for one.
+  const effects = effectsOf(node);
+  if (effects.length > 0) {
+    // Drawn from `create()`'s identifier set rather than pasted onto `id`,
+    // which is `bodyLines`' binding and the sound handles' rule: an object a
+    // user called "coin filters" must not take the binding the line beside it
+    // reaches for. It is suffixed for their reason too — the object keeps
+    // `coin` and this gets `coinFilters`, rather than one of them becoming
+    // `coin2` with nothing saying which is which.
+    const list = toIdentifier(`${node.name} filters`, used);
+    lines.push(`const ${list} = ${ctx.effectsFn}(${id});`);
+    // A plain `if`, never a `!` or a cast: this body is the same JavaScript in
+    // the `.ts`, the `.js` and the runnable page, so it can carry neither. The
+    // emitted keyboard block's narrowing, one helper over.
+    lines.push(`if (${list}) {`);
+    for (const effect of effects) lines.push(`  ${list}.${effectCallFor(effect)};`);
+    lines.push('}');
+  }
+
   const tween = tweenOf(node);
   if (tween) {
     const targets = ids.length > 1 ? `[${ids.join(', ')}]` : id;
@@ -4126,6 +4277,17 @@ function buildCreateBody(
  * own, and there is no note to write. Said out loud because a tween is the one
  * thing in this list that visibly moves something, which makes "surely that
  * needed enabling" the natural assumption.
+ *
+ * And nothing for a visual effect either, the seventh entry here.
+ * `enableFilters()` is on Phaser's base `GameObject`, so every type this
+ * exporter emits already has it and a module dropped into somebody else's game
+ * needs nothing added to a config it does not own. One thing is worth stating
+ * rather than discovering, because it is the closest this feature comes to
+ * needing a key: `glowQuality` and `glowDistance` *are* game-config keys and
+ * they change how a glow looks — and the answer is that neither the editor nor
+ * this exporter sets them, so both take Phaser's own 10 and cannot disagree.
+ * That is also why a glow's quality and distance are not fields on the
+ * document.
  */
 const arcadeConfig = (needed: boolean) =>
   needed ? "        physics: { default: 'arcade' },\n" : '';
@@ -4185,6 +4347,13 @@ interface Emission {
    * table above: a project that predates iteration 30 emits neither.
    */
   labels: { bind: boolean; value: boolean };
+  /**
+   * Whether anything in the file carries a visual effect.
+   *
+   * Gated like every table above, so a project that predates iteration 35 emits
+   * the helper nowhere and is byte for byte what it was.
+   */
+  effects: boolean;
 }
 
 function prepare(project: Project): Emission {
@@ -4229,6 +4398,11 @@ function prepare(project: Project): Emission {
   // new name earlier moves the suffix some *earlier* helper was given — and
   // four of those are asserted by name in the suite. A new helper goes last.
   const onVarFn = toIdentifier('on variable change', moduleNames);
+  // And a sixteenth, after all fifteen above it, by that same rule once more.
+  // It is not stylistic: `toIdentifier` suffixes a clash, so drawing a new name
+  // earlier moves the suffix some *earlier* helper was given — and four of
+  // those are asserted by name in the suite. A new helper goes last.
+  const effectsFn = toIdentifier('attach effects', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
@@ -4244,6 +4418,7 @@ function prepare(project: Project): Emission {
   const current = activeScene(project);
   const worlds = project.scenes.map(physicsUsedIn);
   const bound = collectLabels(project, project.scenes, prefabs, variables);
+  const effects = collectEffects(project, project.scenes, prefabs);
   // A format on a `setText` with no variable is a dial on nothing, which
   // `ruleActionsOf` already refuses to carry — so reading the action's two
   // fields here cannot pick one up.
@@ -4278,6 +4453,7 @@ function prepare(project: Project): Emission {
       labelValueFn,
       bindLabelFn,
       onVarFn,
+      effectsFn,
       variables,
       sceneKeys: new Map(scenes.map((entry) => [entry.scene.id, entry.key])),
       // Placeholders the per-scene context overwrites, exactly as `engine` is:
@@ -4307,6 +4483,7 @@ function prepare(project: Project): Emission {
     // emitted `update()` and the touch buttons all follow: a project that
     // predates a feature exports byte for byte what it always did.
     labels: { bind: bound, value: bound || formats },
+    effects,
     rules: {
       keys: project.scenes.some((scene) =>
         rulesOf(project, scene).some((rule) => rule.when.kind === 'keyDown'),
@@ -4431,7 +4608,7 @@ ${created.body}
  * outputs cover the three real cases without overlapping.
  */
 export function generateScene(project: Project, language: SceneLanguage = 'ts'): string {
-  const { scenes, ctx, boot, physics, touch, rules, labels } = prepare(project);
+  const { scenes, ctx, boot, physics, touch, rules, labels, effects } = prepare(project);
 
   // A project with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
@@ -4507,13 +4684,14 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
     ? `\n${buildBindLabelHelper(ctx.bindLabelFn, ctx.labelValueFn, language, '')}\n`
     : '';
   const onVarFn = rules.vars ? `\n${buildOnVarHelper(ctx.onVarFn, language, '')}\n` : '';
+  const effectsFn = effects ? `\n${buildEffectsHelper(ctx.effectsFn, language, '')}\n` : '';
   const classes = scenes
     .map((entry) => buildSceneClass(project, entry, ctx, language, true))
     .join('\n\n');
 
   return `${header(project)}${physicsNote(physics.arcade)}
 import Phaser from 'phaser';
-${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${factories}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${effectsFn}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -4535,7 +4713,7 @@ export default ${boot.className};
  * always was, so every exported file is byte for byte what it was.
  */
 export function generateRunnableHtml(project: Project, phaserSrc?: string): string {
-  const { scenes, ctx, boot, physics, touch, rules, labels } = prepare(project);
+  const { scenes, ctx, boot, physics, touch, rules, labels, effects } = prepare(project);
   // phaserVersion comes from the project file, so it is not trustworthy input
   // for a URL. Anything that is not a plain version falls back to the version
   // this editor targets.
@@ -4599,6 +4777,9 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
   const onVarFn = rules.vars
     ? `${buildOnVarHelper(ctx.onVarFn, 'js', '      ')}\n\n`
     : '';
+  const effectsFn = effects
+    ? `${buildEffectsHelper(ctx.effectsFn, 'js', '      ')}\n\n`
+    : '';
   const classes = scenes
     .map((entry) =>
       buildSceneClass(project, entry, ctx, 'js', false).replace(/^(?!$)/gm, '      '),
@@ -4630,7 +4811,7 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${effectsFn}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,
