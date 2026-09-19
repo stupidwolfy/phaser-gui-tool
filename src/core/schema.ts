@@ -1416,6 +1416,34 @@ export type GameObjectNode = {
      */
     tween?: NodeTween;
     /**
+     * Visual effects — Phaser 4 filters — run over the pixels this object
+     * draws, or absent for everything drawn plain.
+     *
+     * Beside `physics`, `controls` and `tween` rather than in `props` for their
+     * reason: it is not a per-type setting, and every entry of
+     * `NodePropsByType` would otherwise carry the same array. Optional for the
+     * reason `guides` is, and read through `effectsOf`, never directly.
+     *
+     * A **list**, where `tween` is deliberately one. The refusal there was that
+     * a second tween means a second *duration*, which is a schedule and
+     * therefore a program; a second filter is a second **pass**, which is what
+     * a Phaser `FilterList` is — an ordered chain where each filter takes the
+     * previous one's output. Glow-and-shadow is one look rather than two. The
+     * array order is the apply order, which is "draw order is the array order"
+     * one level in, and `TilemapProps.layers` is the same shape for the same
+     * reason.
+     *
+     * Like `tween` and unlike `physics` and `controls` there is **no top-level
+     * rule**, and the contrast is the point rather than an omission. A body and
+     * a drive-scheme are banned inside a container because both read their
+     * owner's `x`/`y` as *world* coordinates every step; a filter writes no
+     * coordinate at all, it is a pass over pixels already drawn. So
+     * `effectsOf` takes no `topLevel` argument, nothing is stripped on read,
+     * `setNodeEffects` reaches a node at any depth, and an effect inside a
+     * prefab definition draws in every placement.
+     */
+    fx?: NodeEffect[];
+    /**
      * Nested nodes, positioned relative to this one. Only a `container`
      * renders them, but the array is present on every node so that traversal,
      * cloning and the parser never have to branch on the type.
@@ -2028,6 +2056,220 @@ export function defaultTween(node: GameObjectNode): NodeTween {
     repeat: -1,
     repeatDelay: 0,
   };
+}
+
+/**
+ * A visual effect on one object: a Phaser 4 *filter*, run over the pixels the
+ * object has already drawn.
+ *
+ * The fields are Phaser's own under Phaser's names, so the exported call is
+ * this object spread into it — the rule `AnimationClip`, the emitter config and
+ * `NodeTween` already follow. And every kind here is a **prefix of Phaser's own
+ * argument list**, which is the whole reason these four dials and not others:
+ * `addGlow` takes `(color, outerStrength, innerStrength, scale, knockout,
+ * quality, distance)`, and stopping after the fourth means nothing is ever
+ * printed that the document does not hold. A dial in the middle of a list would
+ * force the exporter to invent the ones before it.
+ *
+ * Two of Phaser's are deliberately not here, and the same sentence covers both:
+ * a glow's `quality` and `distance` are `readonly` on the controller and
+ * assigning one **throws**, so a document that could say them would be a
+ * renderer that has to destroy and rebuild a filter for two fields and a
+ * `TypeError` the day it forgets. They default from the game-config keys
+ * `glowQuality`/`glowDistance`, which neither the editor nor the export sets —
+ * so both get Phaser's 10 and cannot disagree about how a glow looks.
+ */
+export type NodeEffect =
+  | {
+      kind: 'glow';
+      /** '#rrggbb', the convention every colour in this document uses. */
+      color: string;
+      outerStrength: number;
+      innerStrength: number;
+      scale: number;
+    }
+  | {
+      kind: 'blur';
+      /** Phaser's own 0 low, 1 medium, 2 high. */
+      quality: number;
+      x: number;
+      y: number;
+      strength: number;
+    }
+  | {
+      kind: 'shadow';
+      x: number;
+      y: number;
+      decay: number;
+      power: number;
+      color: string;
+    }
+  /** Phaser's pixel size is `2 + amount`, so 0 is the smallest mosaic there is. */
+  | { kind: 'pixelate'; amount: number };
+
+/**
+ * Every effect kind, for the inspector's picker and for `effectsOf`'s refusal.
+ *
+ * An allowlist for `TWEEN_EASES`' and `RULE_KEYS`' reason, and the failure it
+ * prevents is worse than either of theirs. An unknown ease resolves to `Power0`
+ * and says nothing; an unknown key registers a listener nothing ever fires. An
+ * unknown kind reaching `filters.internal[...]` is `addBanana is not a
+ * function` — a **TypeError inside the player's game**, thrown out of
+ * `create()` before anything is drawn.
+ *
+ * What is left out is left out per reason rather than per taste, and none of it
+ * is a field away. `addMask`, `addDisplacement`, `addBlend`, `addGradientMap`,
+ * `addCombineColorMatrix` and `addImageLight` all take a **texture or another
+ * game object**, which is a reference into the document: an `AssetPicker`, a
+ * dangling-reference story, a `removeAsset` patch and a `collectAssets` branch,
+ * which is an iteration rather than a member. `addSampler` takes a **callback**,
+ * which is code in the document and the emit-zone argument. `addWipe` and
+ * `addParallelFilters` are a **progress animated over time** — the
+ * `scene.start` argument — and the second is two nested lists where this is one.
+ * `addColorMatrix`'s dials are not arguments at all but calls on a sub-object
+ * (`.colorMatrix.sepia()`), so it is a second shape inside this union. The
+ * remainder — vignette, barrel, bokeh, tilt shift, threshold, quantize, key,
+ * blocky — are legal, cheap and a **pure loosening** later: one member and one
+ * emit case each. The first two of those are effects on a *view* rather than on
+ * an object, which is where iteration 31 already put camera effects.
+ */
+export const EFFECT_KINDS: readonly NodeEffect['kind'][] = [
+  'glow',
+  'blur',
+  'shadow',
+  'pixelate',
+];
+
+/**
+ * How many effects one node may carry.
+ *
+ * `MIN_TIMER_DELAY`'s job one field over, and the only runaway in this feature:
+ * every active filter is an extra draw call on top of the object's own, so an
+ * unbounded list is the one thing here that can quietly take the frame rate
+ * with it. Four is past what any look needs — a glow and a shadow is most of
+ * them — and the panel says so rather than silently refusing a fifth.
+ */
+export const MAX_EFFECTS = 4;
+
+/**
+ * Bounds that exist to stop a hand-edited file melting the GPU rather than to
+ * express taste: a blur of 4000 pixels is a full-screen pass per step at every
+ * quality Phaser has.
+ */
+const MAX_STRENGTH = 32;
+const MAX_PIXELATE = 64;
+
+/**
+ * The node's effects, defaulted and validated in one place.
+ *
+ * The `physicsOf` / `controlsOf` / `tweenOf` / `guidesOf` / `soundsOf` /
+ * `cameraOf` / `tileMapOf` family, and it answers four questions at once: is
+ * there a list here, is every kind one this editor can draw *and* emit, are the
+ * numbers ones Phaser can be handed, and is the list within the cap. Any one of
+ * them answered somewhere else is a canvas and an export that disagree about
+ * how an object looks.
+ *
+ * Its policy is split, and CLAUDE.md's rule decides which way each falls — *a
+ * repair may narrow what the document says; it may never widen it*:
+ *
+ * - An unknown `kind` costs the **effect**, not the node. A filter list is a
+ *   list of passes and the rest still mean something, which is
+ *   `ruleActionsOf`'s split: an unknown action costs the action where an
+ *   unknown trigger costs the rule. Dropping one pass strictly narrows what is
+ *   drawn, so it is allowed.
+ * - Numbers are **repaired, never dropped** — `cameraOf`'s policy rather than
+ *   `soundsOf`'s split, and satisfied trivially here because there is no gate
+ *   inside an effect to open: a clamped strength says less and never more.
+ *
+ * Unlike every neighbour in that family this one has **no dangling reference to
+ * check**, because an effect names nothing the document holds — no node, no
+ * asset, no variable. That is also why `removeAsset`, `removeVariable`,
+ * `removePrefab` and `mapProjectNodes` need no edit at all, which on that
+ * checklist reads exactly like four forgotten steps.
+ *
+ * A fresh array every call, so `useEditorStore((s) => effectsOf(...))` is an
+ * infinite render loop (React error #185) — the `tileMapOf` trap, thirteenth
+ * time. Select the node and derive outside the selector.
+ */
+export function effectsOf(node: GameObjectNode): NodeEffect[] {
+  const raw = node.fx;
+  if (!Array.isArray(raw)) return [];
+
+  const numberOr = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  const clamp = (value: unknown, fallback: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, numberOr(value, fallback)));
+
+  const out: NodeEffect[] = [];
+  for (const candidate of raw) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const effect = candidate as { kind?: unknown } & Record<string, unknown>;
+    switch (effect.kind) {
+      case 'glow':
+        out.push({
+          kind: 'glow',
+          color: hexOr(effect.color, '#ffffff'),
+          outerStrength: clamp(effect.outerStrength, 4, 0, MAX_STRENGTH),
+          innerStrength: clamp(effect.innerStrength, 0, 0, MAX_STRENGTH),
+          scale: clamp(effect.scale, 1, 0, MAX_STRENGTH),
+        });
+        break;
+      case 'blur':
+        out.push({
+          kind: 'blur',
+          // Rounded as well as clamped: Phaser indexes its three shaders by
+          // this number, and a quality of 1.5 is not one of them.
+          quality: Math.round(clamp(effect.quality, 0, 0, 2)),
+          x: clamp(effect.x, 2, 0, MAX_STRENGTH),
+          y: clamp(effect.y, 2, 0, MAX_STRENGTH),
+          strength: clamp(effect.strength, 1, 0, MAX_STRENGTH),
+        });
+        break;
+      case 'shadow':
+        out.push({
+          kind: 'shadow',
+          // An offset is the one pair here that is meaningfully negative: a
+          // shadow up and to the left is a light below and to the right.
+          x: clamp(effect.x, 0, -MAX_STRENGTH, MAX_STRENGTH),
+          y: clamp(effect.y, 0, -MAX_STRENGTH, MAX_STRENGTH),
+          decay: clamp(effect.decay, 0.1, 0, MAX_STRENGTH),
+          power: clamp(effect.power, 1, 0, MAX_STRENGTH),
+          color: hexOr(effect.color, '#000000'),
+        });
+        break;
+      case 'pixelate':
+        out.push({ kind: 'pixelate', amount: clamp(effect.amount, 1, 0, MAX_PIXELATE) });
+        break;
+      default:
+        // An unknown kind costs this effect and nothing else — see above.
+        break;
+    }
+    if (out.length === MAX_EFFECTS) break;
+  }
+  return out;
+}
+
+/**
+ * The effect a node gets the moment one is added, per kind.
+ *
+ * Every one of them is seeded to be **visible on the canvas immediately**,
+ * which is `defaultTween`'s rule and its reason: the first thing anybody does
+ * after adding an effect is look at the object, and an effect that arrives
+ * doing nothing is indistinguishable from the feature being broken. So a glow
+ * arrives white and strong rather than at Phaser's `outerStrength` of 4 and
+ * `scale` of 1, and a blur arrives at medium quality rather than low.
+ */
+export function defaultEffect(kind: NodeEffect['kind']): NodeEffect {
+  switch (kind) {
+    case 'glow':
+      return { kind: 'glow', color: '#ffffff', outerStrength: 8, innerStrength: 0, scale: 2 };
+    case 'blur':
+      return { kind: 'blur', quality: 1, x: 4, y: 4, strength: 1 };
+    case 'shadow':
+      return { kind: 'shadow', x: 6, y: 6, decay: 0.1, power: 1, color: '#000000' };
+    case 'pixelate':
+      return { kind: 'pixelate', amount: 6 };
+  }
 }
 
 /**

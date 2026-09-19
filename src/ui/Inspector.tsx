@@ -10,6 +10,7 @@ import {
 } from '../core/store';
 import {
   DEFAULT_CAMERA,
+  EFFECT_KINDS,
   EMPTY_TILE,
   RULE_ACTION_KINDS,
   RULE_KEYS,
@@ -31,6 +32,8 @@ import {
   containsInstance,
   containsNode,
   controlsOf,
+  defaultEffect,
+  effectsOf,
   findAsset,
   findAudio,
   findParent,
@@ -43,6 +46,7 @@ import {
   labelFormatOf,
   labelOf,
   MAX_DECIMALS,
+  MAX_EFFECTS,
   MAX_PAD,
   RAW_DECIMALS,
   physicsOf,
@@ -56,6 +60,7 @@ import {
   tweenOf,
   variableKindOf,
   type GameObjectNode,
+  type NodeEffect,
   type NineSliceProps,
   type ParticlesProps,
   type Project,
@@ -3538,6 +3543,8 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
 
       <TweenSection node={node} />
 
+      <EffectsSection node={node} />
+
       {/* Last, and on this panel at all for `NodeCollisionsSection`'s reason:
           the scene-wide list lives in `SceneInspector`, which renders only with
           an empty selection — so it is off screen for the whole of the time a
@@ -4055,6 +4062,262 @@ function ControlsSection({ node }: { node: GameObjectNode }) {
  * properties — where a body and a drive-scheme both read world coordinates and
  * are therefore top-level only. There is nothing here to say no to.
  */
+/** What each effect kind is called in the picker. */
+const EFFECT_LABEL: Record<NodeEffect['kind'], string> = {
+  glow: 'Glow',
+  blur: 'Blur',
+  shadow: 'Drop shadow',
+  pixelate: 'Pixelate',
+};
+
+/**
+ * The dials for one effect.
+ *
+ * Every label carries "Effect <n>", because Alpha, Colour, X, Y, Scale X and
+ * Width are all rows further up this same panel and the suite matches a label
+ * exactly — the "Animation name, not Name" rule, and `NodeRulesSection`'s
+ * `Rule <n> do <m>` shape one feature over.
+ *
+ * Two controls to a `field-row` and never three: at 390px a third is about
+ * 85px, which truncates a label to nothing.
+ */
+function EffectFields({
+  effect,
+  label,
+  onChange,
+}: {
+  effect: NodeEffect;
+  label: string;
+  onChange: (next: NodeEffect) => void;
+}) {
+  switch (effect.kind) {
+    case 'glow':
+      return (
+        <>
+          <ColorField
+            label={`${label} colour`}
+            value={effect.color}
+            onChange={(color) => onChange({ ...effect, color })}
+          />
+          <div className="field-row">
+            <NumberField
+              label={`${label} outer strength`}
+              value={effect.outerStrength}
+              min={0}
+              step={1}
+              onChange={(outerStrength) => onChange({ ...effect, outerStrength })}
+            />
+            <NumberField
+              label={`${label} inner strength`}
+              value={effect.innerStrength}
+              min={0}
+              step={1}
+              onChange={(innerStrength) => onChange({ ...effect, innerStrength })}
+            />
+          </div>
+          <NumberField
+            label={`${label} spread`}
+            value={effect.scale}
+            min={0}
+            step={0.5}
+            onChange={(scale) => onChange({ ...effect, scale })}
+          />
+        </>
+      );
+    case 'blur':
+      return (
+        <>
+          <div className="field-row">
+            <NumberField
+              label={`${label} blur X`}
+              value={effect.x}
+              min={0}
+              step={1}
+              onChange={(x) => onChange({ ...effect, x })}
+            />
+            <NumberField
+              label={`${label} blur Y`}
+              value={effect.y}
+              min={0}
+              step={1}
+              onChange={(y) => onChange({ ...effect, y })}
+            />
+          </div>
+          <div className="field-row">
+            <NumberField
+              label={`${label} strength`}
+              value={effect.strength}
+              min={0}
+              step={0.5}
+              onChange={(strength) => onChange({ ...effect, strength })}
+            />
+            {/* Phaser's own three shaders, so a select rather than a number:
+                between them there is nothing to interpolate. */}
+            <SelectField
+              label={`${label} quality`}
+              value={String(effect.quality)}
+              options={[
+                { value: '0', label: 'Low' },
+                { value: '1', label: 'Medium' },
+                { value: '2', label: 'High' },
+              ]}
+              onChange={(quality) => onChange({ ...effect, quality: Number(quality) })}
+            />
+          </div>
+        </>
+      );
+    case 'shadow':
+      return (
+        <>
+          <ColorField
+            label={`${label} colour`}
+            value={effect.color}
+            onChange={(color) => onChange({ ...effect, color })}
+          />
+          <div className="field-row">
+            <NumberField
+              label={`${label} offset X`}
+              value={effect.x}
+              step={1}
+              onChange={(x) => onChange({ ...effect, x })}
+            />
+            <NumberField
+              label={`${label} offset Y`}
+              value={effect.y}
+              step={1}
+              onChange={(y) => onChange({ ...effect, y })}
+            />
+          </div>
+          <div className="field-row">
+            <NumberField
+              label={`${label} decay`}
+              value={effect.decay}
+              min={0}
+              step={0.05}
+              onChange={(decay) => onChange({ ...effect, decay })}
+            />
+            <NumberField
+              label={`${label} power`}
+              value={effect.power}
+              min={0}
+              step={0.5}
+              onChange={(power) => onChange({ ...effect, power })}
+            />
+          </div>
+        </>
+      );
+    case 'pixelate':
+      return (
+        <NumberField
+          label={`${label} amount`}
+          value={effect.amount}
+          min={0}
+          step={1}
+          onChange={(amount) => onChange({ ...effect, amount })}
+        />
+      );
+  }
+}
+
+/**
+ * Visual effects on this object: Phaser 4 filters, in the order they run.
+ *
+ * On every node type, because `Filters` is mixed into Phaser's base
+ * `GameObject` — there is no eligibility list here the way `PHYSICS_TYPES` is
+ * one, and nothing to keep in step with it.
+ *
+ * The list is the feature: filters chain, each taking the previous one's
+ * output, so the arrows are not a convenience — a glow under a pixelate and a
+ * pixelate under a glow are two different pictures.
+ */
+function EffectsSection({ node }: { node: GameObjectNode }) {
+  const addEffect = useEditorStore((s) => s.addEffect);
+  const setEffect = useEditorStore((s) => s.setEffect);
+  const removeEffect = useEditorStore((s) => s.removeEffect);
+  const moveEffect = useEditorStore((s) => s.moveEffect);
+  const effects = effectsOf(node);
+  const full = effects.length >= MAX_EFFECTS;
+
+  return (
+    <Section title="Effects">
+      {effects.length === 0 ? (
+        // A sentence rather than an empty picker — `AlignSection`'s rule, that
+        // a control saying why beats one that is not there.
+        <p className="hint">
+          Nothing is drawn over this object yet. Add a glow, a blur, a drop shadow or a
+          pixelate — they run in the order they are listed.
+        </p>
+      ) : (
+        effects.map((effect, index) => {
+          const label = `Effect ${index + 1}`;
+          return (
+            <div key={index}>
+              <SelectField
+                label={`${label} kind`}
+                value={effect.kind}
+                // The whole effect is replaced rather than its `kind` patched,
+                // which is what stops a glow's colour surviving underneath a
+                // pixelate that has no use for one.
+                onChange={(kind) =>
+                  setEffect(node.id, index, defaultEffect(kind as NodeEffect['kind']))
+                }
+                options={EFFECT_KINDS.map((kind) => ({
+                  value: kind,
+                  label: EFFECT_LABEL[kind],
+                }))}
+              />
+              <EffectFields
+                effect={effect}
+                label={label}
+                onChange={(next) => setEffect(node.id, index, next)}
+              />
+              <div className="field-row">
+                <button
+                  className="icon-btn"
+                  disabled={index === 0}
+                  onClick={() => moveEffect(node.id, index, -1)}
+                  title={`Run effect ${index + 1} earlier`}
+                >
+                  ↑
+                </button>
+                <button
+                  className="icon-btn icon-btn--danger"
+                  onClick={() => removeEffect(node.id, index)}
+                  title={`Remove effect ${index + 1}`}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          );
+        })
+      )}
+
+      <button
+        className="btn btn--add"
+        disabled={full}
+        onClick={() => addEffect(node.id, 'glow')}
+        title={
+          full
+            ? `An object can carry ${MAX_EFFECTS} effects; each one is another pass over it`
+            : 'Add a glow, then change it to whatever you want'
+        }
+      >
+        + Add an effect
+      </button>
+
+      {/* Unconditional rather than detected: the panel is React and has no
+          handle on the renderer, and plumbing one into the store to light up a
+          sentence would be editor state that exists for a sentence. A silently
+          absent feature reads as a broken one, which is the half this fixes. */}
+      <p className="hint">
+        Effects need WebGL. A browser without it draws the object plain, here and in the
+        exported game alike.
+      </p>
+    </Section>
+  );
+}
+
 function TweenSection({ node }: { node: GameObjectNode }) {
   const setNodeTween = useEditorStore((s) => s.setNodeTween);
   const setTweenTarget = useEditorStore((s) => s.setTweenTarget);

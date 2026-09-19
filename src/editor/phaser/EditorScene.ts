@@ -34,6 +34,7 @@ import {
   tileLayerOf,
   tileMapOf,
   touchZonesOf,
+  effectsOf,
   tweenOf,
   TWEEN_PROPERTIES,
   TWEEN_PHASER_KEY,
@@ -652,6 +653,27 @@ export class EditorScene extends Phaser.Scene {
    * per call would have made it unconditional.
    */
   private textStyles = new Map<string, string>();
+
+  /**
+   * The effect list each object was last given, by display key.
+   *
+   * `emitterConfigs`' and `textStyles`' cache guard, third time and for their
+   * reason — the scene syncs on *every* store change, so an unguarded apply
+   * would tear down and rebuild every filter in the scene on every selection
+   * and every nudge of an unrelated object.
+   *
+   * It guards a **rebuild**, never a patch, and that is not laziness. A glow's
+   * `quality` and `distance` are getter-only on Phaser's controller and
+   * assigning one *throws*, so a patch-in-place renderer needs a special case
+   * for exactly two properties of exactly one filter and a `TypeError` the day
+   * it forgets. Folding the whole list into a signature and letting one "it
+   * changed, so rebuild" branch do the job is `textureKeyForAsset`'s trick, and
+   * it costs nothing because it only runs when the signature moved.
+   *
+   * Deliberately *not* part of `shapeOf`: that signature rebuilds the display
+   * object, and a glow must not destroy and recreate the sprite under it.
+   */
+  private nodeEffects = new Map<string, string>();
 
   /**
    * The live tween on each display object, by display key.
@@ -1652,6 +1674,11 @@ export class EditorScene extends Phaser.Scene {
     // A text style cache entry outliving its object would have the next node to
     // land on this key skip the style it has never actually been given.
     this.textStyles.delete(key);
+    // Same two lines, one map over: a stale signature would have the next node
+    // to land on this key skip filters it has never actually been given.
+    // The controllers themselves need no removal — a `Controller` is destroyed
+    // with its `FilterList`, which is destroyed with the game object above.
+    this.nodeEffects.delete(key);
     // A tween outliving its object is one writing to a destroyed target, and
     // the next node to land on this key would inherit a signature it was never
     // given. The same two lines, one map over.
@@ -4042,6 +4069,10 @@ export class EditorScene extends Phaser.Scene {
       }
     }
 
+    // After the switch, because a `particles` node's emitter is built by the
+    // case above and this reaches into it.
+    this.applyEffects(object, node, key);
+
     this.applyHitArea(object);
 
     // Recorded here because this is the one place that holds a display key and
@@ -4219,6 +4250,88 @@ export class EditorScene extends Phaser.Scene {
     text.setLineSpacing(style.lineSpacing);
     text.setLetterSpacing(style.letterSpacing);
     text.setStyle(style);
+  }
+
+  /**
+   * Brings one object's Phaser filters in line with its node.
+   *
+   * Cache-guarded on the whole list and rebuilt rather than patched — see
+   * `nodeEffects` for why both halves of that are load-bearing.
+   *
+   * `internal` rather than `external`, and that is not a coin toss. An internal
+   * filter runs before the camera transform, in the object's own local space,
+   * so a glow on a turned object turns with it and a blur along X blurs along
+   * the object's X — which is what "an effect on this object" means. External
+   * is screen space and full-screen: on a per-object effect it is both dearer
+   * and wrong. A stored `space` field would be a second answer to a question
+   * that choosing "on this object" already settles.
+   *
+   * Filters are **WebGL only**: `enableFilters` returns early when the renderer
+   * has no `gl`, leaving `filters` null, and the object then draws plain — here
+   * and in the export alike, so the two still agree. The panel says so, because
+   * a silently absent feature reads as a broken one.
+   *
+   * Nothing here touches `object.width`/`height`, which is why `localRectOf`,
+   * `hitAreaFor`, `applyHitArea`, `publishMeasuredBounds`, both handles and the
+   * snapping all needed no edit at all. Worth saying, because on that list "no
+   * branch needed" and "forgot a branch" read identically.
+   */
+  private applyEffects(object: Renderable, node: GameObjectNode, key: string): void {
+    const effects = effectsOf(node);
+    const signature = JSON.stringify(effects);
+    if (this.nodeEffects.get(key) === signature) return;
+    this.nodeEffects.set(key, signature);
+
+    // The emitter itself for a `particles` node, not the wrapper — the one
+    // case in this feature, and the one that matters. That container also holds
+    // the editor's own marker, which is chrome the exported game does not have,
+    // so filtering it would make the canvas and the export disagree about a
+    // picture. Everything else is its own display object: an `instance` and a
+    // `tilemap` are Containers *of* what the node is, so the whole prefab and
+    // the whole map take one pass, which is what an effect on either means.
+    const target: Phaser.GameObjects.GameObject =
+      (node.type === 'particles' ? this.emitters.get(key) : undefined) ?? object;
+
+    // Only for a node that actually has effects: `enableFilters` is idempotent,
+    // so calling it always would be safe, but it allocates a camera per object
+    // and a scene where every object carries one is the cost this avoids.
+    if (effects.length === 0) {
+      target.filters?.internal.clear();
+      return;
+    }
+
+    target.enableFilters();
+    const list = target.filters?.internal;
+    if (!list) return;
+
+    list.clear();
+    for (const effect of effects) {
+      switch (effect.kind) {
+        case 'glow':
+          list.addGlow(
+            hexToNumber(effect.color),
+            effect.outerStrength,
+            effect.innerStrength,
+            effect.scale,
+          );
+          break;
+        case 'blur':
+          list.addBlur(effect.quality, effect.x, effect.y, effect.strength);
+          break;
+        case 'shadow':
+          list.addShadow(
+            effect.x,
+            effect.y,
+            effect.decay,
+            effect.power,
+            hexToNumber(effect.color, 0x000000),
+          );
+          break;
+        case 'pixelate':
+          list.addPixelate(effect.amount);
+          break;
+      }
+    }
   }
 
   /**
