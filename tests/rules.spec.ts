@@ -1296,3 +1296,274 @@ test.describe('building one', () => {
     expect(JSON.stringify(document)).not.toContain('"spawn"');
   });
 });
+
+test.describe('pushing one', () => {
+  /**
+   * One rectangle with a dynamic body, which is the only thing this action
+   * accepts.
+   *
+   * Snapping off for `editing.spec`'s reason — the starter objects are cleared,
+   * but a drag-free fixture still wants the canvas to be about one thing — and
+   * deselected before any reading, because the scale handle keeps a 44px screen
+   * target over the object's own corner and a centroid measured through it sits
+   * several pixels off the object's middle.
+   */
+  async function onePushable(editor: EditorPage): Promise<void> {
+    await editor.clearScene();
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', 'Ball');
+    await editor.setPhysics(true);
+    await editor.deselect();
+    await editor.closePanels();
+  }
+
+  /** The rule, built through the panel, at the speed the test names. */
+  async function pushRule(
+    editor: EditorPage,
+    x: number,
+    y: number,
+  ): Promise<string> {
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Push an object');
+    await editor.setField('Rule 1 do 1 speed x', x);
+    await editor.setField('Rule 1 do 1 speed y', y);
+    return name;
+  }
+
+  test('a push round-trips, and names the object it moves', async ({
+    editor,
+  }, testInfo) => {
+    await onePushable(editor);
+    const name = await pushRule(editor, 240, -180);
+
+    const document = await saved(editor);
+    // Still 14 — the guides case, twelfth time. No new `NodeType`, and the
+    // action rides in on `scenes`, which `parseProject` passes through verbatim.
+    expect(document.schemaVersion).toBe(SCHEMA);
+    const scene = (document.scenes as { rules?: { do: unknown[] }[] }[])[0];
+    expect(scene.rules?.[0].do).toEqual([
+      { kind: 'setVelocity', nodeId: expect.any(String), x: 240, y: -180 },
+    ]);
+
+    const path = testInfo.outputPath('pusher.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.numberValue('Rule 1 do 1 speed x')).toBe(240);
+    expect(await editor.numberValue('Rule 1 do 1 speed y')).toBe(-180);
+  });
+
+  test('the canvas never moves what a rule pushes', async ({ editor }) => {
+    await onePushable(editor);
+    await pushRule(editor, 400, -400);
+    await editor.deselect();
+    await editor.closePanels();
+    await editor.settle();
+
+    // The assertion that fails the day anybody wires this into `EditorScene`.
+    // Two refusals meet in it: the canvas fires no rule, and it simulates no
+    // body at all — so a second reading, taken after long enough for a body at
+    // 400px/s to have crossed most of the scene, is the *same* reading.
+    const before = await editor.findDrawnBox(FILL);
+    expect(before.count).toBeGreaterThan(100);
+    await editor.page.waitForTimeout(900);
+    const after = await editor.findDrawnBox(FILL);
+    expect(after.x).toBe(before.x);
+    expect(after.y).toBe(before.y);
+    expect(after.count).toBe(before.count);
+  });
+
+  test('a push puts no preview button on the toolbar', async ({ editor }) => {
+    await onePushable(editor);
+    await pushRule(editor, 240, -180);
+    await editor.closePanels();
+
+    // `hasMotionIn`'s tenth refusal, and the one a reader will be surest is
+    // wrong: this is the first thing the document can say that puts a body in
+    // motion. But that button exists so a canvas moving *by itself* can be
+    // stopped, and this canvas neither fires the rule nor simulates the body.
+    await expect(
+      editor.page.getByRole('button', { name: 'Preview motion' }),
+    ).toHaveCount(0);
+  });
+
+  test('the picker offers a push only against a dynamic body', async ({
+    editor,
+  }) => {
+    await editor.clearScene();
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', 'Ball');
+    await editor.deselect();
+
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    // Withheld rather than offered-and-refused: `defaultAction` could only
+    // fall through to `restartScene` with nothing here to push, and an option
+    // that leaves the picker where it was reads as a broken control.
+    await expect(
+      editor.choice('Rule 1 do 1').getByRole('option', { name: 'Push an object' }),
+    ).toHaveCount(0);
+
+    await editor.selectInTree('Ball');
+    await editor.setPhysics(true);
+    await editor.deselect();
+    await editor.openRule(name);
+    await expect(
+      editor.choice('Rule 1 do 1').getByRole('option', { name: 'Push an object' }),
+    ).toHaveCount(1);
+
+    // And a *static* body is not a push target either, under either engine:
+    // Arcade's `StaticBody` has no velocity at all and Matter integrates none.
+    await editor.selectInTree('Ball');
+    await editor.setChoice('Body', 'Static — never moves');
+    await editor.deselect();
+    await editor.openRule(name);
+    await expect(
+      editor.choice('Rule 1 do 1').getByRole('option', { name: 'Push an object' }),
+    ).toHaveCount(0);
+  });
+
+  test('a body switched off or made static drops the action, and the file keeps it', async ({
+    editor,
+  }) => {
+    await onePushable(editor);
+    await pushRule(editor, 240, -180);
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+
+    // `setNodePhysics(id, null)` is the new way to dangle, and it needs no
+    // store edit at all: it is `setNodeTween(id, null)` versus `startTween`
+    // exactly. The action stops validating, the empty-`do` check takes the
+    // rule, and **the document is untouched** — so switching the body back on
+    // brings both back, which is `physicsOf`'s own "a node dragged into a group
+    // and back out again is the same node".
+    await editor.selectInTree('Ball');
+    await editor.setPhysics(false);
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(0);
+
+    const document = await saved(editor);
+    const scene = (document.scenes as { rules?: { do: { kind: string }[] }[] }[])[0];
+    expect(scene.rules?.[0].do[0].kind).toBe('setVelocity');
+
+    await editor.selectInTree('Ball');
+    await editor.setPhysics(true);
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+
+    // And the other half of the one gate: a body that is still there but is
+    // **static**. Both halves have to be asserted, because each is a separate
+    // way for `arcadeBody` to throw inside the player's `create()` — and a
+    // guard only one of them exercises is a guard half untested.
+    await editor.selectInTree('Ball');
+    await editor.setChoice('Body', 'Static — never moves');
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(0);
+
+    await editor.selectInTree('Ball');
+    await editor.setChoice('Body', 'Dynamic — moves');
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+  });
+
+  test('a hand-edited push costs the action, never the rule', async ({
+    editor,
+  }, testInfo) => {
+    await onePushable(editor);
+    await pushRule(editor, 240, -180);
+    // A second action, so the rule has something left when the first goes.
+    await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+
+    const document = await saved(editor);
+    const scene = (document.scenes as { rules?: { do: unknown[] }[] }[])[0];
+    // Only a hand-edited file can hold this: the panel's picker offers the
+    // scene's own dynamic-bodied nodes and nothing else.
+    scene.rules![0].do[0] = { kind: 'setVelocity', nodeId: 'gone', x: 1, y: 2 };
+
+    const path = testInfo.outputPath('dangling.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    await editor.deselect();
+
+    // A node reaches nothing outside the action that names it, so dropping one
+    // strictly *narrows* what the rule says — where a dangling variable would
+    // widen a gate and costs the whole rule. The rule survives, one lighter.
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule('Rule 1');
+    await expect(
+      editor.panel('inspect').getByTitle('Remove action 2 of rule 1'),
+    ).toHaveCount(0);
+    expect(await editor.selectValue('Rule 1 do 1')).toBe('restartScene');
+  });
+
+  test('a non-finite speed is repaired, never dropped', async ({
+    editor,
+  }, testInfo) => {
+    await onePushable(editor);
+    await pushRule(editor, 240, -180);
+
+    const document = await saved(editor);
+    const scene = (document.scenes as {
+      rules?: { do: Record<string, unknown>[] }[];
+    }[])[0];
+    scene.rules![0].do[0].x = 'fast';
+    scene.rules![0].do[0].y = null;
+
+    const path = testInfo.outputPath('repaired.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    await editor.deselect();
+
+    // `cameraPan`'s policy: there is no gate here for a repair to open, since
+    // zero on both axes is a body told to stop rather than an action that does
+    // nothing — so "a repair may narrow and may never widen" is satisfied
+    // trivially and the action survives at rest.
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule('Rule 1');
+    expect(await editor.numberValue('Rule 1 do 1 speed x')).toBe(0);
+    expect(await editor.numberValue('Rule 1 do 1 speed y')).toBe(0);
+  });
+
+  test('it emits the body helper the body already needed, and no update()', async ({
+    editor,
+  }) => {
+    await onePushable(editor);
+    await pushRule(editor, 240, -180);
+
+    const exported = (await editor.exportCode('ts')).contents;
+    // Reached through `arcadeBody` rather than `ball.body`, because
+    // `GameObject.body` is a three-way union under `--strict` and the shared
+    // `create()` body can carry no cast.
+    expect(exported).toContain('arcadeBody(ball).setVelocity(240, -180);');
+    // And **no gate was widened**: the helper this calls is the one a dynamic
+    // body already turns on, which is the same predicate the reader requires.
+    expect(exported.match(/function arcadeBody\(/g)).toHaveLength(1);
+    // A moment Phaser already delivers, so iteration 28's line does not move.
+    expect(exported).not.toContain('update(): void');
+  });
+
+  test('a Matter scene is pushed in Matter own units', async ({ editor }) => {
+    await onePushable(editor);
+    await editor.setSceneEngine('matter');
+    await pushRule(editor, 300, -90);
+
+    const exported = (await editor.exportCode('ts')).contents;
+    // Pixels per *step* rather than per second, a step being Matter's own
+    // 1000/60 ms base delta — the conversion the body's dials already make, so
+    // the document holds one number and a scene switched between engines is
+    // pushed at the same rate. Neither figure is round in both units, so a
+    // missing conversion reads as 300 and a doubled one as 0.083.
+    expect(exported).toMatch(
+      /this\.matter\.body\.setVelocity\(matterBodyOf\(\w+\), \{ x: 5, y: -1\.5 \}\);/,
+    );
+    expect(exported).not.toContain('arcadeBody(');
+  });
+});

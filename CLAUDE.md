@@ -114,7 +114,16 @@ second iteration to take a field **off** a props interface, after iteration 25 m
 tilemap's `data` into its layers — and it deliberately copies that one's mechanics: a blend
 mode had lived on `ParticlesProps` since iteration 15, where it was one type's answer to a
 question every type asks, so the work was less the four modes than the migration that leaves
-the document saying it once.
+the document saying it once. Iteration 37 (shipped) let a rule set something moving: a
+`setVelocity` action, which is the third iteration running to close a hole no refusal list
+ever named — and the widest of the three, because the two halves it joins had each been
+complete for a dozen iterations. Physics shipped in 16, colliders and a drive-scheme in 20, a
+thumb in 21, a second engine in 26, and rules in 28; and across the six iterations that grew
+that vocabulary to seventeen actions, **not one of them touched a body** — so the only thing
+in this document that could put one in motion was a player holding a key. One `RuleAction`
+member, two emit shapes for the two engines, no table, no helper, no gate and no schema bump,
+and the first canvas mark this file has ever argued *against* on the grounds that the thing
+has nowhere to be.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -4104,6 +4113,227 @@ placement and never again. This calls it a second time.
   place one, edit it and delete the placement; the fix is prefab controls in the library, which is
   a panel rather than a field.
 
+### Pushing one: the `setVelocity` action
+
+Iteration 37 closes a hole that ran between two features this file has argued about at
+length and never once put in the same sentence. Iteration 16 gave a
+node an Arcade body, 20 gave the scene colliders and a drive-scheme, 21 gave that scheme a
+thumb, 26 gave the scene a second engine — and 28 to 34 grew a rule vocabulary to six
+triggers and seventeen actions. **The two halves never touched.** A rule could destroy an
+object, hide one, make one speak, animate it, tween it, build a prefab, shake the camera,
+count a number and change scene, and it could not make anything *move under physics*: the
+only thing in this document that could put a body in motion was a player holding a key. A
+jump pad did nothing. A tap could not launch a ball. A collision could not knock anything
+back. A `spawn` put an enemy on screen and it stood there for the rest of the game.
+
+- **It is iteration 34's closing lesson for the third time running, and the clearest
+  instance of it yet.** *A refusal list is a list of things somebody thought of, and the hole
+  that survives is the one nothing prompted the question.* `grep -i velocit` over this file
+  found eleven hits before this iteration and **not one was a refusal about a rule**. Physics
+  refuses a simulating canvas, circular bodies and a body inside a group; Rules refuse OR,
+  arithmetic, callback parameters, `onComplete`, a "while" trigger and a condition on a live
+  property. The one refusal that *says* "no velocity" is `spawn`'s, and it is about a velocity
+  on a **definition's child** — which physics bans because a definition's children are
+  container children, and which says nothing whatever about a placed object. **Cite it rather
+  than leave it, because the next reader will find that sentence and take it for this
+  question's answer.** Iterations 35 and 36 found their holes in the *drawing* domain; this
+  one is in the domain that had eight sections of argument written about it and still nobody
+  asked.
+- **Iteration 28's line does not move, and that is the first thing to check.** This is one
+  more verb in a list run at a moment Phaser already delivers, so **`update()` gains nothing**,
+  there is no new trigger, no new table, no new emitted helper, no `EmitContext` field, no
+  `prepare` flag and no pre-pass. It is `startTween`'s sibling, one mover over: that action
+  already moves an object, through the tween manager, and this one moves it through the
+  physics engine — which is the one mover in this codebase a rule had never been able to
+  reach.
+- **Absolute, never relative, and the refusal has two reasons rather than the tween's one.**
+  `Body.setVelocity` and `matter.body.setVelocity` both *replace* what the body was doing, so
+  `{ x: 0, y: 0 }` is a real verb — "stop dead" — rather than an action that does nothing,
+  which is what makes the repair policy below trivial. A relative push is an **impulse**, and
+  it needs a value the document cannot read: what the body is doing *now*, which is a live
+  object property and therefore `RuleCondition`'s own refusal. And Matter's version of an
+  impulse is a **force**, in a third unit again. `startTween`'s "absolute values, never `+=`"
+  with an engine's arithmetic behind it.
+- **One number in the document, converted at the emit — `ScenePhysics.gravityY`'s rule
+  exactly.** Pixels per second under both engines; Matter measures velocity per *step*, a step
+  being its own 1000/60 ms base delta, so the Matter branch divides by 60. That is the
+  conversion `PhysicsBody`'s own dials and the driven `update()` already make, and it is what
+  lets a scene switched from Arcade to Matter be pushed at exactly the rate it was pushed at
+  before. Two numbers would be two fields free to disagree about one speed.
+- **The field is `nodeId`, and that is structural rather than cosmetic.** `ruleNames` keys off
+  `'nodeId' in action`, `ruleUsesVariable` off `'variableId' in action`, and the store's
+  `remapActionRefs` off both — so the *name* is what makes all three inherit the right answer
+  with **no edit at all**. It is also where this parts company with `spawn` and the camera
+  effects, which name nothing scene-local: a duplicated scene genuinely *wants* this one
+  remapped to the copy, and `'nodeId' in action` already does it. The good consequence is that
+  a rule whose only action is a push **appears on that object's own panel**, because it is
+  about that object — where a camera effect or a spawn appears only in the scene's own list.
+- **Both refusals cost the action, never the rule**, which is `startTween`'s split — the only
+  other two-part node gate here — and `destroy`'s reason: a node reaches nothing outside the
+  action that names it, so dropping one strictly *narrows* what the rule says, where a
+  dangling variable would reopen a gate and costs the whole rule. If it was the only action,
+  the empty-`do` check takes the rule, which is a lone `destroy` of a missing node's treatment
+  already.
+- **The dynamic half is correctness, not taste, and this is the sentence to keep.**
+  `arcadeBody` **throws**, naming the object, when it is handed a `StaticBody` or no body at
+  all — so an action kept here would be an uncaught throw inside `create()` in the player's
+  game, before a single object is drawn. That is Audio's `sound.add`-on-an-unloaded-key
+  failure, which it already records as worse than the missing-image case, and it is
+  `controlsOf`'s own refusal (*"an exported `update()` calling `setVelocityX` on a
+  `StaticBody`, which does not have one"*) arriving on an action.
+- **One test for both engines**, for one reason each: an Arcade `StaticBody` genuinely has no
+  velocity, and Matter integrates none on a static body. So the reader needs nothing of
+  `scenePhysicsOf` and there is no second list — `physicsOf` answers for the node *type* as
+  well, so a container, an instance, an emitter and a tilemap are all refused there.
+- **No top-level guard of its own, and that is not an omission.** `byId` is built from
+  `scene.children` alone and `physicsOf`'s second argument is the same `topLevel` rule a body
+  already carries, so a node inside a container or a prefab definition is out twice over.
+- **`x`/`y` are repaired, never dropped** — `cameraPan`'s and `spawn`'s `finiteOr`. *A repair
+  may narrow what the document says and may never widen it* is satisfied trivially here,
+  because there is no gate inside the action for a repair to open: the repaired value is a
+  body told to stop, which is a thing somebody asks for.
+- **No gate was widened in the exporter, and that had to be traced rather than assumed** —
+  because on that checklist "already covered" and "forgotten" read identically. `physicsUsedIn`
+  turns `physics.dynamic` on for a scene holding a dynamic Arcade body and `physics.matter` on
+  for a Matter scene holding any body, **by calling `physicsOf(node, true)` over
+  `scene.children`** — which is the very same call on the very same array that the reader
+  makes. So an accepted push cannot outrun its helper, under either engine, and the Matter
+  trap that looks like it should bite does not: a Matter scene's `physics.dynamic` is
+  deliberately forced false, and the Matter branch needs `physics.matter`, which is true.
+- **Nothing is drawn from the module identifier set, so nothing above it moves** —
+  `toIdentifier` suffixes a clash and four helper names are asserted verbatim in the suite.
+  Iteration 31's and 36's "nothing moved" for the third time, and a project with no
+  `setVelocity` exports byte for byte what it exported before.
+- **`[0]`, never a `.map` over the bindings.** A node's binding list holds more than one entry
+  only because a tilemap emits one object per layer, and a tilemap is not in `PHYSICS_TYPES` —
+  so a pushable node emits exactly one object. `playAnimation`'s read rather than `destroy`'s.
+- **`constructorFor` gains no case, so the compiler catches exactly two steps — and knowing
+  which two is half of what a reader needs.** `ruleActionLines`' switch is exhaustive with no
+  `default`, and `ACTION_LABEL` is a `Record<RuleAction['kind'], string>`, so the *panel* also
+  refuses to compile. Every other consumer of `action.kind` across `src/` — in
+  `collectLabels`, `prefabsNamedByRules`, `animationsNamedByRules`, `buildCreateBody`'s
+  pre-pass, `migrateRuleToKind`, `removePrefab`, `countPrefabSpawns` and `spawnPointsOf` — is
+  a narrowing `=== 'spawn'` / `=== 'setVar'` check that simply never fires for a new member,
+  which is the right answer rather than a missed step. Everything genuinely silent is in the
+  usual places: `RULE_ACTION_KINDS` (a plain array, so an omission is an action nobody can
+  pick), `ActionFields`' and `defaultAction`'s defaulted switches, and `hasMotionIn`'s prose.
+- **Nothing is drawn on the canvas, and `EditorScene.ts` is untouched for the seventh time**
+  — after Audio, Rules, 29, 31, 32 and 33. This is the first feature here whose canvas
+  refusal is not "we could draw it but it would move", so the argument is new and belongs
+  written down:
+  - **Every mark this canvas draws is a *where*.** The camera frame is the shot the scene
+    opens on, the spawn ring is where a prefab will be built, the tween ghost is where an
+    object ends up, the body outline is the box that collides, the touch rings are where the
+    buttons sit. A velocity is not a where — it is a **rate**, and the only honest picture of
+    a rate is the object moving, which is precisely what this canvas refuses to show.
+  - **An arrow would be a *path*, and the path would be a lie.** Gravity, drag, bounce,
+    friction and every collider bend it, and the document holds none of the arithmetic that
+    says how. A straight arrow over a scene with gravity on would say "it goes there" about an
+    object that goes somewhere else — the canvas and the export disagreeing about a picture,
+    which is the single failure this project guards hardest against.
+  - **So a velocity is an authored number with no locus**, exactly like `mass`, `drag`,
+    `bounce` and `allowGravity` — the eight Arcade dials that have sat in the panel since
+    iteration 16 and have never had a mark either. The body outline draws the *shape*; the
+    dials are numbers. This is a ninth dial that arrives on a rule rather than on the body,
+    and it takes the dials' treatment.
+- **`hasMotionIn` records its tenth refusal there and its fourteenth overall**, and it is the
+  one a reader will be surest is wrong, because this is the first thing the document can say
+  that puts a **body** in motion. Two refusals meet in it, which is iteration 31's shape: the
+  canvas fires no rule, *and* it simulates no body at all — physics' own first decision, made
+  because a step does not merely animate the document, it rewrites the numbers the document is
+  made of. There is nothing here for a ▶ to start and nothing it could stop.
+- **The store needed no edit, and beside `removePrefab` and `removeVariable` that reads like a
+  forgotten step.** Nothing prunes a dangling `nodeId` today — `destroy`, `setVisible`,
+  `setText`, `playAnimation` and `startTween` all tolerate one and the reader drops the action
+  on read. The sharper case is new and needs nothing either: **`setNodePhysics(id, null)` and
+  switching a body to static both make an accepted action stop validating without deleting a
+  node**, and that is `setNodeTween(id, null)` versus `startTween` to the character. Switching
+  the body back on brings the action back, which is `physicsOf`'s own "a node dragged into a
+  group and back out again is the same node".
+- **The option is withheld from the picker rather than offered and refused, and it is the
+  first *action* treated that way.** `varChange`'s mechanism on the trigger picker a few rows
+  up, and for its reason: `defaultAction` can only fall through to `restartScene` when nothing
+  in the scene carries a dynamic body, and an option that leaves the picker where it was reads
+  as a broken control. **The alternative is not merely worse, it is unavailable** — `RuleCard`
+  renders `rulesOf`'s *validated* output, so an `ActionFields` empty state for this kind could
+  only render for an action the reader accepted while no candidate exists, which is a
+  contradiction. A hint there would be a sentence nobody could ever read. (That is quietly
+  true of `spawn`'s, `setText`'s and `addVar`'s empty states as well; they are harmless and
+  they are not a precedent to copy.)
+- **The seed is a jump.** `{ x: 0, y: -450 }`, and 450 is `DEFAULT_JUMP`'s own number rather
+  than a new one, so the panel and the built-in platformer cannot disagree about how high one
+  goes. Written as a literal rather than by importing that constant, because the two answer
+  different questions and a change to the drive-scheme's default should not silently move this
+  seed. `defaultTween`'s rule and its reason: an action that runs perfectly and changes nothing
+  is indistinguishable from the feature being broken, and `{ x: 0, y: 0 }` is exactly that
+  action.
+- **The panel's fields are `speed x` and `speed y`, never a bare `x`/`y`.** A `spawn`'s `x` on
+  the same card is a **place** and this is a **rate**, and one word for both is `cameraPan`'s
+  own recorded trap — the reason its fields say "centre". It also keeps them clear of the
+  body's own **`Velocity X`**, which renders a few sections up the same panel, and which the
+  suite matches exactly. That neighbour is the one thing about this feature a reader will call
+  a duplicate, and it is not: `PhysicsBody.velocityX` is the velocity the body **starts** with,
+  an initial condition emitted once on the constructor chain, and this is the velocity it is
+  given **at a moment**. Iteration 30's split to the character — a bound label answers "what
+  does this object read", `setText` answers "what happens at this moment", and both exist.
+- **Three controls, so two rows** — `spawn`'s and `cameraPan`'s layout and the 390px rule.
+- **`SCHEMA_VERSION` did not bump — the guides case, fourteenth time.** No new `NodeType`, and
+  the action rides in on `scenes`, which `parseProject` passes through verbatim. The old-build
+  edge is iterations 31, 33 and 34's exactly: a v14 build's `ruleActionsOf` drops the unknown
+  kind through its `default: break`, so a rule whose *only* action is a push is absent from
+  **that build's** panel and emit — the document still holds it, a re-save loses nothing, and
+  the rule is back the moment a current build opens the file. An old build doing less, not a
+  file breaking. `rules.spec.ts` asserts the 14.
+- **The suite splits where the feature's own argument says it must.** `rules.spec.ts` carries
+  the document, the panel, the emitted text and the two claims only the near side can make:
+  that the object is in the same place after a second long enough for a body at 400px/s to
+  have crossed the scene, and that no ▶ appears. `export.spec.ts` carries both positive
+  claims, one per engine, because the editor runs none of it.
+- **The runtime fixture sets gravity to zero and leaves the body's own velocity at zero**,
+  which is `spawn`'s "placed nowhere" one action over: nothing else in the exported world is
+  able to move that object, so any travel at all can only have come from the emitted call.
+  The **direction** is asserted as well as the distance, and the object is asserted to still
+  be *on the canvas* — which is what makes one reading catch both failure modes of the `/60`:
+  a missing conversion is sixty times too fast and the object is gone by the first screenshot,
+  while a doubled one is imperceptible and it never travels at all.
+- **Both halves of the one gate are asserted, because each is a separate way to throw.** A
+  body switched **off** and a body switched to **static** are two different documents and one
+  refusal, and a test exercising only the first leaves half the guard untested. Checked by
+  deleting the reader's line and confirming the test goes red, which is the check iteration 33
+  ran on its re-entrancy flag — and worth repeating here, because the *hostile* fixtures alone
+  do **not** catch it: they ride `keyDown` triggers nothing in the suite presses, so the throw
+  they describe never fires at runtime. They are there for the compiler, not for the guard.
+- **The hostile project gained four pushes and the Matter scene gained its first rules.** One
+  with a non-default value on both axes on the scene's dynamic-bodied node, which is the only
+  place `Body.setVelocity` is reached from a rule under `tsc --strict` and the only place
+  `arcadeBody` is called anywhere but a constructor chain; one on a **static** body and one on
+  a node with **no body**, as a pair on purpose, because either alone cannot tell "costs the
+  action" from "costs the rule" — `rule-x15`/`rule-x16`'s shape; and one in the **Matter**
+  scene, which is the only place `matter.body.setVelocity` and the `/60` meet
+  `MatterJS.BodyType` under the same compiler. The Matter pair's numbers are 300 and -90,
+  neither round in both units, which is `gravityY: 940`'s own trick one field over. All of them
+  ride triggers nothing presses, `NO_MOTION`'s rule: a body that actually took a push would
+  slide out from under every colour assertion in `export.spec.ts`, which is correct behaviour
+  and is not what those assertions are about.
+
+**What stays refused.** **No impulse and no relative push** — see above; it needs a value the
+document cannot read, and Matter's version is a force in a third unit. **No acceleration,
+drag, bounce or gravity from a rule** — a pure loosening, one member each, but the emitter
+config's argument applies: those dials only mean anything beside each other, which is why the
+body already emits all eight whole, and a rule that set one in isolation would be a dial
+fighting the seven printed above it. **No angular velocity** — a second field and a second
+unit for a dial `PhysicsBody` already carries. **No push *towards* a point or at another
+object** — a direction that depends on a position is a value depending on a value, which is
+iteration 28's second half verbatim. **No push on a spawned object** — a spawned object has no
+id for anything to name, which is `containerBounds`' "two coins would fight over one map entry"
+arriving at runtime, and it is the same wall `destroy` has always hit. **No push on a node
+inside a container or a prefab definition** — physics' own top-level rule, inherited twice
+over. **No reading a velocity in a condition** — `RuleCondition`'s own refusal: a variable is
+the one quantity that survives `scene.start`, validates against a table the document holds, and
+is one shape across the whole union. And **no `setPosition`** — a teleport is not a push, it
+works on nodes with no body at all, and it is a genuine separate loosening rather than a
+smaller version of this one. It is the thing a reader will ask for next.
+
 ## The properties panel
 
 Every section of the inspector is a disclosure — `src/ui/Section.tsx` — and they ship
@@ -4826,9 +5056,9 @@ tests/
                             the buttons a thumb will drive it with
   rules.spec.ts             a variable declared, a rule built and refused, a caption
                             written, a camera shaken, a number watched, a prefab
-                            marked for building — and a canvas that runs none of
-                            it, builds none of it, and does not move when the
-                            camera does
+                            marked for building, an object pushed — and a canvas
+                            that runs none of it, builds none of it, moves none
+                            of it, and does not move when the camera does
   labels.spec.ts            a caption that follows a variable, formatted, and a
                             binding that falls back when the variable is gone
   inspector.spec.ts         the properties panel's sections: closed by default,
@@ -5124,6 +5354,25 @@ gives a blank page with 404ing assets — the single most likely deploy failure.
 with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
+
+Pushing an object shipped in iteration 37 and is the entry worth reading first, because it is
+the third hole in a row that **nothing on this list had ever named** — and the one that says
+most about how this list goes wrong. The two before it were in the drawing domain, where the
+"Phaser 4, not 3" bullet had at least written the word down. This one was in the domain with
+eight sections of argument about it: rules had a "what stays refused" paragraph per iteration
+from 28 onwards, each one carefully refusing a *sequence* — `onComplete`, a "while" trigger,
+an expression tree — while none of them noticed that the vocabulary could not touch a physics
+body at all. **The reading to carry forward is narrower than iteration 34's and sharper: a
+refusal list gets longer in the direction it is already looking.** Six iterations of them
+asked "is this a program?" and none asked "what in this project can a rule not reach?" The
+answer was the entire physics stack, shipped across iterations 16, 20, 21 and 26 and reachable
+only by a player holding a key. The check worth running on the *next* iteration is not "what
+did we refuse" but "what did we build that the newest feature still cannot name". What
+pushing leaves is short and all of it is in the section above: no impulse or relative push, no
+acceleration/drag/bounce/gravity from a rule, no angular velocity, no push towards a point or
+at another object, no push on a spawned object or a nested one, no reading a velocity in a
+condition — and **no `setPosition`**, which is the one a reader will ask for next and is a
+genuine separate loosening rather than a smaller version of this.
 
 Blend modes shipped in iteration 36 and are the entry worth reading first, because of the
 three things named in the sentence below, that was the one nobody went back for. Masks,

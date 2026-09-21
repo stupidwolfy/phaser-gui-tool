@@ -553,6 +553,7 @@ const ACTION_LABEL: Record<RuleAction['kind'], string> = {
   stopSound: 'Stop a sound',
   playAnimation: 'Play an animation',
   startTween: 'Start a movement',
+  setVelocity: 'Push an object',
   cameraShake: 'Shake the camera',
   cameraFlash: 'Flash the camera',
   cameraFade: 'Fade the camera',
@@ -904,7 +905,28 @@ function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
               <SelectField
                 label={`Rule ${index} do ${at + 1}`}
                 value={action.kind}
-                options={RULE_ACTION_KINDS.map((kind) => ({
+                // Withheld rather than offered-and-refused, which is
+                // `varChange`'s mechanism on the trigger picker a few rows up
+                // and for its reason: `defaultAction` can only fall through to
+                // `restartScene` when nothing here carries a dynamic body, and
+                // an option that leaves the picker where it was reads as a
+                // broken control — the failure this file records more often
+                // than any other.
+                //
+                // The first *action* withheld this way, so it is worth saying
+                // that the alternative is genuinely unavailable rather than
+                // merely worse. `RuleCard` renders `rulesOf`'s output, which
+                // is validated — so an `ActionFields` empty state for this
+                // kind could only render for an action the reader accepted
+                // while no candidate exists, which is a contradiction. A hint
+                // there would be a sentence nobody can ever read.
+                options={RULE_ACTION_KINDS.filter(
+                  (kind) =>
+                    kind !== 'setVelocity' ||
+                    scene.children.some(
+                      (node) => physicsOf(node, true)?.kind === 'dynamic',
+                    ),
+                ).map((kind) => ({
                   value: kind,
                   label: ACTION_LABEL[kind],
                 }))}
@@ -1048,6 +1070,26 @@ function defaultAction(
       const tweened = scene.children.find((node) => tweenOf(node) !== null);
       return tweened
         ? { kind: 'startTween', nodeId: tweened.id }
+        : { kind: 'restartScene' };
+    }
+    case 'setVelocity': {
+      // The first node with a **dynamic** body, which is the only kind the
+      // reader accepts — `startTween`'s seed, one optional field over. A seed
+      // naming anything else is an action `rulesOf` drops on the very next
+      // read, leaving nothing on screen to fill in.
+      const pushable = scene.children.find(
+        (node) => physicsOf(node, true)?.kind === 'dynamic',
+      );
+      // Straight up, and at the speed this document already means by a jump:
+      // 450 is `DEFAULT_JUMP`, written as a literal rather than imported
+      // because the two answer different questions and a change to the
+      // drive-scheme's default should not silently move this seed.
+      //
+      // `defaultTween`'s rule — an action that runs perfectly and changes
+      // nothing is indistinguishable from the feature being broken, and
+      // `{ x: 0, y: 0 }` is exactly that action.
+      return pushable
+        ? { kind: 'setVelocity', nodeId: pushable.id, x: 0, y: -450 }
         : { kind: 'restartScene' };
     }
     case 'setText': {
@@ -1432,6 +1474,49 @@ function ActionFields({
           options={nodeOptions(scene, (node) => tweenOf(node) !== null)}
           onChange={(nodeId) => onChange({ ...action, nodeId })}
         />
+      );
+
+    case 'setVelocity':
+      // Three controls, so two rows — `spawn`'s and `cameraPan`'s layout and
+      // the 390px rule the whole card is built on.
+      return (
+        <>
+          <SelectField
+            label={`${label} object`}
+            value={action.nodeId}
+            // `startTween`'s filter, one optional field over, so the panel
+            // cannot build what the reader refuses.
+            options={nodeOptions(
+              scene,
+              (node) => physicsOf(node, true)?.kind === 'dynamic',
+            )}
+            onChange={(nodeId) => onChange({ ...action, nodeId })}
+          />
+          {/* "speed", never a bare "x": a spawn's `x` on this same card is a
+              *place* and this is a *rate*, and one word for both is
+              `cameraPan`'s own recorded trap — the reason its fields say
+              "centre". It also keeps these clear of the body's own
+              "Velocity X", which renders a few sections up the same panel and
+              which the suite matches exactly. */}
+          <div className="field-row">
+            <NumberField
+              label={`${label} speed x`}
+              value={action.x}
+              onChange={(x) => onChange({ ...action, x })}
+            />
+            <NumberField
+              label={`${label} speed y`}
+              value={action.y}
+              onChange={(y) => onChange({ ...action, y })}
+            />
+          </div>
+          <p className="hint">
+            Pixels a second, and it <em>replaces</em> whatever the body was
+            doing rather than adding to it — so 0 and 0 stops it dead. Negative
+            y is upwards. Gravity, drag and whatever it hits take over from
+            there. The editor never runs it: press Play to see it move.
+          </p>
+        </>
       );
 
     case 'setVar': {

@@ -3369,6 +3369,47 @@ export type RuleAction =
   | { kind: 'playAnimation'; nodeId: string; animationId: string }
   | { kind: 'startTween'; nodeId: string }
   /**
+   * `startTween`'s sibling, one mover over — and the hole nothing on any
+   * refusal list in this file ever named.
+   *
+   * For six iterations this vocabulary grew a verb at a time and **not one of
+   * them touched a physics body**. Iteration 16 gave a node an Arcade body,
+   * iteration 20 gave the scene colliders and a drive-scheme, iteration 21
+   * gave that scheme a thumb and iteration 26 gave the scene a second engine
+   * — and the only thing in this document that could put a body in motion was
+   * a player holding a key. A jump pad did nothing. A tap could not launch a
+   * ball. Iteration 34's closing lesson for the third time running: *a refusal
+   * list is a list of things somebody thought of, and the hole that survives
+   * is the one nothing prompted the question.*
+   *
+   * **Iteration 28's line does not move.** This is one more verb in a list run
+   * at a moment Phaser already delivers, so `update()` gains nothing, there is
+   * no new trigger, no new table and no new emitted helper.
+   *
+   * **The field is `nodeId`, and that is structural rather than cosmetic.**
+   * `ruleNames` keys off `'nodeId' in action`, `ruleUsesVariable` off
+   * `'variableId' in action`, and the store's `remapActionRefs` off both — so
+   * the name is what makes all three inherit the right answer with **no edit
+   * at all**, and a duplicated scene remaps this for free. Said out loud
+   * because on those lists "already covered" and "forgotten" read identically.
+   *
+   * **Absolute, never relative.** A relative push adds to whatever the object
+   * is already doing, which is an *impulse* — and Matter's version of that is
+   * a force in a different unit again. `startTween`'s "absolute values, never
+   * `+=`" one engine over: one member, one shape.
+   *
+   * Pixels per second under both engines. Matter measures velocity per *step*
+   * rather than per second, so the document holds one number and the exporter
+   * divides by 60 — the conversion `PhysicsBody`'s own dials and the driven
+   * `update()` already make, so a scene switched between engines pushes at the
+   * same rate.
+   *
+   * It can dangle two ways and both cost the **action** rather than the rule:
+   * a node that is gone, and a node whose body is gone or was never dynamic.
+   * See `ruleActionsOf`.
+   */
+  | { kind: 'setVelocity'; nodeId: string; x: number; y: number }
+  /**
    * `destroy`'s inverse, and the reason it took until iteration 34 is that
    * nothing was missing: iteration 12 has been emitting one factory function
    * per prefab since prefabs existed, called once per placement and never
@@ -3474,6 +3515,9 @@ export const RULE_ACTION_KINDS: readonly RuleAction['kind'][] = [
   'stopSound',
   'playAnimation',
   'startTween',
+  // Beside `startTween`, the other verb that sets an object moving — that one
+  // through the tween manager, this one through the physics engine.
+  'setVelocity',
   // The camera between the object verbs and the variables, so the picker reads
   // as four groups. The order is free: the suite picks an option by its label.
   'cameraShake',
@@ -3916,6 +3960,50 @@ function ruleActionsOf(
           actions.push({ kind: 'startTween', nodeId });
         }
         break;
+
+      case 'setVelocity': {
+        // `startTween`'s split, one optional field over, and both refusals
+        // cost the **action** rather than the rule: a node reaches nothing
+        // outside the action that names it, where a variable is the one thing
+        // a rule names that another rule reads.
+        //
+        // A **dynamic** body, and that half is correctness rather than
+        // tidiness: the exporter's `arcadeBody` helper *throws* naming the
+        // object when it is handed a `StaticBody` or none at all, so an action
+        // kept here would be an uncaught throw inside `create()` in the
+        // player's game, before a single object is drawn — which Audio already
+        // records as worse than the missing-image case. `controlsOf`'s own
+        // refusal, arriving on an action.
+        //
+        // One test for both engines, for one reason each: an Arcade
+        // `StaticBody` genuinely has no velocity, and Matter integrates none
+        // on a static body. So this needs nothing of `scenePhysicsOf`.
+        //
+        // It is also what makes the emit need no gate widened, which is worth
+        // saying here rather than leaving to be found in the exporter: the
+        // Arcade helper is gated on a dynamic body existing in a scene and the
+        // Matter accessor on a body existing in a Matter one, so an action
+        // that survives this line is an action whose helper is already there.
+        //
+        // No top-level guard of its own, and that is not an omission either:
+        // `byId` is built from `scene.children` alone and `physicsOf`'s second
+        // argument is the same `topLevel` rule a body already carries, so a
+        // node inside a container or a prefab definition is out twice over.
+        const pushed = byId.get(nodeId);
+        if (pushed === undefined) break;
+        if (physicsOf(pushed, true)?.kind !== 'dynamic') break;
+        actions.push({
+          kind: 'setVelocity',
+          nodeId,
+          // Repaired, never dropped — `cameraPan`'s policy. Both zero is a
+          // legitimate value here, since it stops the object dead, so there is
+          // no gate for a repair to open and "a repair may narrow what the
+          // document says, it may never widen it" is satisfied trivially.
+          x: finiteOr(row.x, 0),
+          y: finiteOr(row.y, 0),
+        });
+        break;
+      }
 
       // The five camera effects, and the whole block is **repair, never drop**
       // — `cameraOf`'s policy rather than `soundsOf`'s split, and it is the

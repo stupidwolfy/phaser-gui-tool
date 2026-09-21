@@ -122,8 +122,8 @@ on a desktop.
   objects touching, an object being tapped, a key being pressed, a timer firing or a variable
   changing; *what* is
   building a prefab, removing an object, showing or hiding one, setting an object's text,
-  playing a sound or an animation, starting a movement, going to another scene, changing a
-  number — or moving the
+  playing a sound or an animation, starting a movement, pushing an object with physics, going
+  to another scene, changing a number — or moving the
   camera: shake it when something is hit, flash or fade it in a colour of your choosing, pan
   it somewhere, zoom it in or out, each over a time and an easing you set. Declare
   those numbers under Variables — a score, a lives count — and a rule can check one before
@@ -137,6 +137,15 @@ on a desktop.
   row of settings. Two things worth knowing: what appears lands on top of everything already
   in the scene, and nothing takes it away again, so a rule that builds on a fast loop builds
   for ever
+- **Push something**: pick *Push an object* as a rule's action and give it a speed across and
+  a speed down, in pixels a second — negative is up and left. That is a jump pad, a launch, a
+  serve, a knockback: `when the ball is tapped, push it 0 across and 450 up`. It needs an
+  object whose Physics body is set to *Dynamic — moves*, and the action is only offered once
+  something in the scene has one, because a static body has no speed to set. It **replaces**
+  whatever the object was doing rather than adding to it, so 0 and 0 stops it dead. From
+  there gravity, drag and anything it collides with take over. The editor never runs it —
+  nothing here simulates a body, and nothing is drawn for a speed the way a ring is drawn for
+  a spawn, because a speed has no place on the canvas to be — so press **Play** to watch it go
 - **Act on a number reaching something**: pick *a variable changes* as a rule's moment and
   add a check, and you have `when Score changes, only if Score is at least 10, go to the Win
   scene`. The rule runs on every change from 10 upwards rather than only the first time, so

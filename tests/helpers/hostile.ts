@@ -548,6 +548,17 @@ export function hostileProject(): Project {
               // `a` carries a full tween, so this is the only thing that emits
               // `paused: true` and a bound handle.
               { kind: 'startTween' as const, nodeId: 'a' },
+              // The one action that touches a **body**, on the one node here
+              // carrying a dynamic Arcade one — so this is the only place
+              // `Body.setVelocity` is reached from a rule under `tsc --strict`,
+              // and the only place `arcadeBody` is called anywhere but the
+              // constructor chain. Non-default on both axes for that reason.
+              // It rides this rule rather than one of its own for `NO_MOTION`'s
+              // reason: `rule-1` is a tap nothing in the suite presses, and a
+              // body that actually took this push would slide out from under
+              // every colour assertion in `export.spec.ts` — correct behaviour,
+              // and not what those assertions are about.
+              { kind: 'setVelocity' as const, nodeId: 'a', x: 240, y: -180 },
               { kind: 'setVar' as const, variableId: 'var-1', value: 7 },
               { kind: 'addVar' as const, variableId: 'var-2', by: -1 },
               // Text into a text variable, and a caption onto the one text node
@@ -825,6 +836,33 @@ export function hostileProject(): Project {
             when: { kind: 'keyDown' as const, key: 'R' },
             conditions: [],
             do: [{ kind: 'spawn' as const, prefabId: 'prefab-gone', x: 30, y: 40 }],
+          },
+          // A push at a **static** body, which `arcadeBody` throws on by
+          // design — so keeping it would not be a wrong picture but an uncaught
+          // throw inside `create()`, before a single object was added. It costs
+          // the *action*, so the rule survives one lighter: `rule-x15`'s shape,
+          // one refusal over. Only a hand-edited file can hold it, because the
+          // panel's picker offers dynamic bodies alone.
+          {
+            id: 'rule-x17',
+            name: 'Pushes a wall',
+            when: { kind: 'keyDown' as const, key: 'V' },
+            conditions: [],
+            do: [
+              { kind: 'setVelocity' as const, nodeId: 'g', x: 100, y: 0 },
+              { kind: 'addVar' as const, variableId: 'var-2', by: 7 },
+            ],
+          },
+          // And a push at a node with **no body at all**, as the only action,
+          // so the empty-`do` check takes the whole rule — `rule-x16`'s shape.
+          // The pair is what tells "costs the action" from "costs the rule";
+          // either one alone cannot.
+          {
+            id: 'rule-x18',
+            name: 'Pushes nothing',
+            when: { kind: 'keyDown' as const, key: 'Z' },
+            conditions: [],
+            do: [{ kind: 'setVelocity' as const, nodeId: 'b', x: 50, y: 50 }],
           },
         ],
         children: [
@@ -1737,6 +1775,37 @@ export function hostileProject(): Project {
         // in the document so switching the engine back brings them with it.
         colliders: [
           { id: 'mc-1', aId: 'm-floor', bId: 'm-faller', kind: 'collide' as const },
+        ],
+        // This scene's first rules, and they exist for the Matter emit's
+        // *shape*: nowhere else is `matter.body.setVelocity` reached from a
+        // rule, and nowhere else does the /60 conversion meet
+        // `MatterJS.BodyType` under `tsc --strict`. Neither key is one anything
+        // in the suite presses and this scene is registered and never started,
+        // which is `NO_MOTION`'s rule arriving on a trigger.
+        rules: [
+          {
+            id: 'rule-m1',
+            name: `Pushes ${breakout}`,
+            when: { kind: 'keyDown' as const, key: 'X' },
+            conditions: [],
+            // 300 px/s is 5 per step and -90 is -1.5, and neither is round in
+            // both units — the gravity field's own trick one line up, so a
+            // missing conversion reads as 300 and a doubled one as 0.083
+            // rather than as either of these.
+            do: [{ kind: 'setVelocity' as const, nodeId: 'm-faller', x: 300, y: -90 }],
+          },
+          // And the static side, which costs the action and so the whole rule:
+          // a Matter static body integrates no velocity, so keeping it would
+          // emit a line that quietly says nothing. The same refusal the Arcade
+          // scene's `rule-x17` makes, under the other engine — which is what
+          // says the reader's one test is right under both.
+          {
+            id: 'rule-m2',
+            name: 'Pushes the ramp',
+            when: { kind: 'keyDown' as const, key: 'Y' },
+            conditions: [],
+            do: [{ kind: 'setVelocity' as const, nodeId: 'm-floor', x: 10, y: 0 }],
+          },
         ],
         children: [
           {

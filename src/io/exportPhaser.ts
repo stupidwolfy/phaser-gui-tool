@@ -3621,6 +3621,45 @@ function ruleActionLines(
       return handle === undefined ? [] : [`${handle}.play();`];
     }
 
+    case 'setVelocity': {
+      const id = bindings.get(action.nodeId)?.[0];
+      // `[0]`, never a `.map`. A node's binding list holds more than one entry
+      // only because a tilemap emits one object per layer, and a tilemap is not
+      // in `PHYSICS_TYPES` — so a pushable node emits exactly one object.
+      // `playAnimation`'s read rather than `destroy`'s. Undefined is a node
+      // that emitted nothing at all, which is `missingReason`'s treatment and
+      // the camera follow's.
+      if (id === undefined) return [];
+      // Two engines, two calls, and the one number the document holds is
+      // converted here rather than stored twice. Matter measures velocity in
+      // pixels per *step*, a step being its own 1000/60 ms base delta, so the
+      // document's px/s is divided by 60 — the conversion `PhysicsBody`'s own
+      // dials and the driven `update()` already make, and what lets a scene
+      // switched from Arcade to Matter be pushed at exactly the same rate.
+      //
+      // `ctx.engine` is the *emitting scene's*: `buildCreateBody` overwrites it
+      // per scene before the epilogue runs, so a project with one world of each
+      // kind pushes each body the way its own world runs.
+      //
+      // `this` hardcoded rather than `${ctx.receiver}`, `buildSoundLines`' and
+      // the camera effects' reason: a rule only ever runs in a Scene's
+      // `create()`.
+      //
+      // **Neither helper needed a gate of its own, and that is worth saying
+      // because on this checklist "already covered" and "forgotten" read
+      // identically.** `physicsUsedIn` turns `physics.dynamic` on for a scene
+      // holding a dynamic Arcade body and `physics.matter` on for a Matter
+      // scene holding any body — and `ruleActionsOf` refuses this action unless
+      // its node carries a dynamic body, which is the very same call on the
+      // very same array. An accepted push cannot outrun its helper.
+      return ctx.engine === 'matter'
+        ? [
+            `this.matter.body.setVelocity(${ctx.matterBodyFn}(${id}), ` +
+              `{ x: ${num(action.x / 60)}, y: ${num(action.y / 60)} });`,
+          ]
+        : [`${ctx.bodyFn}(${id}).setVelocity(${num(action.x)}, ${num(action.y)});`];
+    }
+
     // The five camera effects. `this` hardcoded rather than `ctx.receiver`, for
     // `buildSoundLines`' reason: a rule only ever runs in a Scene's `create()`,
     // never in a prefab factory, and `${ctx.receiver}` would read as though one
