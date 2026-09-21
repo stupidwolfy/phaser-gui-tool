@@ -34,10 +34,12 @@ import {
   tileLayerOf,
   tileMapOf,
   touchZonesOf,
+  blendModeOf,
   effectsOf,
   tweenOf,
   TWEEN_PROPERTIES,
   TWEEN_PHASER_KEY,
+  type BlendMode,
   type NodeTween,
   type Transform,
   type TweenProperty,
@@ -3907,6 +3909,7 @@ export class EditorScene extends Phaser.Scene {
     if (!held.has('alpha')) object.setAlpha(node.props.alpha);
     object.setVisible(node.visible);
     object.setDepth(index);
+    this.applyBlend(object, node);
 
     switch (node.type) {
       case 'rectangle':
@@ -4044,7 +4047,7 @@ export class EditorScene extends Phaser.Scene {
         // On the container, so it multiplies down onto the marker and the
         // particles alike — what "fade this emitter" should mean, and what the
         // exported `.setAlpha` does to the bare emitter.
-        this.applyEmitter(group, node.props, key);
+        this.applyEmitter(group, node.props, blendModeOf(node), key);
         break;
       }
       case 'container':
@@ -4276,6 +4279,49 @@ export class EditorScene extends Phaser.Scene {
    * snapping all needed no edit at all. Worth saying, because on that list "no
    * branch needed" and "forgot a branch" read identically.
    */
+  /**
+   * How this object composites with what is behind it, written once here for
+   * every type rather than ten times inside the switch — alpha's own
+   * centralisation and for its reason: one write is one thing the canvas and
+   * the export cannot disagree about.
+   *
+   * **No cache guard, and the absence is deliberate** — which needs saying,
+   * because the three neighbours that look most like this one all have one.
+   * `applyTextStyle`, `setConfig` and `applyEffects` are guarded because
+   * applying is expensive or destructive: `setStyle` re-rasterises a text
+   * object's own canvas, `setConfig` calls `resetCounters` and restarts the
+   * flow, `applyEffects` tears down and rebuilds a `FilterList`. Phaser's
+   * `setBlendMode` assigns a number and marks the object dirty; it is
+   * idempotent and has nothing to invalidate, so the scene syncing on every
+   * store change costs nothing here. (The batch flush the Phaser docs warn
+   * about is a cost of *drawing* two different modes in a row, which a guard
+   * could not avoid anyway.)
+   *
+   * And nothing is tracked for SHUTDOWN, which is the same kind of absence one
+   * layer out: a texture belongs to the game, an animation to its manager and a
+   * `FontFace` to the page, so all three outlive the scene — while a blend mode
+   * is a number on the object and dies with it. There is not even a
+   * `destroyDisplayObject` line to add, because nothing is cached.
+   */
+  private applyBlend(object: Renderable, node: GameObjectNode): void {
+    // A `particles` node is blended on its **emitter**, and it is the one case
+    // in this feature — `applyEffects`' argument immediately below, for its
+    // reason. That Container also holds the editor's own pink marker, which is
+    // chrome the exported game does not have, so blending the wrapper would
+    // make the canvas and the export disagree about a picture.
+    //
+    // It needs no write here at all: the mode is part of `emitterConfigFor`'s
+    // config, exactly as it is part of the exporter's config literal, so the
+    // canvas and the export set an emitter's blend through the *same shape* —
+    // `textStyleOf`'s two-consumer rule — and the existing `emitterConfigs`
+    // guard already covers it. Reaching in and calling `setBlendMode` on the
+    // emitter beside that would be two notions of one state, which is the
+    // eraser's and the emitter marker's refusal.
+    if (node.type === 'particles') return;
+
+    object.setBlendMode(blendModeOf(node));
+  }
+
   private applyEffects(object: Renderable, node: GameObjectNode, key: string): void {
     const effects = effectsOf(node);
     const signature = JSON.stringify(effects);
@@ -4348,12 +4394,13 @@ export class EditorScene extends Phaser.Scene {
   private applyEmitter(
     group: Phaser.GameObjects.Container,
     props: ParticlesProps,
+    blend: BlendMode,
     key: string,
   ): void {
     const emitter = this.emitters.get(key);
     if (!emitter) return;
 
-    const config = this.emitterConfigFor(props);
+    const config = this.emitterConfigFor(props, blend);
     const signature = JSON.stringify(config);
     // `setConfig` calls `resetCounters`, which restarts the flow — so applying
     // it on every store change would mean nothing ever visibly emitted.
@@ -4382,7 +4429,7 @@ export class EditorScene extends Phaser.Scene {
    * live particle, which for a field like Lifespan means the canvas going
    * blank each time the number is nudged.
    */
-  private emitterConfigFor(props: ParticlesProps): Record<string, unknown> {
+  private emitterConfigFor(props: ParticlesProps, blend: BlendMode): Record<string, unknown> {
     const asset = findAsset(this.syncing, props.assetId);
     return {
       texture: this.textureKeyFor(this.syncing, props.assetId),
@@ -4397,7 +4444,10 @@ export class EditorScene extends Phaser.Scene {
       gravityX: props.gravityX,
       gravityY: props.gravityY,
       tint: hexToNumber(props.tint),
-      blendMode: props.blendMode,
+      // Resolved rather than read raw, so a pre-v15 emitter keeps the mode it
+      // was written with and a current one reads the node's field — and so the
+      // canvas and the exporter's own config literal say the same thing.
+      blendMode: blend,
     };
   }
 

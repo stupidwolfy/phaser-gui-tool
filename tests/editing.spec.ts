@@ -101,7 +101,12 @@ test('adds a particle emitter, draws its marker, and reopens it', async ({
     (node: { name: string }) => node.name === 'Sparks',
   );
   expect(emitter.type).toBe('particles');
-  expect(emitter.props).toMatchObject({ assetId: null, lifespan: 1000, blendMode: 'NORMAL' });
+  expect(emitter.props).toMatchObject({ assetId: null, lifespan: 1000 });
+  // A blend mode is a node-level field since iteration 36, and NORMAL is
+  // *absence* — so a new emitter stores neither key. This is the one line in
+  // the suite that states that from the document's side.
+  expect(emitter.props.blendMode).toBeUndefined();
+  expect(emitter.blendMode).toBeUndefined();
   expect(emitter.transform).toMatchObject({ x: 700, y: 400 });
 
   const path = testInfo.outputPath('emitter.phaser.json');

@@ -30,6 +30,7 @@ import {
   textStyleOf,
   tileMapOf,
   touchZonesOf,
+  blendModeOf,
   effectsOf,
   tweenOf,
   withoutInstances,
@@ -2553,7 +2554,7 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
         `      gravityX: ${num(p.gravityX)},\n` +
         `      gravityY: ${num(p.gravityY)},\n` +
         `      tint: ${hexLiteral(p.tint)},\n` +
-        `      blendMode: ${str(p.blendMode)},\n` +
+        `      blendMode: ${str(blendModeOf(node))},\n` +
         `    })`
       );
     }
@@ -2683,6 +2684,39 @@ function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimatio
   // all. `emitNode` emits it as its own statement instead.
   if (node.type === 'text') out.push('.setOrigin(0.5)');
   if (rotation !== 0) out.push(`.setAngle(${num(rotation)})`);
+
+  // The first new branch in this function since `tileSprite`, and it follows
+  // *this* function's rule rather than the emitter config's — which is the one
+  // thing about it worth arguing, because the two rules sit a hundred lines
+  // apart and say opposite things. The config literal, the physics body, the
+  // camera block and the Matter body are all emitted **whole, defaults
+  // included**, because their dials only mean anything beside each other: a
+  // body's drag only bites while acceleration is zero, a lifespan only means
+  // something beside a frequency, a zoom moves the shot as well as tightening
+  // it. A blend mode means something entirely alone — one word about one
+  // object, like a tint or a flip — so a `.setBlendMode("NORMAL")` on every
+  // object in the file would be a line restating a default on every object in
+  // the file. The tint branch's own call, one property over.
+  //
+  // `setBlendMode` returns `this` (checked in `types/phaser.d.ts`, not
+  // recalled), so unlike the physics setters and the filter calls it genuinely
+  // chains. And the argument is the **quoted string**, which is the spelling
+  // this exporter has used for exactly this value in the emitter config literal
+  // since iteration 15 — so it is already proved to type-check under
+  // `tsc --strict`, it needs nothing of the shared `create()` body that can
+  // carry no cast, and `Phaser.BlendModes.ADD` would say the same thing in more
+  // characters. Phaser declares the parameter `string | Phaser.BlendModes |
+  // number`.
+  //
+  // A `particles` node is excluded, and that is not the wrapper argument the
+  // renderer makes — it is that an emitter's mode is already in the config
+  // literal `constructorFor` emits, whole. Emitting both would be the same fact
+  // twice, and moving it out of the config into the chain would break the
+  // whole-config rule and the byte-for-byte rule in one go.
+  if (node.type !== 'particles') {
+    const blend = blendModeOf(node);
+    if (blend !== 'NORMAL') out.push(`.setBlendMode(${str(blend)})`);
+  }
   if (scaleX !== 1 || scaleY !== 1) out.push(`.setScale(${num(scaleX)}, ${num(scaleY)})`);
 
   // White is Phaser's untinted state under the default multiply mode, so
