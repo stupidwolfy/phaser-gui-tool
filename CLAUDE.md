@@ -4376,7 +4376,10 @@ wants particles for, the one thing this document could not say.
   predates iteration 28 against the vocabulary that exists now.
 - **The line iteration 28 drew does not move.** Three more verbs in a list run at a moment
   Phaser already delivers, so **`update()` gains nothing**, and there is no new trigger, no
-  new table, no new `EmitContext` gate, no `prepare` flag and **no new module helper**.
+  new table, no `prepare` flag, no `Emission` gate and **no new module helper**.
+  `EmitContext` does gain one field, and it is the whole feature rather than an exception
+  to this sentence — see `ruleEmitters` below. Nothing *gates* on it: it changes what one
+  existing call prints, where a `prepare` flag decides whether a helper is declared at all.
 - **Three kinds, not one with a verb field** — the camera effects' call verbatim: the union
   is already discriminated on `kind` at the reader and at the emitter, so a second
   discriminant inside one case is a switch inside a switch for nothing.
