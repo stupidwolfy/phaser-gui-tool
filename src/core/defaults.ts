@@ -196,7 +196,17 @@ export function createNode(
           gravityX: 0,
           gravityY: 0,
           tint: '#ffffff',
-          blendMode: 'NORMAL',
+          // No `blendMode`, and the absence is the feature rather than an
+          // omission. It is `GameObjectNode.blendMode` now, where absent means
+          // NORMAL — so an emitter arrives already saying the true thing by
+          // saying nothing, and a project made before or after this iteration
+          // exports byte for byte the same emitter.
+          //
+          // The one deliberate contrast with `defaultEffect` and
+          // `defaultTween`, which both seed a *visible* value because a thing
+          // that arrives doing nothing is indistinguishable from the feature
+          // being broken. A blend mode is never added, it is chosen: there is
+          // no press to make visible, so that rule does not transfer.
           alpha: 1,
         },
       };

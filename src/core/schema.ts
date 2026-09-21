@@ -1340,10 +1340,26 @@ export interface ParticlesProps {
   /** '#ffffff' means untinted, the same convention a sprite's tint uses. */
   tint: string;
   /**
-   * 'ADD' is what makes fire look like fire rather than a heap of opaque
-   * discs. Two options, so a select rather than a number.
+   * 'ADD' is what makes fire look like fire rather than a heap of opaque discs.
+   *
+   * @deprecated The pre-v15 single answer, and the one type that ever had
+   * somewhere to put a blend mode. A `ParticleEmitter` mixes in Phaser's
+   * BlendMode component exactly as every other game object does, so this and
+   * `GameObjectNode.blendMode` were never two questions — they were two answers
+   * to one, which is the thing a sprite having no width of its own, a tilemap
+   * no tile size and a camera no rectangle all exist to refuse. Written by no
+   * build from v15 on and read only by `blendModeOf`'s migration;
+   * `setNodeBlendMode` deletes it when it writes, so the document holds one
+   * shape and only one — `setAssetSheet` and `setAssetAtlas` deleting each
+   * other's field, one type over.
+   *
+   * Optional rather than deleted outright, and that is the point of it: it
+   * turns every remaining consumer into a **compile error** instead of a silent
+   * one, which is the `clampFrame` -> `resolveFrame` trick applied to a field.
+   * The declared type stays the two values, because that is all any build could
+   * ever have written here.
    */
-  blendMode: 'NORMAL' | 'ADD';
+  blendMode?: 'NORMAL' | 'ADD';
   /** The emitter object's own alpha, as every node type has. */
   alpha: number;
 }
@@ -1443,6 +1459,33 @@ export type GameObjectNode = {
      * prefab definition draws in every placement.
      */
     fx?: NodeEffect[];
+    /**
+     * How this object composites with what is already on the canvas behind it,
+     * or absent for everything drawn plain.
+     *
+     * The **fifth** optional field here, beside `physics`, `controls`, `tween`
+     * and `fx`, and for `fx`'s reason: it is not a per-type setting, so every
+     * entry of `NodePropsByType` would carry the same word and `createNode`
+     * would have to answer "what is this rectangle's blend mode". Optional for
+     * the reason `guides` is, and read through `blendModeOf`, never directly.
+     *
+     * Like `tween` and `fx`, and unlike `physics` and `controls`, there is **no
+     * top-level rule**, and the contrast is the point rather than an omission.
+     * A body and a drive-scheme are banned inside a container because both read
+     * their owner's `x`/`y` as *world* coordinates every step; a blend mode
+     * writes no coordinate at all — it is one word about how pixels already
+     * drawn meet the pixels under them. So `blendModeOf` takes no `topLevel`
+     * argument, nothing is stripped on read, `setNodeBlendMode` reaches a node
+     * at any depth, and a blend inside a prefab definition draws in every
+     * placement.
+     *
+     * **Absent means `NORMAL`**, which is what keeps every project written
+     * before this existed exporting byte for byte what it exported before —
+     * the rule the asset table, the tilemap helper and the prefab factories all
+     * follow. It is also why `createNode` seeds nothing: a new object arrives
+     * already saying the true thing by saying nothing.
+     */
+    blendMode?: BlendMode;
     /**
      * Nested nodes, positioned relative to this one. Only a `container`
      * renders them, but the array is present on every node so that traversal,
@@ -2270,6 +2313,101 @@ export function defaultEffect(kind: NodeEffect['kind']): NodeEffect {
     case 'pixelate':
       return { kind: 'pixelate', amount: 6 };
   }
+}
+
+/**
+ * The blend modes this editor offers, and an allowlist for the reason
+ * `TWEEN_EASES`, `RULE_KEYS` and `EFFECT_KINDS` are ones: the argument is never
+ * injection — `str()` already sits between the value and the output — it is
+ * that a mode Phaser's renderer does not implement is a **silent no-op**. No
+ * warning, no error, and a picture that simply never changes, which is
+ * indistinguishable from the feature being broken. Refuse the value rather than
+ * discover it on the far side of an export. It is also what makes the control a
+ * `SelectField`, the atlas Frame field's argument.
+ *
+ * These four and no more, and the number was **read out of the shipped package
+ * rather than recalled** — `node_modules/phaser/skills/game-object-components`
+ * and the `setBlendMode` doc comment in `types/phaser.d.ts` both say that under
+ * WebGL only NORMAL, ADD, MULTIPLY, SCREEN and ERASE exist, and the
+ * `v3-to-v4-migration` skill puts it most sharply: *"Canvas retains one
+ * advantage: 27 blend modes vs WebGL's 4 native modes."* Both the editor's
+ * canvas and the exported page run WebGL, so the other 23 are a control that
+ * would do nothing on the one renderer anybody here uses. That is Phaser's
+ * limit rather than this editor's — the `NineSlice`-cannot-animate sentence,
+ * one component over.
+ *
+ * **ERASE is left out, and for its own reason rather than that one.** It is a
+ * WebGL mode, so it would work; what it does is cut a hole through to what is
+ * *behind the object*, which on this canvas is the editor's own background and
+ * in the export is the game's. The migration skill notes the v4 way to mean it
+ * properly needs "indirection through a `CaptureFrame`, `DynamicTexture`, or
+ * similar" — a render target the document has no way to name. So an ERASE here
+ * would draw one thing in the editor and another in a game that composites over
+ * anything, which is the single failure this project guards hardest against.
+ * A loosening later, and it is a render-texture feature rather than one array
+ * entry.
+ *
+ * `NORMAL` is in the list *and* is the absent state, which is not a
+ * contradiction: the list is what the picker offers and what the reader
+ * accepts, and "put it back to normal" has to be sayable.
+ */
+export const BLEND_MODES = ['NORMAL', 'ADD', 'MULTIPLY', 'SCREEN'] as const;
+
+/** How an object composites with what is behind it. */
+export type BlendMode = (typeof BLEND_MODES)[number];
+
+/**
+ * The only reader of a node's blend mode, in the `effectsOf` / `tweenOf` /
+ * `physicsOf` / `guidesOf` / `tileMapOf` family, and it answers three questions
+ * at once: is there a mode here, is it one this editor can both draw *and*
+ * emit, and — the migration — is this a `particles` node written before the
+ * mode moved off its props.
+ *
+ * **It is the one reader in that family that is not React error #185 in a
+ * zustand selector**, and that is worth saying because thirteen of its
+ * neighbours carry the opposite warning. `tileMapOf`, `effectsOf`, `tweenOf`,
+ * `cameraOf` and the rest build a fresh object or array per call, so a selector
+ * returning one compares unequal on every render. This returns a bare string,
+ * which zustand compares by value. Say it, or the next reader adds a warning
+ * that is not true.
+ *
+ * The new field wins a document that somehow says both, which is `atlasOf`'s
+ * tie-break **inverted** and deliberately so: there a grid wins because it is
+ * the older shape and therefore the one an older build could have written, and
+ * here the only way both can be present is that an old build wrote the prop and
+ * a current build then wrote the field — so the field is the later statement of
+ * intent. `setNodeBlendMode` makes that state unreachable anyway: strip on
+ * read, refuse on write, for the sixth time.
+ *
+ * A value this list does not hold answers `NORMAL` rather than costing the
+ * node. *A repair may narrow what the document says; it may never widen it* is
+ * satisfied trivially, there being no gate inside a blend mode to open.
+ */
+export function blendModeOf(node: GameObjectNode): BlendMode {
+  const own = node.blendMode;
+  if (typeof own === 'string' && (BLEND_MODES as readonly string[]).includes(own)) {
+    return own as BlendMode;
+  }
+
+  // The migration, and the only place the pre-v15 shape is read. A `particles`
+  // node written before a blend mode was a fact about *any* object carries it
+  // on its props, where it was the one type that already had somewhere to put
+  // one. `tileMapOf`'s pre-v12 grid, one field over.
+  //
+  // Deliberately *not* `editTilemapProps`' normalise-on-every-write: a tilemap
+  // normalises on every write because `layers` and `data` are two spellings of
+  // one array that later writes both touch, while this is one word with one
+  // reader. A legacy emitter edited in some other field keeps its stale prop
+  // and nothing disagrees, because nothing else reads it. Said out loud,
+  // because "lazy migration" and "forgot to normalise" read identically.
+  if (node.type === 'particles') {
+    const legacy = node.props.blendMode;
+    if (typeof legacy === 'string' && (BLEND_MODES as readonly string[]).includes(legacy)) {
+      return legacy as BlendMode;
+    }
+  }
+
+  return 'NORMAL';
 }
 
 /**

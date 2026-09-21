@@ -106,7 +106,15 @@ object be drawn with something over it: a glow, a blur, a drop shadow or a pixel
 Phaser 4 *filters* — the largest hole this file's own "Not built yet" list never once
 named, and the first feature in a long while where the editor and the exported game do the
 same thing rather than one describing the other, because a filter is a standing fact about
-how an object is drawn rather than a step of a simulation.
+how an object is drawn rather than a step of a simulation. Iteration 36 (shipped) said how
+an object *meets* what is behind it: a blend mode on any node, drawn and exported alike —
+which is the third thing named in the one sentence that found filters, and the one nothing
+ever asked about again, so it is iteration 34's closing lesson landing twice in a row. The
+second iteration to take a field **off** a props interface, after iteration 25 moved a
+tilemap's `data` into its layers — and it deliberately copies that one's mechanics: a blend
+mode had lived on `ParticlesProps` since iteration 15, where it was one type's answer to a
+question every type asks, so the work was less the four modes than the migration that leaves
+the document saying it once.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -1802,6 +1810,234 @@ question.**
   which is exactly the refusal that keeps a seventh tween property out. And **no effect on a
   tilemap layer, a prefab child from outside, or a group's children individually**: an
   effect is on a node, and a layer is not one.
+
+## Blend modes
+
+A node may carry `blendMode?: BlendMode` — `NORMAL`, `ADD`, `MULTIPLY` or `SCREEN` — and it
+is drawn on the canvas and emitted in the export identically, because like a filter a blend
+mode is a standing fact about *how an object is drawn* rather than a step of a simulation.
+
+- **This is iteration 34's closing lesson arriving on schedule, for the second time
+  running.** *A refusal list is a list of things somebody thought of, and the hole that
+  survives is the one nothing prompted the question.* Iteration 35 quoted that against
+  filters, and the sentence it quoted named **three** things absent from `src/`: masks,
+  filters and blend modes. Filters shipped. Masks are refused with an argument. Blend modes
+  were never mentioned again — and the grep that found them was one line long: `blendMode`
+  lived in exactly one place, as a **per-type particles prop**, so a fire emitter could say
+  "add me to what is behind" while a glowing sprite, a highlight panel and a text caption
+  could not. The list never named it because the list is a record of questions somebody
+  asked, and nobody asked this one.
+- **One field, and the particles prop migrated into it — the whole iteration turns on
+  this.** A `ParticleEmitter` mixes in Phaser's BlendMode component exactly as every other
+  game object does, so `ParticlesProps.blendMode` and a node-level field were never two
+  questions; they were **two answers to one**, which is what a sprite having no width of its
+  own, a tilemap no tile size, a camera no rectangle and a text node a `fontFamily` rather
+  than a `fontId` all exist to refuse. The rejected shape was to leave the prop alone and
+  exclude `particles` from the node-level field: cheaper by one reader and one migration,
+  and wrong three times over — it is two answers to one question; it makes `particles` the
+  one type whose blend is per-type, so the two allowlists are free to drift (and
+  `TAPPABLE_TYPES`-beside-`PHYSICS_TYPES` is a *deliberate* second list asking a different
+  question, where this would be an accidental one asking the same); and it puts two fields
+  about blending on one panel, which the suite's exact-match locator turns into a failure.
+  This is the second iteration to take a field **off** a props interface — iteration 25
+  moved a tilemap's `data` and `collides` into its layers the same way, and the deprecation
+  comment, the migration-on-read and the delete-on-write here are all copied from it rather
+  than invented.
+- **A fifth optional top-level field**, beside `physics`, `controls`, `tween` and `fx`, for
+  `fx`'s reason: it is not per-type, so every entry of `NodePropsByType` would carry the same
+  word and `createNode` would have to answer "what is this rectangle's blend mode".
+- **No top-level rule, which is `tween`'s and `fx`'s call and not `physics`'.** A body and a
+  drive-scheme are banned inside a container because both read their owner's `x`/`y` as
+  *world* coordinates every step; a blend mode writes no coordinate at all. So `blendModeOf`
+  takes no `topLevel` argument, nothing is stripped on read, `setNodeBlendMode` reaches
+  through `mapNode`, and a blend inside a prefab definition draws in every placement. Worth
+  saying in as many words, because two of its four neighbours ban exactly this and the code
+  reads like a missed guard.
+- **Four modes, and the number was read out of the shipped package rather than recalled.**
+  `node_modules/phaser/skills/game-object-components/SKILL.md` and `setBlendMode`'s own doc
+  comment in `types/phaser.d.ts` both say that under WebGL only NORMAL, ADD, MULTIPLY,
+  SCREEN and ERASE exist; the `v3-to-v4-migration` skill puts it sharpest — *"Canvas retains
+  one advantage: 27 blend modes vs WebGL's 4 native modes."* Both this canvas and the
+  exported page run WebGL, so the other 23 are a control that would do nothing on the only
+  renderer anybody here uses. That is Phaser's limit rather than this editor's, the
+  `NineSlice`-cannot-animate sentence one component over. "Phaser 4, not 3" for the fifth
+  time, and the one iteration where following it cost a single grep.
+- **`BLEND_MODES` is an allowlist and the argument is not injection** — `str()` already sits
+  between the value and the output. It is `TWEEN_EASES`' and `RULE_KEYS`' reason exactly: a
+  mode Phaser does not implement is a **silent no-op**, no warning and no error and a picture
+  that simply never changes, which is indistinguishable from the feature being broken.
+  Refuse the value rather than discover it on the far side of an export. It is also what
+  makes the control a `SelectField`.
+- **ERASE is left out for its own reason rather than that one.** It *is* a WebGL mode, so it
+  would work; what it does is cut a hole through to what is behind the object, which on this
+  canvas is the editor's own background and in the export is the game's — and the migration
+  skill notes that meaning it properly in v4 needs "indirection through a `CaptureFrame`,
+  `DynamicTexture`, or similar", a render target the document has no way to name. So an
+  ERASE would draw one thing here and another in a game that composites over anything, which
+  is the single failure this project guards hardest against. A render-texture feature, not
+  one array entry.
+- **`blendModeOf` is the only reader**, in the `effectsOf` / `tweenOf` / `physicsOf` /
+  `guidesOf` / `tileMapOf` family, answering three questions at once: is there a mode, is it
+  one this editor can both draw *and* emit, and is this a `particles` node written before the
+  mode moved off its props. **It is the first reader in that family that is *not* React error
+  #185 in a zustand selector**, and that needs saying because thirteen of its neighbours
+  carry the opposite warning: they build a fresh object or array per call, and this returns a
+  bare string, which zustand compares by value. Say it, or the next reader adds a warning
+  that is not true.
+- **The new field wins a document that says both, which is `atlasOf`'s tie-break inverted.**
+  There a grid wins because it is the older shape and therefore the one an older build could
+  have written; here the only way both can be present is that an old build wrote the prop and
+  a current build then wrote the field, so the field is the later statement of intent. The
+  store makes that state unreachable anyway — strip on read, refuse on write, for the sixth
+  time.
+- **The migration is deliberately *not* `editTilemapProps`' normalise-on-every-write.** A
+  tilemap normalises on every write because `layers` and `data` are two spellings of one
+  array that later writes both touch; this is one word with one reader, so a legacy emitter
+  edited in some other field keeps its stale prop and nothing disagrees, because nothing else
+  reads it. Only the blend write normalises. Said out loud, because "lazy migration" and
+  "forgot to normalise" read identically.
+- **`setNodeBlendMode` is a store action of its own, and `updateProps` genuinely could not do
+  it.** `updateProps` spreads a patch, so it can set a key and can never *remove* one:
+  `{ blendMode: undefined }` leaves the key holding undefined, which survives in memory,
+  vanishes through `JSON.stringify`, and gives the document two spellings of "off". That is
+  why `setNodePhysics`, `setNodeControls`, `setNodeTween` and `setNodeLabel` all `delete`,
+  and NORMAL is absence here in exactly that way. The second reason is that it strips the
+  pre-v15 particles prop in the same write, which a props patch could not do at all.
+- **Absent means NORMAL, and `createNode` seeds nothing** — the rule the asset table, the
+  tilemap helper, the prefab factories and `NodeControls.touch` all follow, so every project
+  written before this exports byte for byte what it exported before. It is the one deliberate
+  contrast with `defaultEffect` and `defaultTween`, which both seed a *visible* value because
+  a thing that arrives doing nothing looks like a broken feature: a blend mode is never
+  added, it is **chosen**, so there is no press to make visible and that rule does not
+  transfer.
+- **A `particles` node is blended on its emitter, not on its wrapper — and it needs no
+  renderer write at all.** `applyBlend` returns early for one. The mode is part of
+  `emitterConfigFor`'s config, exactly as it is part of the exporter's config literal, so the
+  canvas and the export set an emitter's blend through the *same shape* — `textStyleOf`'s
+  two-consumer rule — and the existing `emitterConfigs` guard already covers it. Reaching in
+  and calling `setBlendMode` on the emitter beside that config would be two notions of one
+  state, which is the tile eraser's and the emitter marker's refusal. The wrapper is refused
+  for `applyEffects`' reason verbatim: it also holds the editor's own pink marker, which is
+  chrome the exported game does not have.
+- **No cache guard, and the absence is deliberate** — which needs saying beside three
+  neighbours that all have one and all explain why. `applyTextStyle`, `setConfig` and
+  `applyEffects` are guarded because applying is expensive or destructive: `setStyle`
+  re-rasterises a text object's own canvas, `setConfig` calls `resetCounters` and restarts
+  the flow, `applyEffects` tears down and rebuilds a `FilterList`. `setBlendMode` assigns a
+  number and marks the object dirty. The batch flush Phaser's docs warn about is a cost of
+  *drawing* two modes in a row, which no guard could avoid.
+- **SHUTDOWN needs nothing and `destroyDisplayObject` gains no line**, because nothing is
+  cached. A texture belongs to the game, an animation to its manager and a `FontFace` to the
+  *page*, so all three outlive the scene; a blend mode is a number on the object and dies
+  with it. `shapeOf` gains nothing either — an in-place setter, the emitter's `setConfig`
+  case rather than the nine-slice's, and folding it into the rebuild signature would destroy
+  and recreate the object for a word.
+- **The export is one `modifiersFor` branch, the first since `tileSprite`, and it follows
+  *that* function's rule where the emitter config follows the opposite.** The config literal,
+  the physics body, the camera block and the Matter body are all emitted whole because their
+  dials only mean anything beside each other — a body's drag only bites while acceleration is
+  zero, a lifespan only means something beside a frequency. A blend mode means something
+  entirely alone, one word about one object like a tint or a flip, so `.setBlendMode("NORMAL")`
+  on every object in the file would be a line restating a default on every object in the file.
+  The tint branch's own call, one property over.
+- **`setBlendMode` returns `this`**, checked in `types/phaser.d.ts` rather than recalled — so
+  unlike the physics setters and the filter calls it genuinely chains, and `modifiersFor`
+  needed no "there is no branch here, and here is why" comment for once. The argument is the
+  **quoted string**, which is the spelling this exporter has used for exactly this value in
+  the emitter config literal since iteration 15 and is therefore already proved to type-check
+  under `tsc --strict`; it also needs nothing of the shared `create()` body, which is the same
+  plain JavaScript in the `.ts`, the `.js` and the runnable page and can carry no cast.
+  Phaser declares the parameter `string | Phaser.BlendModes | number`.
+- **A `particles` node is excluded from that branch, and not for the renderer's reason** — it
+  is that an emitter's mode is already in the config literal, emitted whole. Emitting both
+  would be the same fact twice, and moving it out of the config into the chain would break
+  the whole-config rule and the byte-for-byte rule in one go.
+- **No gate, no table, no `EmitContext` field, no `prepare` flag and no new module helper**,
+  so nothing is drawn from the module identifier set and **nothing above it moves** —
+  `toIdentifier` suffixes a clash and four helper names are asserted verbatim in the suite.
+  Iteration 31's "nothing moved" for the second time.
+- **`constructorFor` gains no case, so every step of this feature is silent** — the renderer,
+  the exporter, the inspector and the store alike, exactly as the whole of physics, cameras,
+  behaviour and touch were. There is no `effectCallFor`-style exhaustive switch to catch a
+  new mode. `blend.spec.ts`, `export.spec.ts` and `export-toolchain.spec.ts` stand in for the
+  compiler. What the compiler *did* do was find the work: making `ParticlesProps.blendMode`
+  optional rather than deleting it turned both remaining consumers into compile errors, which
+  is the `clampFrame` → `resolveFrame` trick applied to a field.
+- **The panel is a new flat peer `Blend` section above `Effects`**, rendered for every node
+  type because Phaser mixes BlendMode into the base `GameObject` — so there is no eligibility
+  list to keep in step, `EffectsSection`'s sentence one field over. Not a row inside an
+  `Appearance` section, because there are five of those, one per type branch, so a field
+  belonging to *every* node would be reachable on half the types and missing on the rest.
+  And not a row inside `Effects`, because folding it in would have meant retitling that
+  section — and **a `Section` title is a persisted storage key**, so the rename would silently
+  reset it for every existing user. Above Effects because that is the order the pixels go in.
+- **The label is `Blend mode`**, never the bare `Blend` the particles panel used to carry and
+  never `Mode`: the suite matches a label exactly, and that panel already holds a Frame, a
+  Name and a Kind. The section title `Blend` collides with no `SECTION_TITLE` value, no other
+  `Section` title, and none of the mobile tab bar's exactly-matched `Scene`/`Properties`/`File`.
+- **`SCHEMA_VERSION` did not bump — the guides case, thirteenth time, and the reasoning is
+  worth keeping because it nearly went the other way.** No new `NodeType`, so a v14
+  `createDisplayObject` has a case for everything in the file, and `node.blendMode` rides in
+  on `scenes`, which `parseProject` passes through verbatim, **and on `prefabs.children`,
+  which `parsePrefabs` also passes through unvalidated**. The half that had to be thought
+  about is the particles migration, because a current build *deletes* `props.blendMode` and a
+  v14 build reads that prop in two places. What settles it was read out of the shipped
+  package rather than predicted: `ParticleEmitter`'s `configFastMap` loop assigns through
+  `HasValue`, and the `blendMode` setter does `value |= 0`, which coerces `undefined` to `0`
+  — NORMAL — and assigns. **No throw**, so the crash half does not fire. Its exporter prints
+  `str(undefined)`, which is `JSON.stringify(undefined)`, the *value* `undefined`, so the
+  emitted line reads `blendMode: undefined,` and runs as NORMAL. So a v14 build draws and
+  exports that one emitter plain — and loses nothing from the file, because `node.blendMode`
+  survives its re-save verbatim and `props.blendMode` was already gone before it arrived.
+  **An old build doing less, not a file breaking**, which is iterations 31, 33 and 34's edge
+  exactly, and emphatically *not* the v12 tilemap-layers case, which bumped because the old
+  build wrote the loss back into the file. `blend.spec.ts` asserts the 14 in the saved
+  artefact so a future bump is a deliberate act.
+- **One edge recorded rather than left to be found**: a v14 build's own particles Blend
+  select renders with `value={undefined}`, shows "Normal", and *writing* it puts
+  `props.blendMode` back — after which a current build ignores that edit, because the reader
+  prefers the node field. An old build's edit silently not taking effect is the sharpest
+  thing here, and it is still not a file breaking.
+- **The suite's instrument is a colour that is on neither object alone**, which is a strictly
+  stronger reading than the glow's next door: that one only had to find its colour *outside*
+  a box, where this finds a colour no object in the scene was given. Additive blending puts
+  `BACK + SHAPE` on the canvas, so "it blended at all" is `count > 0` where a feature
+  silently doing nothing gives exactly 0 — and the negative half is what makes it mean
+  something: back at Normal that colour is gone while both fills remain.
+- **The three colours were picked by arithmetic, not by eye**, which `TOUCH_COLOR`,
+  `TWEEN_COLOR`, `SPAWN_COLOR` and `GLOW` all record nearly getting wrong. Checked against
+  every hex literal in `tests/` and every chrome colour in `EditorScene.ts`, 53 in all,
+  against `findColor`'s tolerance of 24: backdrop `#aa66aa` at a worst channel margin of 71,
+  shape `#448800` at 68, and the sum `#eeeeaa` at 68, with the sum 136 and 170 from the two
+  sources. **No channel clamps**, so the arithmetic is exact rather than saturated and the
+  claim is about blending rather than about hitting the ceiling. Re-run that check when a
+  fixture colour is added anywhere in the suite.
+- **`blend.spec.ts` needs no raised timeout and no long poll budget**, unlike
+  `effects.spec.ts` beside it: a live filter puts the frame through a framebuffer the
+  headless container rasterises on the CPU, and a blend mode is a blend-state change that
+  costs the software renderer nothing measurable. Said in the file, because a reader arriving
+  from the neighbouring spec will wonder where the line went.
+- **The particles claim is asserted through the document and the export, never through
+  pixels**, and deliberately: an emitter is stopped unless ▶ is on, and what a running
+  emitter's blended particles average to at one instant is a race with the frame rate.
+  Typography's call for weight and slant. One trap it cost on the first run: an emitter with
+  no image emits a `missingReason` comment rather than an `add.particles` call, so a fixture
+  meant to assert the config literal has to carry a real one — found by running the test, not
+  by reading.
+- **`hasMotionIn` is untouched and records its thirteenth refusal**, which is the easy one
+  for once: a blend mode does not move.
+
+**What stays refused.** **No canvas-only modes** — the other 23 are Phaser's limit under
+WebGL, and offering one would be the silent no-op the allowlist exists to prevent; the v4
+`Blend` *filter* can recreate them, and that is a render-texture feature and a fifth
+`NodeEffect` kind rather than an array entry here. **No ERASE**, above. **No custom blend
+equation**, which is a shader, which is code in the document — the emit-zone argument and the
+gradient fill's. **No blend mode on a tilemap layer, a prefab child from outside, or a
+group's children individually** — `fx`'s refusal verbatim: a blend mode is on a node, and a
+layer is not one. **No camera-wide blend**, which is a property of the view, and iteration 31
+already put what happens to a view on a rule. And **no animating one** — a tween's `to` is six
+numeric properties that are one shape across the whole union, and a mode is a discrete word,
+which is exactly the refusal that keeps a seventh tween property out.
 
 ## Tweens
 
@@ -4575,6 +4811,9 @@ tests/
                             document that never moves
   effects.spec.ts           a glow drawn outside the object it is on, a blur that
                             takes its fill away, and a list that keeps its order
+  blend.spec.ts             an object composited over what is behind it, a mode
+                            that round-trips, and an emitter that keeps the one
+                            it was written with
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
   fonts.spec.ts             a font imported, drawn, round-tripped, removed and exported
@@ -4628,6 +4867,15 @@ The first carries no free user text to escape and is not there for escaping: it 
 only place the emitted config literal's *shape* meets `ParticleEmitterConfig` under
 `tsc --strict`, which is where a Phaser config key renamed between versions would fail and
 nowhere else.
+
+That emitter is also, since iteration 36, the only thing in the suite carrying a **pre-v15
+blend mode** — the mode on its props with no node-level field beside it, a shape only a hand
+edit or an older build can hold. It is the one fixture that fails if `blendModeOf`'s
+migration is dropped, and the reason `export.spec.ts`' `blendMode: "ADD"` assertion goes on
+passing unchanged, which is that migration reaching the exporter. Beside it the booted scene
+carries an `ADD` node and the registered-never-started scene a `MULTIPLY` one — the booted
+one costs that frame nothing where a filter cost it seconds, which is why a blend can sit
+there and three of the four filter kinds cannot.
 
 It holds two sounds and four scene rows registering them, for the reasons the emitter and
 the bodies are there: a hostile *file name*, because that name becomes the audio cache key
@@ -4877,13 +5125,25 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
-Visual effects shipped in iteration 35, and they are the entry worth reading first, because
-nothing on this list had ever named them. Masks, filters and blend modes were absent from
-`src/` entirely while the "Phaser 4, not 3" bullet had been saying for thirty iterations
-that those three had all changed — which is iteration 34's own closing lesson arriving on
-schedule. What the feature leaves is short, because it adds no table, no node type and no
-reference. **No masks**, which is the obvious next ask and is an iteration rather than a
-member: `addMask` takes a texture or another game object, so it needs a picker, a
+Blend modes shipped in iteration 36 and are the entry worth reading first, because of the
+three things named in the sentence below, that was the one nobody went back for. Masks,
+filters and blend modes were all absent from `src/` while the "Phaser 4, not 3" bullet had
+been saying for thirty iterations that those three had changed. Filters shipped in 35 and
+the paragraph announcing them quoted iteration 34's closing lesson — *a refusal list is a
+list of things somebody thought of, and the hole that survives is the one nothing prompted
+the question* — and then left two of its own three untouched. One of them was refused with
+an argument, which is a decision; the other was simply not mentioned again, which is the
+lesson repeating inside the paragraph that states it. **The reading to carry forward: a
+sentence naming three gaps is not a list of three tasks, and the one that is neither done
+nor argued against is the one to go back to.** What blend modes leave is short, and all of
+it is in the section above: no canvas-only modes, no ERASE, no custom blend equation, no
+per-layer or per-child blend, no camera-wide blend, and no animating one. **Masks are now
+the last of the three still standing**, and still an iteration rather than a member.
+
+Visual effects shipped in iteration 35, and they were the entry worth reading first before
+that, because nothing on this list had ever named them either. What that feature leaves is
+short, because it adds no table, no node type and no reference. **No masks**, which is the
+obvious next ask and is an iteration rather than a member: `addMask` takes a texture or another game object, so it needs a picker, a
 dangling-reference story and a `removeAsset` patch — and it would be the first thing in
 this document that points at *another node*. **No camera-wide effects here**, since a
 filter on `cameras.main` is a property of the view and iteration 31 already put what

@@ -1337,7 +1337,9 @@ export function hostileProject(): Project {
             // one of its eighteen fields.
             //
             // Its point is not escaping — the config carries no free user text
-            // beyond `blendMode` — but that `export-toolchain.spec` compiles
+            // at all, `blendMode` included, which is allowlisted by
+            // `blendModeOf` and printed through `str()` — but that
+            // `export-toolchain.spec` compiles
             // the emitted `.ts` under `tsc --strict` against the real Phaser
             // types. That is the only place the config literal's *shape* is
             // checked against `ParticleEmitterConfig`, and a key Phaser renamed
@@ -1364,6 +1366,12 @@ export function hostileProject(): Project {
               gravityX: 15,
               gravityY: 120,
               tint: '#ff8800',
+              // Deliberately the **pre-v15 shape**: the mode on the props, with
+              // no node-level `blendMode` beside it. This is the only emitter
+              // in the suite written the old way, so it is the only thing that
+              // fails if `blendModeOf`'s migration is dropped — and it is what
+              // keeps `export.spec.ts`' `blendMode: "ADD"` assertion passing
+              // unchanged, which is that migration reaching the exporter.
               blendMode: 'ADD',
               alpha: 0.85,
             },
@@ -1545,6 +1553,16 @@ export function hostileProject(): Project {
             // `arcadeBodyFilters`, is a free test that the suffix rule holds
             // for this feature's binding too.
             fx: [{ kind: 'pixelate' as const, amount: 2 }],
+            // And an ADD blend, in the booted scene for the pixelate's first
+            // reason: it makes `.setBlendMode` a call the running game really
+            // makes rather than only one the compiler reads. It costs this
+            // frame nothing where a filter cost it seconds, which is why it can
+            // sit here and three of the four filter kinds cannot.
+            //
+            // On this node for the pixelate's second reason too: its fill is
+            // the one in the project nothing measures, so compositing it over
+            // the background cannot move any assertion in `export.spec.ts`.
+            blendMode: 'ADD' as const,
             children: [],
           },
           {
@@ -1685,6 +1703,14 @@ export function hostileProject(): Project {
               { kind: 'blur' as const, quality: 1, x: 1, y: 1, strength: 2 },
               { kind: 'shadow' as const, x: 2, y: 3, decay: 0.2, power: 2, color: '#123456' },
             ],
+            // MULTIPLY here rather than in the booted scene, which is the same
+            // split the three filter kinds above take and for a lighter version
+            // of their reason: the emitted `.ts` carries every scene, so
+            // `tsc --strict` meets a second mode's emitted call without any
+            // frame ever drawing it. ADD is in `scene-1`, SCREEN is exercised
+            // by `blend.spec.ts`' export claim, and NORMAL is the absence every
+            // other node in this project already asserts.
+            blendMode: 'MULTIPLY' as const,
             children: [],
           },
         ],

@@ -33,6 +33,8 @@ import {
   containsNode,
   controlsOf,
   defaultEffect,
+  blendModeOf,
+  BLEND_MODES,
   effectsOf,
   findAsset,
   findAudio,
@@ -60,6 +62,7 @@ import {
   tweenOf,
   variableKindOf,
   type GameObjectNode,
+  type BlendMode,
   type NodeEffect,
   type NineSliceProps,
   type ParticlesProps,
@@ -3071,15 +3074,6 @@ function ParticlesSection({
           value={node.props.tint}
           onChange={(tint) => setProp({ tint })}
         />
-        <SelectField
-          label="Blend"
-          value={node.props.blendMode}
-          options={[
-            { value: 'NORMAL', label: 'Normal' },
-            { value: 'ADD', label: 'Add' },
-          ]}
-          onChange={(blendMode) => setProp({ blendMode: blendMode as 'NORMAL' | 'ADD' })}
-        />
       </Section>
 
       <Section title="Appearance">
@@ -3542,6 +3536,8 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
       <PhysicsSection node={node} />
 
       <TweenSection node={node} />
+
+      <BlendSection node={node} />
 
       <EffectsSection node={node} />
 
@@ -4230,6 +4226,52 @@ function EffectFields({
  * output, so the arrows are not a convenience — a glow under a pixelate and a
  * pixelate under a glow are two different pictures.
  */
+/**
+ * How this object composites with what is already drawn behind it.
+ *
+ * On every node type, because Phaser mixes BlendMode into the base
+ * `GameObject` — so there is no eligibility list here the way `PHYSICS_TYPES`
+ * is one, and nothing to keep in step with it. `EffectsSection`'s sentence, one
+ * field over, and it is why this is its own flat peer rather than a row inside
+ * an `Appearance` section: there are five of those, one per type branch, so a
+ * field that belongs to *every* node would be reachable on half the types and
+ * missing on the rest.
+ *
+ * Its own section rather than a row inside Effects for the same reason those
+ * are flat peers at all: a filter is a pass over this object's own pixels and a
+ * blend mode is how the result meets what is under it. Neighbouring subjects,
+ * not one subject — and folding it in would have meant retitling `Effects`,
+ * which is a **persisted storage key** (`Section` keys its open state by
+ * title), so the rename would silently reset that section for every existing
+ * user.
+ *
+ * Above Effects in the panel, because that is the order the pixels go in.
+ */
+function BlendSection({ node }: { node: GameObjectNode }) {
+  const setNodeBlendMode = useEditorStore((s) => s.setNodeBlendMode);
+
+  return (
+    <Section title="Blend">
+      <SelectField
+        // "Blend mode", never the bare "Blend" the particles panel used to
+        // carry and never "Mode": the suite matches a label exactly, and this
+        // panel already holds a Frame, a Name and a Kind.
+        label="Blend mode"
+        value={blendModeOf(node)}
+        options={BLEND_MODES.map((mode) => ({
+          value: mode,
+          label: mode.charAt(0) + mode.slice(1).toLowerCase(),
+        }))}
+        onChange={(mode) => setNodeBlendMode(node.id, mode as BlendMode)}
+      />
+      <p className="hint">
+        Add and Screen lighten what is behind; Multiply darkens it. Normal is the default
+        and stores nothing.
+      </p>
+    </Section>
+  );
+}
+
 function EffectsSection({ node }: { node: GameObjectNode }) {
   const addEffect = useEditorStore((s) => s.addEffect);
   const setEffect = useEditorStore((s) => s.setEffect);

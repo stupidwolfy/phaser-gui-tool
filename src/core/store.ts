@@ -34,6 +34,7 @@ import {
   defaultControls,
   defaultEffect,
   defaultTween,
+  blendModeOf,
   effectsOf,
   findAsset,
   findNode,
@@ -70,6 +71,7 @@ import {
   tileMapOf,
   MAX_EFFECTS,
   RAW_DECIMALS,
+  type BlendMode,
   type NodeEffect,
   type NodeTween,
   type VariableLabel,
@@ -739,6 +741,15 @@ export interface EditorState {
   removeEffect: (id: string, index: number) => void;
   /** Moves one effect along the list, which is the order the passes run in. */
   moveEffect: (id: string, index: number, delta: number) => void;
+  /**
+   * Sets how a node composites with what is behind it, at any depth.
+   *
+   * Its own action rather than an `updateProps` patch because `NORMAL` is
+   * *absence* and a spread cannot remove a key — `setNodePhysics`,
+   * `setNodeControls`, `setNodeTween` and `setNodeLabel`'s reason — and because
+   * it also strips the pre-v15 `ParticlesProps.blendMode` in the same write.
+   */
+  setNodeBlendMode: (id: string, mode: BlendMode) => void;
   /**
    * Binds a text node's caption to a variable, edits the format, or unbinds it
    * with `null`.
@@ -3212,6 +3223,48 @@ export const useEditorStore = create<EditorState>((set, get) => {
             const [moved] = fx.splice(index, 1);
             fx.splice(to, 0, moved);
             return { ...current, fx } as GameObjectNode;
+          }),
+        };
+      }),
+
+    // An action of its own, for two independent reasons — `setNodeLabel`'s
+    // shape, and its first reason verbatim. `updateProps` **spreads a patch,
+    // so it can set a key and can never remove one**: `{ blendMode: undefined }`
+    // leaves the key holding undefined, which survives in memory, vanishes
+    // through `JSON.stringify`, and gives the document two spellings of "off".
+    // That is why `setNodePhysics`, `setNodeControls`, `setNodeTween` and
+    // `setNodeLabel` all `delete`, and a blend has the same property: NORMAL is
+    // absence. The second reason is that it has to strip the legacy particles
+    // prop in the same write, which a props patch could not do at all.
+    //
+    // Through `mapNode` rather than `scene.children`, so it reaches a node at
+    // any depth — the tween's and `setNodeEffects`' route, not the body's.
+    // Said in as many words because two of this field's four neighbours
+    // deliberately search only the top level, and using `mapNode` beside them
+    // reads like a mistake.
+    setNodeBlendMode: (id, mode) =>
+      editScene((scene) => {
+        const node = findNode(scene.children, id);
+        if (!node) return scene;
+        // Nothing to do, and answering with the scene by identity is what keeps
+        // `editProject`'s "nothing happened, no undo step" contract: without it,
+        // re-picking the mode already showing pushes a history entry.
+        const legacy = node.type === 'particles' && node.props.blendMode !== undefined;
+        if (blendModeOf(node) === mode && !legacy && node.blendMode === undefined) return scene;
+        return {
+          ...scene,
+          children: mapNode(scene.children, id, (current) => {
+            const next = { ...current } as GameObjectNode;
+            if (mode === 'NORMAL') delete next.blendMode;
+            else next.blendMode = mode;
+            // Whichever branch ran: the document holds one shape from here on,
+            // which is `editTilemapProps`' rule for this one field.
+            if (next.type === 'particles') {
+              const props = { ...next.props };
+              delete props.blendMode;
+              next.props = props;
+            }
+            return next;
           }),
         };
       }),
