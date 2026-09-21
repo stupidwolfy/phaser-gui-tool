@@ -48,6 +48,7 @@ import {
   labelFormatOf,
   labelOf,
   MAX_DECIMALS,
+  MAX_BURST,
   MAX_EFFECTS,
   MAX_PAD,
   RAW_DECIMALS,
@@ -554,6 +555,14 @@ const ACTION_LABEL: Record<RuleAction['kind'], string> = {
   playAnimation: 'Play an animation',
   startTween: 'Start a movement',
   setVelocity: 'Push an object',
+  // "particles" rather than "emitter", because that is the word the rest of the
+  // editor uses for this type — the tree's add button, the section heading and
+  // `NodeType` itself all say it. None of the three collides with a label
+  // already on this panel, and none is one of the mobile tab bar's
+  // exactly-matched Scene / Properties / File.
+  startParticles: 'Start particles',
+  stopParticles: 'Stop particles',
+  burstParticles: 'Burst particles',
   cameraShake: 'Shake the camera',
   cameraFlash: 'Flash the camera',
   cameraFade: 'Fade the camera',
@@ -920,13 +929,27 @@ function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
                 // kind could only render for an action the reader accepted
                 // while no candidate exists, which is a contradiction. A hint
                 // there would be a sentence nobody can ever read.
-                options={RULE_ACTION_KINDS.filter(
-                  (kind) =>
-                    kind !== 'setVelocity' ||
-                    scene.children.some(
+                //
+                // The three particles verbs are withheld the same way and for
+                // the same reason, which makes this the second and last use of
+                // the mechanism rather than a precedent to reach for: it is
+                // right here only because `defaultAction` has nothing to seed
+                // these with when the scene holds no emitter.
+                options={RULE_ACTION_KINDS.filter((kind) => {
+                  if (kind === 'setVelocity') {
+                    return scene.children.some(
                       (node) => physicsOf(node, true)?.kind === 'dynamic',
-                    ),
-                ).map((kind) => ({
+                    );
+                  }
+                  if (
+                    kind === 'startParticles' ||
+                    kind === 'stopParticles' ||
+                    kind === 'burstParticles'
+                  ) {
+                    return scene.children.some((node) => node.type === 'particles');
+                  }
+                  return true;
+                }).map((kind) => ({
                   value: kind,
                   label: ACTION_LABEL[kind],
                 }))}
@@ -1091,6 +1114,24 @@ function defaultAction(
       return pushable
         ? { kind: 'setVelocity', nodeId: pushable.id, x: 0, y: -450 }
         : { kind: 'restartScene' };
+    }
+    case 'startParticles':
+    case 'stopParticles':
+    case 'burstParticles': {
+      // The first emitter in the scene — `startTween`'s and `setVelocity`'s
+      // seed, and the picker above withholds all three kinds when there is
+      // none, so the fall-through is unreachable from the panel and is here
+      // for the type rather than for the user.
+      const emitter = scene.children.find((node) => node.type === 'particles');
+      if (!emitter) return { kind: 'restartScene' };
+      // 24 is `DEFAULT_BURST`, written as a literal for `setVelocity`'s 450's
+      // reason: the reader's repair and the panel's seed answer different
+      // questions, and one moving should not silently move the other. The cap
+      // beside it *is* imported, because a limit the control and the reader
+      // disagree about is a control that offers what the reader takes back.
+      return kind === 'burstParticles'
+        ? { kind, nodeId: emitter.id, count: 24 }
+        : { kind, nodeId: emitter.id };
     }
     case 'setText': {
       // Seeded with the label's own current text and **no variable**, so the
@@ -1515,6 +1556,50 @@ function ActionFields({
             doing rather than adding to it — so 0 and 0 stops it dead. Negative
             y is upwards. Gravity, drag and whatever it hits take over from
             there. The editor never runs it: press Play to see it move.
+          </p>
+        </>
+      );
+
+    case 'startParticles':
+    case 'stopParticles':
+      return (
+        <SelectField
+          label={`${label} object`}
+          value={action.nodeId}
+          // `startTween`'s filter shape, so the panel cannot build what the
+          // reader refuses.
+          options={nodeOptions(scene, (node) => node.type === 'particles')}
+          onChange={(nodeId) => onChange({ ...action, nodeId })}
+        />
+      );
+
+    case 'burstParticles':
+      // Two controls and two full-width rows rather than one `field-row`,
+      // which is the 390px rule read the other way: a paired row is for two
+      // *numbers* that mean something beside each other (a spawn's x and y, a
+      // push's two speeds). An object picker squeezed to half a row truncates
+      // every emitter name to nothing, and a count beside it is not its pair.
+      return (
+        <>
+          <SelectField
+            label={`${label} object`}
+            value={action.nodeId}
+            options={nodeOptions(scene, (node) => node.type === 'particles')}
+            onChange={(nodeId) => onChange({ ...action, nodeId })}
+          />
+          <NumberField
+            label={`${label} count`}
+            value={action.count}
+            min={1}
+            max={MAX_BURST}
+            step={1}
+            onChange={(count) => onChange({ ...action, count })}
+          />
+          <p className="hint">
+            One burst of {action.count} at the emitter&rsquo;s own position, and
+            the flow stops there — an emitter a rule bursts does not go back to
+            streaming afterwards. The editor never fires a rule: press Play to
+            see it, or ▶ to watch the emitter itself.
           </p>
         </>
       );

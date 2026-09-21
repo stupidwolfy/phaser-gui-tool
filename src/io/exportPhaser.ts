@@ -2372,6 +2372,32 @@ interface EmitContext {
    */
   ruleTweens: ReadonlyMap<string, string>;
   /**
+   * Node ids a rule in **this scene** starts or bursts particles on.
+   *
+   * Per scene and overwritten in `buildCreateBody` beside `ruleAnimated` and
+   * `ruleTweens`, whose comments are the precedent — and this is the third
+   * member of that family for the same structural reason: what a rule does to
+   * an object later can change how `constructorFor` has to build it *now*.
+   *
+   * It exists so the document needs no `emitting` prop. Iteration 15 refused
+   * one because whether an emitter runs is `previewMotion`'s answer in the
+   * editor and Phaser's default in an export, and a stored field would be a
+   * second answer to one question. A rule that starts or bursts an emitter is
+   * a *third* thing saying it, so the answer is derived here rather than
+   * stored: an emitter a rule waits to start is emitted `emitting: false`, and
+   * every other one emits exactly the config it always did.
+   *
+   * A `stopParticles` deliberately does **not** put a node in this set. "Stop
+   * the smoke when it is hit" means the smoke was running; only a start or a
+   * burst describes an emitter that waits.
+   *
+   * Unlike `ruleAnimated` this is not a compile error if it is missed — it is
+   * a silent one, and what it looks like is a game whose every emitter runs
+   * from the boot, which is exactly the state this feature exists to end.
+   * `rules.spec.ts` asserts both sides of it in the emitted text.
+   */
+  ruleEmitters: ReadonlySet<string>;
+  /**
    * The variable table, file-wide like `assets` and `audio`.
    *
    * Keyed by variable id, because that is what a rule names; the registry key
@@ -2541,6 +2567,15 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
       // object, so writing it whole means the generated code says exactly what
       // the document says, and every dial a reader might want to change is in
       // one place rather than half-hidden behind a default they cannot see.
+      //
+      // `emitting` is the one key that is *not* the document's, and it is the
+      // exception the whole particles-rule feature turns on: it is derived from
+      // whether a rule starts or bursts this emitter rather than stored beside
+      // the dials, which is what keeps iteration 15's "there is no `emitting`
+      // prop" true instead of overturning it. `ctx.ruleTweens`' `paused: true`
+      // one type over, and gated the same way — an emitter no rule waits on
+      // emits the config it always did, character for character.
+      const waits = ctx.ruleEmitters.has(node.id);
       return (
         `${receiver}.add.particles(${num(x)}, ${num(y)}, ${str(entry.key)}, {\n` +
         `      frame: ${frameArg(resolveFrame(entry.asset, p.frame))},\n` +
@@ -2555,6 +2590,7 @@ function constructorFor(node: GameObjectNode, ctx: EmitContext): string | null {
         `      gravityY: ${num(p.gravityY)},\n` +
         `      tint: ${hexLiteral(p.tint)},\n` +
         `      blendMode: ${str(blendModeOf(node))},\n` +
+        (waits ? '      emitting: false,\n' : '') +
         `    })`
       );
     }
@@ -3660,6 +3696,50 @@ function ruleActionLines(
         : [`${ctx.bodyFn}(${id}).setVelocity(${num(action.x)}, ${num(action.y)});`];
     }
 
+    case 'startParticles':
+    case 'stopParticles':
+    case 'burstParticles': {
+      const id = bindings.get(action.nodeId)?.[0];
+      // `[0]`, never a `.map` — `playAnimation`'s and `setVelocity`'s read. A
+      // node's binding list holds more than one entry only because a tilemap
+      // emits one object per layer, and a tilemap is not a `particles` node.
+      // Undefined is an emitter that emitted nothing at all, which is an
+      // emitter with no image: `missingReason` has already written the comment
+      // in its place, and this is the camera follow's treatment of the same.
+      if (id === undefined) return [];
+      // **No helper, no cast, and therefore nothing drawn from the module
+      // identifier set** — which is worth saying because `arcadeBody` and
+      // `attachEffects` both exist for the opposite reason. `GameObject.body`
+      // is a four-way union and `filters` is declared readonly and nullable,
+      // so neither could be reached from the shared plain-JavaScript `create()`
+      // body without a narrowing function. `add.particles(...)` answers with
+      // the `ParticleEmitter` itself and all three verbs are on it, so these
+      // lines type-check under `--strict` as they stand. Nothing above them
+      // moved, and four helper names are asserted verbatim in the suite.
+      //
+      // The verbs are Phaser's where the document's kinds are the user's word
+      // — the `collide`/`collider` split, one feature over.
+      if (action.kind === 'startParticles') return [`${id}.start();`];
+      // `stop()` and deliberately not `stop(true)`, which is what the editor's
+      // own preview teardown uses. There, switching ▶ off has to put the canvas
+      // back *immediately*, so what is in flight is killed. In a game "stop the
+      // smoke" means stop making new smoke and let what is already out fade on
+      // its own; killing it is a visible pop, and a field to choose between
+      // them would be a dial nobody reaches for.
+      if (action.kind === 'stopParticles') return [`${id}.stop();`];
+      // `explode(count)` and not `explode(count, x, y)`. A burst at a point is
+      // `spawn`'s question, and it would be the second thing this document can
+      // say that has a *where* — which would owe the canvas a mark, since every
+      // mark that canvas draws is a where. The emitter's own position is the
+      // answer, and it is one the user can already see and drag.
+      //
+      // Worth knowing rather than discovering: `explode` sets `frequency = -1`
+      // on the emitter for good, so an emitter a rule bursts does not flow
+      // again afterwards. That is what a burst means, and it is also why a
+      // burst puts its node in `ctx.ruleEmitters` beside a start.
+      return [`${id}.explode(${num(action.count)});`];
+    }
+
     // The five camera effects. `this` hardcoded rather than `ctx.receiver`, for
     // `buildSoundLines`' reason: a rule only ever runs in a Scene's `create()`,
     // never in a prefab factory, and `${ctx.receiver}` would read as though one
@@ -3890,10 +3970,17 @@ function buildCreateBody(
   const rules = rulesOf(project, scene);
   const ruleAnimated = new Set<string>();
   const ruleTweens = new Map<string, string>();
+  const ruleEmitters = new Set<string>();
   for (const rule of rules) {
     for (const action of rule.do) {
       if (action.kind === 'playAnimation') ruleAnimated.add(action.nodeId);
       if (action.kind === 'startTween') ruleTweens.set(action.nodeId, '');
+      // Start and burst, never stop — see `EmitContext.ruleEmitters`. An
+      // emitter a rule only stops is one that was running, so its config is
+      // untouched and its export does not move by a byte.
+      if (action.kind === 'startParticles' || action.kind === 'burstParticles') {
+        ruleEmitters.add(action.nodeId);
+      }
     }
   }
   const ctx: EmitContext = {
@@ -3901,6 +3988,7 @@ function buildCreateBody(
     engine: scenePhysicsOf(scene).engine,
     ruleAnimated,
     ruleTweens,
+    ruleEmitters,
   };
   const { animations } = ctx;
   // Seeded with the factory names as well as `this`: the instance calls are in
@@ -4534,6 +4622,7 @@ function prepare(project: Project): Emission {
       // `buildCreateBody` is the only place that can answer either.
       ruleAnimated: new Set<string>(),
       ruleTweens: new Map<string, string>(),
+      ruleEmitters: new Set<string>(),
       fonts,
       receiver: 'this',
       // A placeholder the per-scene context overwrites. The engine is a

@@ -123,7 +123,17 @@ that vocabulary to seventeen actions, **not one of them touched a body** — so 
 in this document that could put one in motion was a player holding a key. One `RuleAction`
 member, two emit shapes for the two engines, no table, no helper, no gate and no schema bump,
 and the first canvas mark this file has ever argued *against* on the grounds that the thing
-has nowhere to be.
+has nowhere to be. Iteration 38 (shipped) let a rule reach the one object type whose whole
+point is what it does over time: a `particles` node may now be started, stopped or burst at a
+moment — which is the refusal iteration 15 wrote about *itself*, in the exact words rules
+were later built to answer (*"an emitter that starts switched off and is triggered later is
+a line of game logic"*), and which nothing revisited across ten iterations of widening that
+vocabulary. Three `RuleAction` members and **no `emitting` prop**: whether an emitter waits
+is *derived* at the emit from whether a rule starts it, which is `ctx.ruleTweens`' own
+`paused: true` one type over and is what keeps iteration 15's sentence true rather than
+overturning it. No table, no helper, no gate, no schema bump and an `EditorScene.ts`
+untouched for the eighth time — the strongest version of that yet, because this is the first
+rule action whose result the canvas was **already showing**.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -4334,6 +4344,201 @@ is one shape across the whole union. And **no `setPosition`** — a teleport is 
 works on nodes with no body at all, and it is a genuine separate loosening rather than a
 smaller version of this one. It is the thing a reader will ask for next.
 
+### Making one throw: the particles actions
+
+Iteration 38 closes a hole with the sharpest provenance of any yet, because the sentence
+that made it is still in this file and still correct. Iteration 15 refused an `emitting`
+prop and refused a burst, in these words:
+
+> **There is no `emitting` prop, and that is the `scene.start` argument.** … an emitter
+> that starts switched off and is triggered later is **a line of game logic**.
+
+> **No follow target, timed burst or `stopAfter`** — behaviour over time is game logic,
+> **the `scene.start` argument again**.
+
+Both were written thirteen iterations before there was anywhere to put a line of game
+logic. Rules arrived in 28, and every iteration since went back for one of those pre-rules
+`scene.start` refusals — 28 took scene-start (13's) and the collider callback (20's), 31
+took the camera's over-time effects *verbatim*, 34 took spawn, 37 took velocity. **The
+particles one, worded identically, was never revisited**, and it is on no "what stays
+refused" list and nowhere in "Not built yet". So until now a particle emitter in an
+exported game ran from the moment the scene booted, for ever, with no way to say
+otherwise — which made a puff of smoke when something is hit, the commonest thing anybody
+wants particles for, the one thing this document could not say.
+
+- **The reading to carry forward is narrower than 37's and is the third refinement in a
+  row.** 34 said a refusal list is a list of things somebody thought of. 37 said it gets
+  longer in the direction it is already looking. This one says where to look instead:
+  **the holes are in the sentences a feature wrote about *itself* before the thing that
+  would close them existed.** Iteration 37's check — "what did we build that the newest
+  feature cannot name" — found this in one pass over eighteen action kinds; the check for
+  iteration 39 is to `grep` this file for `scene.start` and read every refusal that
+  predates iteration 28 against the vocabulary that exists now.
+- **The line iteration 28 drew does not move.** Three more verbs in a list run at a moment
+  Phaser already delivers, so **`update()` gains nothing**, and there is no new trigger, no
+  new table, no new `EmitContext` gate, no `prepare` flag and **no new module helper**.
+- **Three kinds, not one with a verb field** — the camera effects' call verbatim: the union
+  is already discriminated on `kind` at the reader and at the emitter, so a second
+  discriminant inside one case is a switch inside a switch for nothing.
+- **Named for the type, not for Phaser's class.** `startParticles` / `stopParticles` /
+  `burstParticles`, because `particles` is the word this document already uses —
+  `NodeType`, `SECTION_TITLE` and the tree's add button all say it — while the *emit* uses
+  `.start()`, `.stop()` and `.explode(n)`. The `collide`/`collider` split kept exactly: one
+  is the word a person reads, one is the API.
+
+**There is still no `emitting` prop, and that is the decision the whole feature turns on.**
+
+- **The exporter derives it.** `EmitContext.ruleEmitters` is a per-scene `Set` built in the
+  same pre-pass that already builds `ruleAnimated` and `ruleTweens`, and `constructorFor`'s
+  particles case adds `emitting: false` to the config literal for the node ids in it. That
+  is `ctx.ruleTweens`' `paused: true` one type over, and it is the third member of a family
+  whose shared property is worth naming: **what a rule does to an object later can change
+  how `constructorFor` has to build it now.**
+- **So iteration 15's sentence stays true rather than being overturned.** Whether an
+  emitter runs is still `previewMotion`'s answer in the editor and Phaser's in the export;
+  a stored field would be the second answer to one question that sentence exists to refuse.
+  A rule saying it is a *third* thing, which is why the answer is derived and not kept.
+- **A `stopParticles` deliberately does not put a node in the set.** "Stop the smoke when it
+  is hit" means the smoke was running. Only a start or a burst describes an emitter that
+  waits — which is also the byte-for-byte rule: an emitter a rule only stops emits the
+  config it always did, character for character. `rules.spec.ts` asserts both sides, because
+  a derivation of "any rule naming it" passes every other claim in the file.
+- **It is a *silent* step where `ruleAnimated` is a compile error**, and that asymmetry is
+  worth stating. A missed `ruleAnimated` is an `Image` with no `play` and `--strict`
+  catches it; a missed `ruleEmitters` is a game whose every emitter runs from the boot,
+  which is precisely the state this feature exists to end and which nothing fails on.
+- **The canvas/export disagreement it creates is already the accepted answer.** Under ▶ the
+  editor runs every emitter, including one the export emits stopped — which is exactly what
+  a rule-started tween (`paused: true`) has done since iteration 28. Preview is the one
+  moment the canvas deliberately stops mirroring the document, and this is that, one type
+  over. Said out loud, because a reader will ask.
+
+**The reader, the emit and what needed nothing.**
+
+- **Both refusals cost the action, never the rule** — `destroy`'s and `setVelocity`'s split
+  for its reason: a node reaches nothing outside the action that names it, so dropping one
+  strictly *narrows* what the rule says, where a dangling variable would reopen a gate. If
+  it was the only action the empty-`do` check takes the rule, which is a lone `destroy` of a
+  missing node's treatment already.
+- **No hand-matched list, and the absence is deliberate.** `PHYSICS_TYPES` and
+  `TAPPABLE_TYPES` exist because their question has six answers apiece with no compile-time
+  link back to the union; "can this throw particles" has one answer and it is the type's own
+  name, so `node.type !== 'particles'` is the whole gate. Said in the code, because beside
+  those two a missing set reads like a third one forgotten.
+- **No top-level guard of its own** — `byId` is built from `scene.children` alone, so a
+  particles node inside a container or a prefab definition is already out.
+- **`MAX_BURST` is the one runaway, and the floor is the one silent no-op.** `explode(n)`
+  allocates `n` particles on the frame it fires, so a hand-edited six-figure count is a
+  dropped frame in the *player's* game and on a looping timer it is every frame after —
+  `MIN_TIMER_DELAY`'s and `MAX_EFFECTS`' job. `explode(0)` is the opposite failure: an
+  action that runs perfectly and throws nothing. The cap is exported and the seed is not,
+  which is `MAX_EFFECTS`' split — a *limit* the control and the reader disagree about is a
+  control offering what the reader takes back, while a seed is the panel's own answer and is
+  written there as a literal, `setVelocity`'s 450 for its reason.
+- **No helper, no cast, and therefore nothing above it moved.** `add.particles(...)` answers
+  with the `ParticleEmitter` itself and all three verbs are on it, so the lines type-check
+  under `--strict` as they stand — unlike `arcadeBody` (`GameObject.body` is a four-way
+  union) and `attachEffects` (`filters` is declared readonly and nullable), both of which
+  exist only because the shared plain-JavaScript `create()` body can carry no narrowing.
+  Nothing is drawn from the module identifier set, the seventeen helper names are unmoved
+  and four of them are asserted verbatim in the suite. Iteration 31's, 36's and 37's
+  "nothing moved", fourth time.
+- **`stop()` and not `stop(true)`**, deliberately unlike `EditorScene`'s preview teardown.
+  There `stop(true)` exists because switching ▶ off has to put the canvas back
+  *immediately*; in a game "stop the smoke" means stop making new smoke and let what is
+  already out fade on its own, and killing it is a visible pop. One line, no field.
+- **`[0]`, never a `.map`** — `playAnimation`'s read. A node's binding list holds more than
+  one entry only because a tilemap emits one object per layer, and a tilemap is not a
+  particles node. Undefined is an emitter with no image, which `missingReason` has already
+  written a comment in place of — the camera follow's treatment.
+- **Three facts were read out of the shipped package rather than recalled**, which is
+  "Phaser 4, not 3" for the sixth time, and all three would have been silent if guessed.
+  `emitting?: boolean` is a real `ParticleEmitterConfig` key, honoured by the constructor
+  and not only by `setConfig`. `explode()` calls `emitParticle` directly, which has **no
+  `emitting` guard at all**, so a burst works on an emitter built stopped — without that
+  the whole `burstParticles` branch would be a verb that does nothing. And `explode` sets
+  `frequency = -1` permanently, so an emitter a rule bursts does not go back to streaming,
+  which is what a burst means and is a second reason a burst belongs in `ruleEmitters`
+  beside a start. One more worth knowing: `start()` is a no-op in explode mode
+  (`frequency === -1`), which a hand-set frequency of -1 can reach.
+- **`ruleNames`, `ruleUsesVariable` and the store's `remapActionRefs` needed nothing**, and
+  the *field name* is why: all three key off `'nodeId' in action`, so naming it anything
+  else would have cost three edits. The good consequence, stated rather than discovered:
+  **a rule whose only action is a particles verb appears on that emitter's own panel**,
+  where a camera effect or a spawn, naming nothing a scene holds, appears only in the
+  scene's list. `spawnPointsOf`, `migrateRuleToKind`, `removePrefab` and `countPrefabSpawns`
+  narrow with `=== 'spawn'` / `=== 'setVar'` and never fire for a new member, which is the
+  right answer rather than a missed step.
+- **The store is untouched.** Nothing prunes a dangling `nodeId` for `destroy`,
+  `setVisible`, `playAnimation`, `startTween` or `setVelocity` either; the reader drops the
+  action on read.
+
+**Nothing is drawn, and `EditorScene.ts` is untouched for the eighth time** — after Audio,
+Rules, 29, 31, 32, 33 and 37, and this is the strongest version of it, because this is the
+first rule action whose result the canvas is **already showing**.
+
+- **The canvas already says this state, and says it once.** The pink marker is shown exactly
+  when the emitter is not running — one notion of "running", not two — and ▶ still governs
+  it. A second mark for "a rule starts this" would be a second answer to a question the
+  marker already answers.
+- **And a burst has no *where* that is not already drawn.** Every mark this canvas makes is
+  a where: the camera frame, the spawn ring, the tween ghost, the body outline, the touch
+  rings. A burst happens at the emitter's own position, which is an object the user can see
+  and drag — `explode(count, x, y)`'s two extra arguments are refused for exactly that, since
+  taking them would make this the second thing the document can say that has a where.
+- **`hasMotionIn` records its fifteenth refusal**, and it is the easy one for once: an
+  emitter already puts ▶ on the toolbar by existing, and a rule that starts one adds nothing
+  for that button to start or stop.
+
+**The panel and the suite.**
+
+- **The three verbs are withheld from the picker** when the scene holds no emitter —
+  `setVelocity`'s mechanism for its reason, and the second and last use of it rather than a
+  precedent to reach for: it is right only because `defaultAction` has nothing to seed these
+  with, and `RuleCard` renders `rulesOf`'s *validated* output, so an empty state for the kind
+  could only render for an action the reader accepted while no candidate exists.
+- **The labels are `Start particles` / `Stop particles` / `Burst particles`**, and the burst's
+  fields are `Rule <n> do <m> object` and `Rule <n> do <m> count`. None collides with a label
+  already on the panel and none is one of the mobile tab bar's exactly-matched
+  `Scene` / `Properties` / `File`.
+- **The suite's instrument is a colour count**, and the negative half is what makes it mean
+  something: with `emitting: false` the exported page holds **zero** pixels of the particle's
+  colour until the timer fires, where before this iteration the count was non-zero on the
+  first frame. `#00ff6a`, picked by arithmetic — its worst per-channel margin against every
+  other fixture colour in `export.spec.ts`, the hostile project's own fills and the scene
+  background is 126, against `findColor`'s tolerance of 24. An export draws no editor chrome,
+  so unlike every near-side spec there is no palette of guides and outlines to clear as well.
+- **Both guards were checked by breaking them**, which is iteration 33's and 37's rule: the
+  reader's `type !== 'particles'` line and the exporter's `ctx.ruleEmitters.has(...)` were
+  each removed and the suite confirmed red. The hostile fixtures alone do **not** catch
+  either, because their actions ride a `tap` nothing in the suite presses — they are there
+  for the compiler, not for the guards.
+- **The hostile project's three emitters now split three ways.** `atlas-emitter` is *started*,
+  so it is the only place `emitting: false` meets `ParticleEmitterConfig` under
+  `tsc --strict`. `n` is only *stopped*, so its config stays untouched — which is what keeps
+  the `blendMode: "ADD"` assertion beside it passing unchanged. And `o`, which has no image
+  and therefore no binding, is *burst* — the `bindings.get(...)?.[0] === undefined` path,
+  which must answer with no line rather than an identifier nothing declared. Beside them a
+  missing id and a **text** node, as a pair on purpose, because either alone cannot tell
+  "costs the action" from "costs the rule".
+- **`SCHEMA_VERSION` did not bump — the guides case, fifteenth time.** No new `NodeType`, and
+  the actions ride in on `scenes`, which `parseProject` passes through verbatim. The
+  old-build edge is 31's, 33's, 34's and 37's exactly: a v14 build's `ruleActionsOf` drops the
+  unknown kind through its `default: break`, so a rule whose *only* action is a particles verb
+  is absent from **that build's** panel and emit — the document still holds it, a re-save
+  loses nothing, and the rule is back the moment a current build opens the file. An old build
+  doing less, not a file breaking. `rules.spec.ts` asserts the 14.
+
+**What stays refused.** **No `pause` / `resume`** — `stop`/`start` is the pair
+`playSound`/`stopSound` already established, and a second spelling of one idea is two
+notions of one state. **No burst at a point** — above; it would be the second thing this
+document can say that has a where. **No `stopAfter`, no `flow`, no emit or death zone, no
+follow target** — the rest of iteration 15's refusals, each still its own argument, and the
+zone one is still the `.tmj` argument at a smaller scale. **Nothing reads whether an emitter
+is running** — that is a rule about rules. **No `advance` or `duration` on a start**, which
+are a fast-forward and a stop-after in disguise. And **no "while" trigger, no sequencing, no
+`onComplete`** — iteration 28's line, unmoved.
+
 ## The properties panel
 
 Every section of the inspector is a disclosure — `src/ui/Section.tsx` — and they ship
@@ -5355,7 +5560,33 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
-Pushing an object shipped in iteration 37 and is the entry worth reading first, because it is
+Starting, stopping and bursting an emitter shipped in iteration 38 and is the entry worth
+reading first, because it is the **fourth** hole in a row that nothing on this list had ever
+named — and because it finally says where to look, where the three before it only said where
+not to. Iteration 34 said a refusal list is a list of things somebody thought of. Iteration
+37 said it gets longer in the direction it is already looking, and that the check to run is
+"what did we build that the newest feature cannot name". Run over eighteen action kinds that
+found this in one pass; and what it found was not an oversight but a **sentence with a date
+on it**. Iteration 15 refused a timed burst and an `emitting` prop as "behaviour over time is
+game logic, the `scene.start` argument again" — the exact phrase rules were built, thirteen
+iterations later, to answer. Rules arrived in 28. Iterations 28, 31, 34 and 37 each went back
+for one of those pre-rules `scene.start` refusals, and not one of them noticed the one that
+used the phrase twice in its own section.
+
+**So the reading to carry forward is narrower than 37's: the holes are in the sentences a
+feature wrote about itself before the thing that would close them existed.** A refusal is
+dated, and a dated refusal is a claim about the vocabulary of its own iteration, not about
+the document. The check for iteration 39 is mechanical, which is the point: `grep` this file
+for `scene.start` and for "game logic", and read every refusal older than iteration 28
+against what a rule can say now. The ones still standing after that are genuine.
+
+What iteration 38 leaves is short and is in "Making one throw" above: no pause or resume, no
+burst at a point, no emit or death zones, no follow target or `stopAfter`, no `advance` or
+`duration` on a start, and nothing that reads whether an emitter is running. And the
+`emitting` prop is **not** on that list — it is refused and stays refused, because the
+exporter derives one.
+
+Pushing an object shipped in iteration 37 and is the entry worth reading next, because it is
 the third hole in a row that **nothing on this list had ever named** — and the one that says
 most about how this list goes wrong. The two before it were in the drawing domain, where the
 "Phaser 4, not 3" bullet had at least written the word down. This one was in the domain with
@@ -5724,11 +5955,21 @@ parent's frame at all, so it is a limit of Arcade's body model rather than of th
 — and Matter inherits it here for a different reason, since a Container child's `x`/`y`
 are its parent's coordinates whatever is simulating them.
 
-Particles shipped in iteration 15 with four deliberate holes. **No emit or death zones** —
+Particles shipped in iteration 15 with four deliberate holes, and **one of them was the
+sentence iteration 38 was found in** — worth reading before the rest, because the argument
+was not wrong, it was *early*. That iteration refused a timed burst and an `emitting` prop
+alike as "behaviour over time is game logic, the `scene.start` argument again", thirteen
+iterations before there was anywhere to put a line of game logic; rules arrived in 28 and
+nothing went back for it. **The timed burst has now shipped**, as three `RuleAction`
+members — and the `emitting` prop has **not**, because the exporter derives one from
+whether a rule starts the emitter, which is what keeps the original sentence true rather
+than overturning it. See "Making one throw" above. What is left of that iteration's four:
+**No emit or death zones** —
 a zone is a geometry object, i.e. a second sub-format inside the document with its own
 parser, picker and validator, which is the `.tmj` argument at a smaller scale. **No
-follow target, timed burst or `stopAfter`** — behaviour over time is game logic, the
-`scene.start` argument again. **No per-particle animation**: `ParticlesProps` would grow an
+follow target or `stopAfter`, and no `advance` or `duration` on a start** — the first two
+are still behaviour over time with no moment to hang them on, and the last two are a
+fast-forward and a stop-after in disguise. **No per-particle animation**: `ParticlesProps` would grow an
 `animationId` and `collectAnimations` a branch, which is a pure loosening later rather than
 a format break, and the editor's whole clip story is built around a Sprite's
 `AnimationState`. **No multi-frame particles**: a `frames` array would be the second

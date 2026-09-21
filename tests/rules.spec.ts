@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 
 import { expect, test } from './helpers/fixtures';
 import type { EditorPage } from './helpers/editor';
+import { solidPng } from './helpers/png';
 
 /**
  * Rules: game logic in the document, and an editor that never runs a line of it.
@@ -1565,5 +1566,313 @@ test.describe('pushing one', () => {
       /this\.matter\.body\.setVelocity\(matterBodyOf\(\w+\), \{ x: 5, y: -1\.5 \}\);/,
     );
     expect(exported).not.toContain('arcadeBody(');
+  });
+});
+
+test.describe('making one throw', () => {
+  /**
+   * The particle texture, in a colour nothing else on the canvas draws.
+   *
+   * `particles.spec.ts`' own `PARTICLE`, reused deliberately rather than picked
+   * again: it already clears the selection outline `0x00e5ff`, the guides
+   * `0xff3ea5` and `0xffa723`, the emitter marker `#ff6bd6`, the frame
+   * `0x5a6478` and the scene `#1d2330` by well over `findColor`'s per-channel
+   * tolerance of 24, and a second green a few steps away would be a colour this
+   * file has to re-derive every time one is added anywhere in `tests/`.
+   */
+  const PARTICLE = '#00ff6a';
+
+  /** The colour the editor draws a stopped emitter's marker in. */
+  const MARKER = '#ff6bd6';
+
+  /**
+   * One emitter, alone, pinned so that what it draws is something a colour
+   * count can honestly measure — `particles.spec.ts`' fixture and its reasons:
+   * no speed, so particles stay on the emitter; constant scale and alpha, so
+   * the blob is one size and opaque; a lifespan long enough that nothing dies
+   * mid-assertion.
+   */
+  async function oneEmitter(editor: EditorPage, name = 'Smoke'): Promise<void> {
+    await editor.addObject('Particles');
+    await editor.setField('Name', name);
+    // Imported once and then *picked*, because two emitters in one project
+    // share one image: a second import of the same file name would put a
+    // second row in the library and `Use spark.png` would match both.
+    const row = editor.panel('inspect').getByTitle('Use spark.png');
+    if ((await row.count()) === 0) {
+      await editor.importImage({
+        name: 'spark.png',
+        buffer: solidPng(64, 64, PARTICLE),
+      });
+    } else {
+      await row.click();
+      await editor.settle();
+    }
+    await editor.setField('Speed min', 0);
+    await editor.setField('Speed max', 0);
+    await editor.setField('Scale start', 1);
+    await editor.setField('Scale end', 1);
+    await editor.setField('Alpha start', 1);
+    await editor.setField('Alpha end', 1);
+    await editor.setField('Lifespan', 5000);
+    await editor.setField('Quantity', 4);
+  }
+
+  test('a burst round-trips, and names the emitter it throws from', async ({
+    editor,
+  }, testInfo) => {
+    await editor.clearScene();
+    await oneEmitter(editor);
+    await editor.deselect();
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Burst particles');
+    await editor.setField('Rule 1 do 1 count', 40);
+
+    const document = await saved(editor);
+    // Still 14 — the guides case, fifteenth time. No new `NodeType`, and the
+    // action rides in on `scenes`, which `parseProject` passes through verbatim.
+    expect(document.schemaVersion).toBe(SCHEMA);
+    const scene = (document.scenes as { rules?: { do: unknown[] }[] }[])[0];
+    expect(scene.rules?.[0].do).toEqual([
+      { kind: 'burstParticles', nodeId: expect.any(String), count: 40 },
+    ]);
+
+    const path = testInfo.outputPath('burst.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+
+    await editor.deselect();
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.numberValue('Rule 1 do 1 count')).toBe(40);
+  });
+
+  test('the emitted config says `emitting: false` only where a rule waits', async ({
+    editor,
+  }) => {
+    await editor.clearScene();
+    await oneEmitter(editor, 'Smoke');
+    await editor.deselect();
+    await oneEmitter(editor, 'Steam');
+    await editor.deselect();
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Start particles');
+    await editor.setChoice('Rule 1 do 1 object', 'Smoke');
+    await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+    await editor.setChoice('Rule 1 do 2', 'Stop particles');
+    await editor.setChoice('Rule 1 do 2 object', 'Steam');
+
+    const exported = (await editor.exportCode('ts')).contents;
+
+    // The claim this feature's whole shape rests on, asserted rather than
+    // assumed. There is no `emitting` prop in the document: the exporter
+    // *derives* it from whether a rule starts or bursts the emitter, which is
+    // `ctx.ruleTweens`' `paused: true` one type over and is what keeps
+    // iteration 15's "there is no `emitting` prop" true rather than overturning
+    // it. Scoped to each emitter's own literal rather than asserted over the
+    // whole file, because a whole-file `not.toContain` is a shared resource.
+    const smoke = exported.slice(
+      exported.indexOf('const smoke = '),
+      exported.indexOf('const steam = '),
+    );
+    const steam = exported.slice(exported.indexOf('const steam = '));
+    expect(smoke).toContain('emitting: false,');
+    // And the other half: an emitter a rule only *stops* was running, so its
+    // config is untouched and its export has not moved by a byte. Without this
+    // the derivation could be "any rule naming it" and every test above would
+    // still pass.
+    expect(steam).not.toContain('emitting: false,');
+
+    // Phaser's own verbs, on the binding the object list already made — no
+    // helper, no cast, and therefore nothing drawn from the module identifier
+    // set and nothing above it moved.
+    expect(exported).toContain('smoke.start();');
+    expect(exported).toContain('steam.stop();');
+    // A moment Phaser already delivers, so iteration 28's line does not move.
+    expect(exported).not.toContain('update(): void');
+  });
+
+  test('the canvas throws nothing for a rule, and ▶ still throws everything', async ({
+    editor,
+  }) => {
+    await editor.clearScene();
+    await oneEmitter(editor);
+    await editor.deselect();
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Start particles');
+    await editor.closePanels();
+    await editor.settle();
+
+    // The assertion that fails the day anybody wires this into `EditorScene`.
+    // The scene has started, a rule says to start this emitter, and the canvas
+    // fires no rule — so the marker is what is drawn and no particle is.
+    await editor.page.waitForTimeout(600);
+    expect(
+      (await editor.findDrawn(PARTICLE)).count,
+      'the canvas fired a rule',
+    ).toBe(0);
+    expect((await editor.findDrawn(MARKER)).count).toBeGreaterThan(100);
+
+    // And the half that proves the rule has not taken preview's answer away:
+    // ▶ still runs every emitter, including one the *export* emits stopped.
+    // That disagreement is `previewMotion`'s own documented nature and is
+    // exactly what a rule-started tween (`paused: true`) already does.
+    await editor.setPreview(true);
+    await editor.closePanels();
+    await expect
+      .poll(async () => (await editor.findDrawn(PARTICLE)).count, {
+        timeout: 10_000,
+        message: 'preview no longer runs an emitter a rule starts',
+      })
+      .toBeGreaterThan(100);
+  });
+
+  test('the picker offers the particles verbs only against an emitter', async ({
+    editor,
+  }) => {
+    await editor.clearScene();
+    await editor.addObject('Rectangle');
+    await editor.deselect();
+
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    // Withheld rather than offered-and-refused — `setVelocity`'s mechanism for
+    // its reason: `defaultAction` could only fall through to `restartScene`
+    // with no emitter here, and an option that leaves the picker where it was
+    // reads as a broken control.
+    for (const label of ['Start particles', 'Stop particles', 'Burst particles']) {
+      await expect(
+        editor.choice('Rule 1 do 1').getByRole('option', { name: label }),
+      ).toHaveCount(0);
+    }
+
+    await oneEmitter(editor);
+    await editor.deselect();
+    await editor.openRule(name);
+    for (const label of ['Start particles', 'Stop particles', 'Burst particles']) {
+      await expect(
+        editor.choice('Rule 1 do 1').getByRole('option', { name: label }),
+      ).toHaveCount(1);
+    }
+  });
+
+  test('a hand-edited throw costs the action, never the rule', async ({
+    editor,
+  }, testInfo) => {
+    await editor.clearScene();
+    await oneEmitter(editor);
+    await editor.deselect();
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', 'Box');
+    await editor.deselect();
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Start particles');
+    // A second action, so the rule has something left when the first goes.
+    await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+
+    const document = await saved(editor);
+    const scene = (document.scenes as {
+      children: { id: string; name: string }[];
+      rules?: { do: unknown[] }[];
+    }[])[0];
+    const box = scene.children.find((node) => node.name === 'Box')!;
+
+    // Two ways to be wrong and only a hand-edited file can hold either, since
+    // the panel's picker offers the scene's own emitters and nothing else.
+    // Asserted as a pair on purpose: a node that is *gone* and a node that is
+    // *not an emitter* are two different documents and one refusal, and a test
+    // exercising only the first leaves half the gate untested.
+    for (const [file, bad] of [
+      ['gone', 'nothing-at-all'],
+      ['wrong-type', box.id],
+    ] as const) {
+      scene.rules![0].do[0] = { kind: 'startParticles', nodeId: bad };
+      const path = testInfo.outputPath(`${file}.phaser.json`);
+      await fs.writeFile(path, JSON.stringify(document), 'utf8');
+      await editor.newProject();
+      await editor.openFile(path);
+      await editor.deselect();
+
+      // `destroy`'s and `setVelocity`'s split: a node reaches nothing outside
+      // the action that names it, so dropping one strictly *narrows* what the
+      // rule says. The rule survives, one action lighter.
+      expect(await editor.ruleCount(), file).toBe(1);
+      await editor.openRule('Rule 1');
+      await expect(
+        editor.panel('inspect').getByTitle('Remove action 2 of rule 1'),
+      ).toHaveCount(0);
+      expect(await editor.selectValue('Rule 1 do 1')).toBe('restartScene');
+    }
+  });
+
+  test('a hand-edited burst count is repaired and clamped, never dropped', async ({
+    editor,
+  }, testInfo) => {
+    await editor.clearScene();
+    await oneEmitter(editor);
+    await editor.deselect();
+
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Burst particles');
+
+    const document = await saved(editor);
+    const scene = (document.scenes as {
+      rules?: { do: Record<string, unknown>[] }[];
+    }[])[0];
+
+    // `cameraPan`'s policy: there is no gate inside this action for a repair to
+    // open. The floor is 1 because `explode(0)` runs perfectly and throws
+    // nothing, and the cap is `MAX_BURST` because `explode(n)` allocates `n`
+    // particles on the frame it fires — on a looping timer, every frame after.
+    for (const [file, count, want] of [
+      ['nonsense', 'lots', 24],
+      ['zero', 0, 1],
+      ['runaway', 999_999, 500],
+    ] as const) {
+      scene.rules![0].do[0].count = count;
+      const path = testInfo.outputPath(`${file}.phaser.json`);
+      await fs.writeFile(path, JSON.stringify(document), 'utf8');
+      await editor.newProject();
+      await editor.openFile(path);
+      await editor.deselect();
+
+      expect(await editor.ruleCount(), file).toBe(1);
+      await editor.openRule('Rule 1');
+      expect(await editor.numberValue('Rule 1 do 1 count'), file).toBe(want);
+    }
+  });
+
+  test('throwing puts no preview button on the toolbar that was not there', async ({
+    editor,
+  }) => {
+    await editor.clearScene();
+    await editor.addObject('Rectangle');
+    await editor.deselect();
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await editor.closePanels();
+
+    // `hasMotionIn`'s fifteenth refusal, and the easy one for once: an emitter
+    // already puts ▶ on the toolbar by existing, and a rule that starts one
+    // adds nothing for that button to start or stop. With no emitter in the
+    // scene at all there is nothing to preview and no button.
+    await expect(
+      editor.page.getByRole('button', { name: 'Preview motion' }),
+    ).toHaveCount(0);
   });
 });
