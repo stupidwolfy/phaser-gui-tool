@@ -1857,22 +1857,40 @@ test.describe('making one throw', () => {
     }
   });
 
-  test('throwing puts no preview button on the toolbar that was not there', async ({
+  test('the preview button tracks the emitter, and a rule adds nothing to it', async ({
     editor,
   }) => {
+    // `hasMotionIn`'s fifteenth refusal, asserted as the three readings that
+    // actually distinguish it rather than only the easy one. The claim is not
+    // "no button" — it is that the button is the *emitter's*, so a rule can
+    // neither put one there nor add a second reason for one.
+    const preview = editor.page.getByRole('button', { name: 'Preview motion' });
+
     await editor.clearScene();
     await editor.addObject('Rectangle');
     await editor.deselect();
     const name = await editor.addRule();
     await editor.openRule(name);
     await editor.closePanels();
+    // A rule on its own moves nothing this canvas draws, so there is nothing
+    // to preview and no button — which is what makes the next reading mean
+    // something rather than being true from the start.
+    await expect(preview).toHaveCount(0);
 
-    // `hasMotionIn`'s fifteenth refusal, and the easy one for once: an emitter
-    // already puts ▶ on the toolbar by existing, and a rule that starts one
-    // adds nothing for that button to start or stop. With no emitter in the
-    // scene at all there is nothing to preview and no button.
-    await expect(
-      editor.page.getByRole('button', { name: 'Preview motion' }),
-    ).toHaveCount(0);
+    await oneEmitter(editor);
+    await editor.deselect();
+    await editor.closePanels();
+    // The emitter put it there, by existing. No rule names it yet.
+    await expect(preview).toHaveCount(1);
+
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Start particles');
+    await editor.closePanels();
+    // And the rule added nothing: still exactly one, because that toggle exists
+    // so a canvas moving *by itself* can be stopped, and the thing moving is
+    // the emitter either way. A second button — or a first one appearing only
+    // now — would mean `hasMotionIn` had learnt about rules, which is the edit
+    // this feature deliberately did not make.
+    await expect(preview).toHaveCount(1);
   });
 });
