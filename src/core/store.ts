@@ -3811,6 +3811,19 @@ export function countFontUses(project: Project, family: string): number {
  * builds nothing, so there is no second state for a ▶ to toggle between and
  * nothing moving by itself for it to stop. A spawn is "drawn, never run", the
  * body outline's and the camera frame's rule for the fourth time.
+ *
+ * And blind to a `setVelocity`, which is the tenth refusal recorded here and
+ * the one a reader will be surest is wrong: it is the first thing this
+ * document can say that puts a **body** in motion, where every refusal above
+ * either redraws something or describes a thing a finger does. Two refusals
+ * meet in it, which is iteration 31's shape. The canvas fires no rule, per the
+ * paragraph above. And the canvas simulates no body at all — physics' own
+ * first decision, made because a step does not merely animate the document, it
+ * rewrites the numbers the document is made of. So there is nothing here for a
+ * ▶ to start, and nothing it could stop. Nothing is drawn for one either, and
+ * that is the one place this parts company with the spawn above: a spawn has a
+ * *where*, which is the thing this canvas has always drawn, and a velocity is
+ * a **rate** — the only honest picture of which is a body in motion.
  */
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;

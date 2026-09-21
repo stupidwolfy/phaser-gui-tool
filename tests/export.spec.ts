@@ -1931,3 +1931,117 @@ test('the exported page builds a prefab a rule spawns', async ({
 
   await run.close();
 });
+
+test('the exported page pushes the body a rule names', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The positive claim for `setVelocity`, and the only place it can be made.**
+  // The editor runs no rule *and* simulates no body, so `rules.spec.ts` can only
+  // assert the opposite — that the object never moves there. This is the other
+  // half, and it is built through the UI rather than from a fixture because it
+  // is the one assertion that the whole chain arrived: the game config, the
+  // world, `add.existing`, the helper and the rule's own line.
+  //
+  // **Gravity is zero and the body's own Velocity X and Y are left at zero**,
+  // which is what makes the reading unambiguous — `spawn`'s "placed nowhere"
+  // one action over. Nothing else in the exported world is able to move this
+  // object, so any travel at all can only have come from the emitted call.
+  await editor.clearScene();
+  await editor.setSnapping(false);
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Ball');
+  await editor.setField('X', 200);
+  await editor.setField('Y', 270);
+  await editor.setPhysics(true);
+  await editor.setGravity(0, 0);
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'the scene starts');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Push an object');
+  await editor.setField('Rule 1 do 1 speed x', 300);
+  await editor.setField('Rule 1 do 1 speed y', 0);
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('push'),
+    exported.contents,
+  );
+
+  const before = await findColor(
+    run.page,
+    await run.page.locator('canvas').screenshot(),
+    RECT_FILL,
+  );
+  expect(before.count).toBeGreaterThan(100);
+
+  // Polled rather than read after a fixed wait, `reaches`' own reason. The
+  // **direction** is asserted as well as the distance, so a sign lost anywhere
+  // between the field and the emit cannot pass — and the object is asserted to
+  // still be on the canvas, which is what catches a conversion applied the
+  // wrong way round: 60x too fast and it is off the edge by the first read.
+  const after = await reaches(
+    async () =>
+      findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL),
+    (blob) => blob.count > 100 && blob.x > before.x + 40,
+  );
+  expect(after.count).toBeGreaterThan(100);
+  expect(after.x).toBeGreaterThan(before.x + 40);
+  // Which is also the assertion that `arcadeBody` did not throw: it does so by
+  // design when handed a `StaticBody` or none, inside `create()`, before a
+  // single object is drawn.
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('a Matter push is in Matter own units', async ({ editor, page }, testInfo) => {
+  // The same claim under the other engine, and it earns its place because the
+  // two emit shapes share no code. One reading catches both failure modes of
+  // the /60: a missing conversion is 60x too fast and the object has left the
+  // canvas by the first screenshot, while a doubled one is imperceptible and
+  // the object never travels at all.
+  await editor.clearScene();
+  await editor.setSnapping(false);
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Ball');
+  await editor.setField('X', 200);
+  await editor.setField('Y', 270);
+  await editor.setPhysics(true);
+  await editor.setGravity(0, 0);
+  await editor.setSceneEngine('matter');
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'the scene starts');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Push an object');
+  await editor.setField('Rule 1 do 1 speed x', 300);
+  await editor.setField('Rule 1 do 1 speed y', 0);
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('matter-push'),
+    exported.contents,
+  );
+
+  const before = await findColor(
+    run.page,
+    await run.page.locator('canvas').screenshot(),
+    RECT_FILL,
+  );
+  expect(before.count).toBeGreaterThan(100);
+
+  const after = await reaches(
+    async () =>
+      findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL),
+    (blob) => blob.count > 100 && blob.x > before.x + 40,
+  );
+  expect(after.count).toBeGreaterThan(100);
+  expect(after.x).toBeGreaterThan(before.x + 40);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
