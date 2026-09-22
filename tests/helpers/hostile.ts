@@ -1801,6 +1801,40 @@ export function hostileProject(): Project {
             blendMode: 'MULTIPLY' as const,
             children: [],
           },
+          {
+            id: 'mask-host',
+            // A node of its own rather than two more entries on `k`, because
+            // `MAX_EFFECTS` is four and that one already carries three — a
+            // fifth would be dropped by `effectsOf` on the way past, which
+            // would silently delete the dangling case below and leave this
+            // fixture asserting nothing.
+            name: `${breakout} masked panel`,
+            type: 'rectangle',
+            visible: true,
+            transform: { x: 120, y: 120, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { width: 40, height: 40, fill: '#2b8a3e', alpha: 1 },
+            fx: [
+              // The only place `addMask`'s emitted call meets
+              // `Phaser.Filters.Mask` under `tsc --strict`, and the only one
+              // where its texture key is *hostile*: `sheet-1`'s file name goes
+              // through `toIdentifier` into the `ASSETS` table and out again as
+              // this call's first argument, so the two have to agree about what
+              // the image is called. It also makes this scene preload an image
+              // for a node that is not a sprite, which is `usedIn`'s new branch
+              // and the half of the collector pair that fails *silently* — a
+              // key the scene never loaded is a mask that quietly does nothing.
+              { kind: 'mask' as const, assetId: 'sheet-1', invert: true },
+              // And a mask naming an image the table does not hold, which only
+              // a hand-edited file can be in — the editor's own `removeAsset`
+              // clears the reference. It must emit **no call at all** rather
+              // than one naming a key nothing declares, which in the exported
+              // `.ts` is the difference between a wrong picture and a compile
+              // error. Beside the live one on purpose: either alone cannot tell
+              // "costs the effect" from "costs the node".
+              { kind: 'mask' as const, assetId: 'no-such-image', invert: false },
+            ],
+            children: [],
+          },
         ],
       },
       {

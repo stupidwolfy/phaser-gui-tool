@@ -88,8 +88,12 @@ export function AssetPicker({
         </ul>
       )}
 
+      {/* "this object" rather than "this sprite" since iteration 40: the picker
+          is reached from a mask effect now, which any of the ten node types can
+          carry, and a rectangle being told to give its sprite something to draw
+          is a sentence about a thing that is not there. */}
       {assets.length === 0 && !busy && (
-        <p className="hint">No images yet. Import one to give this sprite something to draw.</p>
+        <p className="hint">No images yet. Import one to give this object something to draw.</p>
       )}
     </>
   );
@@ -145,7 +149,7 @@ function AssetRow({
   );
 }
 
-type AssetKind = 'sprite' | 'tileset' | 'particle' | 'panel' | 'tile';
+type AssetKind = 'sprite' | 'tileset' | 'particle' | 'panel' | 'tile' | 'mask';
 
 /**
  * What each kind of image-holding object does with its image, and what it says
@@ -171,6 +175,11 @@ const MISSING_ASSET: Record<AssetKind, string> = {
     'No image chosen — this emitter draws its marker, throws nothing and exports as nothing.',
   panel: 'No image chosen — this panel draws a placeholder and exports as nothing.',
   tile: 'No image chosen — this tiled image draws a placeholder and exports as nothing.',
+  // The one kind whose empty state is not a placeholder, because a mask is a
+  // pass over an object rather than an object: with nothing to sample it runs
+  // no pass at all, here and in the export alike, so the object simply draws
+  // whole. See `maskTextureKeyFor` for why that is not the placeholder.
+  mask: 'No image chosen — this mask does nothing until one is.',
 };
 
 const ASSET_ROLE: Record<AssetKind, string> = {
@@ -179,6 +188,11 @@ const ASSET_ROLE: Record<AssetKind, string> = {
   particle: 'Each particle draws one frame of it.',
   panel: 'Its corners keep their size; the edges and the middle stretch.',
   tile: 'It repeats to fill the box below.',
+  // Alpha rather than colour, because that is what Phaser's mask shader reads;
+  // and stretched rather than placed, because an internal filter samples the
+  // mask at the object's own texel — which is what lets one mask image work on
+  // objects of different sizes.
+  mask: 'Its transparency is stretched over the object: solid parts are kept.',
 };
 
 /** The chosen image's details, or a prompt to choose one. */

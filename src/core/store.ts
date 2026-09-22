@@ -1103,6 +1103,33 @@ function mapProjectNodes(
 }
 
 /**
+ * This node's effect list with every mask over `assetId` unpointed, or `null`
+ * when it holds none.
+ *
+ * `null` for "nothing changed" rather than the list back, because the caller
+ * feeds `mapProjectNodes`, whose whole contract is that an untouched branch
+ * comes back by identity — returning a fresh equal array would mark every node
+ * in the project as edited and cost an undo step for a delete that missed it.
+ *
+ * Read through `effectsOf`, so what is written back is what the renderer and
+ * the exporter would have read anyway: a hand-edited file cannot survive a
+ * deletion with a shape the reader refuses. That is the strip-on-read /
+ * repair-on-write pair this codebase makes everywhere, here in the direction
+ * that keeps the *file* right rather than the canvas.
+ */
+function maskedFxWithout(node: GameObjectNode, assetId: string): NodeEffect[] | null {
+  const effects = effectsOf(node);
+  if (!effects.some((effect) => effect.kind === 'mask' && effect.assetId === assetId)) {
+    return null;
+  }
+  return effects.map((effect) =>
+    effect.kind === 'mask' && effect.assetId === assetId
+      ? { ...effect, assetId: null }
+      : effect,
+  );
+}
+
+/**
  * The frame a node should hold once its image has been cut a different way.
  *
  * Within one kind of cut the document is left alone and the repair happens on
@@ -2184,17 +2211,42 @@ export const useEditorStore = create<EditorState>((set, get) => {
             animations: project.animations.filter((clip) => !orphaned.has(clip.id)),
           },
           (node) => {
+            // A mask names this image too, and unlike every branch below it is
+            // not keyed on the node's type: `fx` is on the base node, so any of
+            // the ten can carry one. It is therefore computed first and merged
+            // last, because the type branches `return` — a sprite with both a
+            // dangling `props.assetId` and a mask over the same picture has to
+            // have both cleared, and a mask branch written *after* them would
+            // never run for one.
+            //
+            // The reference is cleared and the effect kept, which is this
+            // function's own rule rather than `removeAudio`'s ten lines up: a
+            // sprite whose image goes stays a sprite and draws the placeholder,
+            // because the object is worth keeping — where a `SceneSound` *is* a
+            // reference and goes with the file. A mask keeps its `invert`, and
+            // picking another image puts it straight back.
+            const fx = maskedFxWithout(node, id);
+
+            // `withFx` exists because of the narrowing limit the comment below
+            // describes: spreading `node` here would widen `props` to a union
+            // of all ten types and match none of them, so the merge is done
+            // through one cast in one place rather than in every branch.
+            const withFx = (next: GameObjectNode | null): GameObjectNode | null => {
+              if (!fx) return next;
+              return { ...(next ?? node), fx } as GameObjectNode;
+            };
+
             if (node.type === 'sprite') {
               if (node.props.assetId === id) {
-                return {
+                return withFx({
                   ...node,
                   props: { ...node.props, assetId: null, frame: 0, animationId: null },
-                };
+                });
               }
               if (node.props.animationId && orphaned.has(node.props.animationId)) {
-                return { ...node, props: { ...node.props, animationId: null } };
+                return withFx({ ...node, props: { ...node.props, animationId: null } });
               }
-              return null;
+              return withFx(null);
             }
             // Three branches rather than one condition over three types, and
             // that is TypeScript's doing rather than a style choice: the
@@ -2209,18 +2261,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
             // for the reason it goes on an emitter — an index into a grid that
             // is no longer there.
             if (node.type === 'particles' && node.props.assetId === id) {
-              return { ...node, props: { ...node.props, assetId: null, frame: 0 } };
+              return withFx({ ...node, props: { ...node.props, assetId: null, frame: 0 } });
             }
             if (node.type === 'nineslice' && node.props.assetId === id) {
-              return { ...node, props: { ...node.props, assetId: null, frame: 0 } };
+              return withFx({ ...node, props: { ...node.props, assetId: null, frame: 0 } });
             }
             if (node.type === 'tileSprite' && node.props.assetId === id) {
-              return { ...node, props: { ...node.props, assetId: null, frame: 0 } };
+              return withFx({ ...node, props: { ...node.props, assetId: null, frame: 0 } });
             }
             if (node.type === 'tilemap' && node.props.assetId === id) {
-              return { ...node, props: { ...node.props, assetId: null } };
+              return withFx({ ...node, props: { ...node.props, assetId: null } });
             }
-            return null;
+            return withFx(null);
           },
         );
       }),
@@ -3738,9 +3790,24 @@ export function countAssetUses(project: Project, assetId: string): number {
       ) {
         count += 1;
       }
+      // A mask is the one use of an image that is not keyed on the node's type
+      // at all: `fx` is on the base node, so any of the ten types can carry
+      // one. Read through `effectsOf` rather than `node.fx`, so the count
+      // cannot disagree with what is actually drawn — and counted per *effect*
+      // rather than per node, because `MAX_EFFECTS` is four and two masks over
+      // one picture are two uses of it. This number is what the deletion
+      // warning says out loud.
+      for (const effect of effectsOf(node)) {
+        if (effect.kind === 'mask' && effect.assetId === assetId) count += 1;
+      }
       walk(node.children);
     }
   };
+  // Scenes only, where `countFontUses` beside it also walks `project.prefabs`.
+  // That difference predates masks and is left alone deliberately: a sprite
+  // inside a prefab definition already goes uncounted here, so a mask inside
+  // one does too, and quietly fixing half of it would leave this function
+  // disagreeing with its own doc comment.
   for (const scene of project.scenes) walk(scene.children);
   return count;
 }

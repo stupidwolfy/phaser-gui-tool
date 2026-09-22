@@ -406,18 +406,30 @@ function collectLabels(
  * emitting the call and not the function it calls.
  *
  * A boolean rather than a `Map`, unlike every `collect*` above it, because
- * there is nothing here to name: an effect is read straight off the node it is
- * on and points at no table, no texture and no identifier. On that checklist a
- * collector with no `Used…` beside it reads exactly like a missed step, which
- * is why it says so.
+ * there is nothing here to *name*: what an effect needs from a table it reads
+ * back out of one `collectAssets` already built, so this adds no entry to the
+ * output and no identifier to any set. That stayed true when masks arrived in
+ * iteration 40 — a mask points at a texture, but at one some other collector is
+ * already responsible for naming. On that checklist a collector with no `Used…`
+ * beside it reads exactly like a missed step, which is why it says so.
  */
 function collectEffects(
   project: Project,
   scenes: SceneDoc[],
   prefabs: Map<string, UsedPrefab>,
+  // The asset table, so this gate asks the same question `emitNode` asks rather
+  // than a looser one. Since iteration 40 an effect can answer with *no call* —
+  // a mask naming an image the file does not load — so "this node has effects"
+  // and "this node emits an effect call" stopped being the same statement, and
+  // a gate on the first would declare a helper nothing in the file calls.
+  assets: Map<string, UsedAsset>,
 ): boolean {
   const walk = (nodes: GameObjectNode[]): boolean =>
-    nodes.some((node) => effectsOf(node).length > 0 || walk(node.children));
+    nodes.some(
+      (node) =>
+        effectsOf(node).some((effect) => effectCallFor(effect, assets) !== null) ||
+        walk(node.children),
+    );
   return scenes.some((scene) => emittedNodes(project, scene, prefabs).some(walk));
 }
 
@@ -466,8 +478,19 @@ function collectAssets(
         (node.type === 'tilemap' && frameGridOf(findAsset(project, node.props.assetId)))
           ? node.props.assetId
           : null;
-      if (assetId && !used.has(assetId)) {
-        const asset = findAsset(project, assetId);
+      // A mask's image, which is the one use of one that is not keyed on the
+      // node's type at all: `fx` is on the base node, so any of the ten types
+      // can carry one. Collected unconditionally, the emitter's and the
+      // panel's reasoning rather than the tileset's — there is no cut for a
+      // grid to gate, since `Mask.setTexture` samples the whole image's
+      // `glTexture` whatever frame is named.
+      const maskIds = effectsOf(node).flatMap((effect) =>
+        effect.kind === 'mask' && effect.assetId ? [effect.assetId] : [],
+      );
+
+      for (const maskId of [...(assetId ? [assetId] : []), ...maskIds]) {
+        if (used.has(maskId)) continue;
+        const asset = findAsset(project, maskId);
         // A sprite can point at an image that is no longer in the table only in
         // a hand-edited file; the editor clears those references itself.
         if (asset) {
@@ -1111,7 +1134,10 @@ function buildOnVarHelper(fn: string, language: SceneLanguage, indent: string): 
  * mechanical rather than chosen, as it was for the camera effects: these are
  * positional, so a later argument cannot be passed without an earlier one.
  */
-function effectCallFor(effect: NodeEffect): string {
+function effectCallFor(
+  effect: NodeEffect,
+  assets: Map<string, UsedAsset>,
+): string | null {
   switch (effect.kind) {
     case 'glow':
       return `addGlow(${hexLiteral(effect.color)}, ${num(effect.outerStrength)}, ${num(
@@ -1127,6 +1153,24 @@ function effectCallFor(effect: NodeEffect): string {
       )}, ${hexLiteral(effect.color)})`;
     case 'pixelate':
       return `addPixelate(${num(effect.amount)})`;
+    case 'mask': {
+      // The one kind that needs something the effect does not carry: a texture
+      // *key*, which is `collectAssets`' answer to "what is this image called
+      // across the file" rather than anything the node knows. So this function
+      // takes the table — a **required parameter**, which the compiler names at
+      // the one call site, so the `clampFrame` -> `resolveFrame` rename is not
+      // needed here. That rule exists for a widened *return* type, which
+      // compiles silently wherever it was not updated.
+      //
+      // A mask naming an image the table does not hold emits **no call at
+      // all**, which is the renderer's "no usable texture, no pass" answered on
+      // this side so the canvas and the export cannot disagree about a picture.
+      // It is `missingReason`'s and the camera follow's treatment of a
+      // reference that resolved to nothing.
+      const used = effect.assetId ? assets.get(effect.assetId) : undefined;
+      if (!used) return null;
+      return `addMask(${str(used.key)}, ${effect.invert ? 'true' : 'false'})`;
+    }
   }
 }
 
@@ -1452,6 +1496,15 @@ function usedIn(
         node.props.assetId
       ) {
         assets.add(node.props.assetId);
+      }
+      // And a mask's image, on any node type — `collectAssets`' new branch
+      // answered on this side. Missing it here is the worse half of the pair:
+      // the texture keeps its file-wide name, so the emitted `addMask` names a
+      // key the scene never preloaded, and Phaser's `getFrame` answers null —
+      // a mask that silently does nothing, which is an export that looks almost
+      // right rather than one that plainly is not.
+      for (const effect of effectsOf(node)) {
+        if (effect.kind === 'mask' && effect.assetId) assets.add(effect.assetId);
       }
       walk(node.children);
     }
@@ -2956,8 +3009,18 @@ function emitNode(
   // No gate here and nothing to suppress — a node with no effects never reaches
   // the line, and one that emitted no object never reaches it either, which is
   // why `missingReason` needs no branch for one.
-  const effects = effectsOf(node);
-  if (effects.length > 0) {
+  //
+  // The calls are built *before* the gate rather than inside it, because a mask
+  // naming an image the file does not load answers with no call — so a node
+  // whose only effect is one of those would otherwise emit an `enableFilters`
+  // and an empty `if` block. Only a hand-edited file can reach that, since
+  // `removeAsset` clears the reference, but an empty block in generated code is
+  // a reader's question with no answer.
+  const effectCalls = effectsOf(node).flatMap((effect) => {
+    const call = effectCallFor(effect, ctx.assets);
+    return call ? [call] : [];
+  });
+  if (effectCalls.length > 0) {
     // Drawn from `create()`'s identifier set rather than pasted onto `id`,
     // which is `bodyLines`' binding and the sound handles' rule: an object a
     // user called "coin filters" must not take the binding the line beside it
@@ -2970,7 +3033,7 @@ function emitNode(
     // the `.ts`, the `.js` and the runnable page, so it can carry neither. The
     // emitted keyboard block's narrowing, one helper over.
     lines.push(`if (${list}) {`);
-    for (const effect of effects) lines.push(`  ${list}.${effectCallFor(effect)};`);
+    for (const call of effectCalls) lines.push(`  ${list}.${call};`);
     lines.push('}');
   }
 
@@ -4626,7 +4689,7 @@ function prepare(project: Project): Emission {
   const current = activeScene(project);
   const worlds = project.scenes.map(physicsUsedIn);
   const bound = collectLabels(project, project.scenes, prefabs, variables);
-  const effects = collectEffects(project, project.scenes, prefabs);
+  const effects = collectEffects(project, project.scenes, prefabs, assets);
   // A format on a `setText` with no variable is a dial on nothing, which
   // `ruleActionsOf` already refuses to carry — so reading the action's two
   // fields here cannot pick one up.

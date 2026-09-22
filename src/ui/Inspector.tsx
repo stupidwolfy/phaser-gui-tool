@@ -4239,6 +4239,7 @@ const EFFECT_LABEL: Record<NodeEffect['kind'], string> = {
   blur: 'Blur',
   shadow: 'Drop shadow',
   pixelate: 'Pixelate',
+  mask: 'Mask',
 };
 
 /**
@@ -4386,6 +4387,33 @@ function EffectFields({
           step={1}
           onChange={(amount) => onChange({ ...effect, amount })}
         />
+      );
+    // The one kind whose dial is a reference rather than a number, and the one
+    // that can arrive doing nothing — `defaultEffect` cannot seed it with an
+    // image, so the summary above the picker is what says so. `AlignSection`'s
+    // rule: a control that says why it cannot beats one that is not there.
+    //
+    // Only one labelled field, `<label> invert`, never a bare "Invert": the
+    // suite matches a label exactly and `Effect 2 invert` has to be reachable
+    // beside `Effect 1 invert`. The picker itself carries no label at all,
+    // which is how it renders on the five per-type panels that already use it
+    // — its "Import image…" button and its rows are the control, and adding
+    // one here would put a second image label on a panel whose object may
+    // already own one.
+    case 'mask':
+      return (
+        <>
+          <AssetSummary assetId={effect.assetId} kind="mask" />
+          <AssetPicker
+            selectedAssetId={effect.assetId}
+            onPick={(assetId) => onChange({ ...effect, assetId })}
+          />
+          <CheckboxField
+            label={`${label} invert`}
+            value={effect.invert}
+            onChange={(invert) => onChange({ ...effect, invert })}
+          />
+        </>
       );
   }
 }

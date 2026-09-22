@@ -1426,6 +1426,21 @@ export class EditorScene extends Phaser.Scene {
         else if (atlas) this.textures.addAtlas(key, image, atlasDataOf(atlas));
         else this.textures.addImage(key, image);
         this.assetTextures.add(key);
+        // **`syncFonts`' `textStyles.clear()`, one cache over, and leaving it
+        // out is a bug nothing else would catch.** `applyEffects` is
+        // cache-guarded on the effect list, and a texture arriving between one
+        // sync and the next does not change that list by a single character —
+        // a node with a mask still says `assetId: 'a1'`, exactly as it did
+        // while the image was decoding. So the re-sync this decode triggers
+        // would find every signature unchanged, skip every `applyEffects`, and
+        // the mask would never be applied at all: the object would stay
+        // unmasked until some unrelated edit happened to alter its effects.
+        //
+        // The guard family arriving inverted for the second time. Those guards
+        // exist to stop an apply firing on every store change; this one has to
+        // *break* a guard, because what changed is outside the document the
+        // signature is computed from. Opening a project always takes this path.
+        this.nodeEffects.clear();
       } else if (!this.decoding.has(asset.dataUrl)) {
         this.decoding.add(asset.dataUrl);
         void decodeImage(asset.dataUrl)
@@ -1442,6 +1457,10 @@ export class EditorScene extends Phaser.Scene {
       if (wanted.has(key)) continue;
       this.textures.remove(key);
       this.assetTextures.delete(key);
+      // A texture that has *gone* changes what a mask draws just as much as one
+      // that has arrived, and the effect signature is just as unchanged either
+      // way — `syncFonts`' own pair of clears, for its reason.
+      this.nodeEffects.clear();
     }
   }
 
@@ -1505,6 +1524,36 @@ export class EditorScene extends Phaser.Scene {
       // has arrived, and the style signature is just as unchanged either way.
       this.textStyles.clear();
     }
+  }
+
+  /**
+   * The texture a **mask** should sample, or null when there is not one.
+   *
+   * `textureKeyFor` beside it falls back to `PLACEHOLDER_TEXTURE`, and this one
+   * deliberately does not — the single decision in this feature, so it is worth
+   * the paragraph rather than looking like a missed fallback.
+   *
+   * The placeholder is a 96px **opaque** square, and `Phaser.Filters.Mask`
+   * multiplies the object by the mask's alpha. Handed the placeholder a mask
+   * would therefore do nothing at all, and inverted it would erase the object
+   * outright — so "no image chosen yet" would look either like a broken feature
+   * or like the editor having deleted something. The placeholder exists so an
+   * unfinished *object* stays selectable and draggable; a mask is not an
+   * object, it is a pass over one, and the honest empty state for a pass is
+   * **not to run it**.
+   *
+   * So "no image chosen", "the image is gone" and "the image is still decoding"
+   * remain one state and one code path, exactly as the placeholder's own rule
+   * asks — that state is simply *unmasked* rather than placeholder-masked. It
+   * is the state `attachEffects` already produces in an export running without
+   * WebGL, so the canvas and the export still agree and nothing downstream is
+   * new.
+   */
+  private maskTextureKeyFor(assetId: string | null): string | null {
+    const asset = findAsset(this.syncing, assetId);
+    if (!asset) return null;
+    const key = textureKeyForAsset(asset);
+    return this.textures.exists(key) ? key : null;
   }
 
   /** The texture a sprite should be drawn with, falling back to the placeholder. */
@@ -4411,10 +4460,26 @@ export class EditorScene extends Phaser.Scene {
     const target: Phaser.GameObjects.GameObject =
       (node.type === 'particles' ? this.emitters.get(key) : undefined) ?? object;
 
-    // Only for a node that actually has effects: `enableFilters` is idempotent,
-    // so calling it always would be safe, but it allocates a camera per object
-    // and a scene where every object carries one is the cost this avoids.
-    if (effects.length === 0) {
+    // The passes that will actually run, which since iteration 40 is not the
+    // same list as the document's: a mask with no usable texture adds nothing
+    // (see `maskTextureKeyFor`). Filtered here rather than inside the loop so
+    // that a node whose only effect is one of those takes the early return
+    // below — `enableFilters` is idempotent and calling it always would be
+    // safe, but it allocates a camera per object, and "a mask has been added
+    // and no image picked yet" is an ordinary state to be in while the panel
+    // is open rather than a hand-edited curiosity. `emitNode` builds its call
+    // list before its own gate for exactly this reason, so the two sides go on
+    // agreeing about when an object carries filters at all.
+    //
+    // The *signature* above deliberately stays the document's own list. It is
+    // what `syncTextures`' `nodeEffects.clear()` exists to invalidate, and
+    // computing it from the filtered list instead would hide that dependency
+    // behind an accident.
+    const drawable = effects.filter(
+      (effect) => effect.kind !== 'mask' || this.maskTextureKeyFor(effect.assetId) !== null,
+    );
+
+    if (drawable.length === 0) {
       target.filters?.internal.clear();
       return;
     }
@@ -4424,7 +4489,7 @@ export class EditorScene extends Phaser.Scene {
     if (!list) return;
 
     list.clear();
-    for (const effect of effects) {
+    for (const effect of drawable) {
       switch (effect.kind) {
         case 'glow':
           list.addGlow(
@@ -4449,6 +4514,22 @@ export class EditorScene extends Phaser.Scene {
         case 'pixelate':
           list.addPixelate(effect.amount);
           break;
+        case 'mask': {
+          // `addMask` takes the texture *key* — a string, which is the form
+          // this document has always stored — and the `invert` flag second, so
+          // the two fields are a prefix of Phaser's own argument list and
+          // nothing is printed that the document does not hold. The three
+          // arguments after them are a view camera, a transform mode and a
+          // scale factor, every one of which would have to be invented.
+          //
+          // A mask with nothing to sample adds no pass at all; see
+          // `maskTextureKeyFor` for why that is not the placeholder.
+          // Non-null by construction: `drawable` above dropped every mask
+          // this answers null for.
+          const maskKey = this.maskTextureKeyFor(effect.assetId);
+          if (maskKey) list.addMask(maskKey, effect.invert);
+          break;
+        }
       }
     }
   }
