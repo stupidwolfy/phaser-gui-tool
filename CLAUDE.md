@@ -133,7 +133,14 @@ is *derived* at the emit from whether a rule starts it, which is `ctx.ruleTweens
 `paused: true` one type over and is what keeps iteration 15's sentence true rather than
 overturning it. No table, no helper, no gate, no schema bump and an `EditorScene.ts`
 untouched for the eighth time — the strongest version of that yet, because this is the first
-rule action whose result the canvas was **already showing**.
+rule action whose result the canvas was **already showing**. Iteration 39 (shipped) said how
+far an object moves when the camera does: a `scrollFactor` on a node, which is parallax at
+0.3 and a HUD at 0 — and which iteration 25 had refused in a sentence whose second clause was
+simply wrong, a standing fact carried in on a comma beside a real limit. The first iteration
+to close a hole by finding a *false* argument rather than a dated one, and the first ever to
+give `applyNode`'s "drawn position == stored position" a **standing** exception, because a
+canvas that showed a pinned object somewhere the exported game would not is the one
+disagreement this project refuses hardest.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -2057,6 +2064,313 @@ layer is not one. **No camera-wide blend**, which is a property of the view, and
 already put what happens to a view on a rule. And **no animating one** — a tween's `to` is six
 numeric properties that are one shape across the whole union, and a mode is a discrete word,
 which is exactly the refusal that keeps a seventh tween property out.
+
+## Parallax and pinning
+
+A node may carry `scrollFactor?: { x: number; y: number }` — how far it moves when the
+scene's camera does. `1` is in sync with the world and is what absence means, `0` pins the
+object to the camera, and between them is parallax. Drawn on the canvas and emitted as a
+real `.setScrollFactor(...)`, so the editor and the exported game do the same thing.
+
+- **It is iteration 38's prescribed check run, and it found the refusal with a wrong clause
+  in it.** That iteration left iteration 39 a mechanical instruction: `grep` this file for
+  `scene.start` and for "game logic" and read every pre-28 refusal against what a rule can
+  say now. Nineteen such refusals; eleven already closed, and most survivors turned out to
+  be one cheap member. This is the one that was interesting, and it is interesting because
+  of *how* it was wrong rather than *that* it was:
+  - Iteration 19 wrote **"No scroll speed on a tile sprite — a background that drifts is
+    `tilePositionX += delta` in the game's own `update()`, which is behaviour over time and
+    the `scene.start` argument."** That is **correct and stays refused**. A per-frame
+    increment is the one shape this vocabulary structurally cannot name.
+  - Iteration 25 then wrote **"No scroll factor and no parallax, which is the tile sprite's
+    refused scroll speed one type over: a layer that drifts is behaviour over time, and a
+    layer that moves at a different rate to the camera is a second camera's question."**
+    The first clause is a citation of a real limit. **The second is wrong.** A thing that
+    moves at a different rate to the camera is not a second camera and is not behaviour
+    over time — it is `setScrollFactor`, declared once at boot, which is a *standing fact
+    about the world* in iteration 20's own sense, in the same breath as `setCollision` and
+    `add.collider`.
+- **So the lesson to carry forward is narrower than 38's, and it is a new failure mode: a
+  refusal sentence can weld a real limit to a fake one, and the fake half inherits the real
+  half's authority.** Iteration 34 said a refusal list is a list of things somebody thought
+  of; 37 said it gets longer in the direction it is already looking; 38 said the holes are
+  in the sentences a feature wrote about itself before the closer existed. This one is
+  inside a *single sentence*: "a layer that drifts" earned the refusal and "a layer that
+  moves at a different rate to the camera" rode in beside it on a comma. Nobody went back,
+  because the sentence reads as one argument. **The check for iteration 40 is therefore to
+  re-read the refusals that justify themselves by pointing at a neighbour** — the ones that
+  say "X's argument one type over", "the same sentence one feature on", "the `.tmj`
+  argument at a smaller scale — and ask whether the neighbour's argument actually reaches
+  this case, or only the case beside it.
+- **The fact that settled it was already in the exporter.** `grep -rn scrollFactor src/`
+  returned three lines before this iteration, all of them inside the touch-controls helper,
+  where iteration 21 wrote *"`setScrollFactor(0)`, the first this exporter has ever emitted,
+  which is what makes these a HUD rather than three objects in the level."* The editor has
+  known how to build a HUD for eighteen iterations and the document has never been able to
+  ask for one.
+- **And two shipped features did not work together.** Iteration 30 gave a text node a live
+  variable label — a score readout — and iteration 18 gave the scene a camera that scrolls
+  and follows a target. The score slides off the screen. `README.md` has meanwhile
+  advertised the `tileSprite` type as *"a wall, water or a parallax background layer"* since
+  iteration 19, which it could not be: a tile sprite repeats, and nothing in the document
+  could say it moves at a different rate to the camera, which is the whole of what parallax
+  is. A README promising a feature the schema cannot express is the sharpest version of a
+  hole this list has produced.
+
+**The canvas draws the offset, and that is the decision the rest of it turns on.**
+
+- **`applyNode`'s invariant gains its second exception, and it is a different kind from the
+  first.** Phaser renders at `x - camera.scrollX * scrollFactorX`, so at the frame the game
+  opens on a factor-`f` object occupies the world point `x + scroll * (1 - f)`. The editor
+  draws it there. A tween's break of that invariant is **temporary and thrown away** —
+  switch ▶ off and everything is back. This one is **standing**, and it does not need to be
+  either: it is a *constant* per node, read off the document's own camera, so it is exact
+  rather than drifting.
+- **At the default camera scroll of `(0, 0)` the offset is exactly zero for every factor**,
+  which is not a special case but the arithmetic agreeing — a camera that has not moved
+  offsets nothing. So every project written before this draws byte for byte what it drew
+  before, and so does the canonical HUD case, since a camera that *follows* a target still
+  opens where it was put. The offset is visible only for a scene whose camera opens already
+  scrolled, which is precisely the only state in which the canvas and the export could ever
+  have disagreed.
+- **The alternative was to draw nothing, and it is the one this document would normally
+  take** — the camera's own "drawn, never applied" for the fifth time. It was refused
+  because of what it buys: for a scene whose camera opens scrolled, the editor would show a
+  HUD element outside the shot while the exported game puts it inside. A canvas and an
+  export disagreeing about a picture is the single failure this project guards hardest
+  against, and it outranks an invariant that already has one exception.
+- **The offset is drawn as a position, never by setting `object.scrollFactorX`**, and that
+  is the trap worth stating because the one-line version looks obviously right. The editor's
+  `cameras.main` is the **user's own view** — pan, pinch, ⤢ Fit — so an object given a
+  factor of 0 there would pin itself to the *viewport* and slide about the scene as the user
+  looked around. The document means the game's camera, which this canvas never applies.
+- **Three consumers, one computation.** `applyNode` works the offset out and remembers it in
+  `scrollOffsets`, keyed by display key; `drawBodies` and `drawTweenGhosts` read it back.
+  Both draw a mark *around* an object rather than the object itself, so a mark that
+  recomputed the offset would be a second place for the sign to be wrong — and a wrong sign
+  is an outline at twice the distance in the opposite direction. `drawBodies` adds it to the
+  **document's** position rather than reading `object.x`, which would be identical today and
+  would quietly start following a tweened object under ▶.
+- **The drag needed no change at all**, and that is worth stating because it looks like the
+  first thing that would break. `DRAG` applies the pointer's own *displacement* to each
+  node's stored start value, so a constant added to both sides subtracts out. `localRectOf`,
+  `hitAreaFor`, `applyHitArea`, `worldBoundsOf`, `publishMeasuredBounds`, `snapTargetsFor`
+  and both handles all read the **object**, so they follow the drawn position automatically
+  and stay consistent with each other. On that list "no branch needed" and "forgot a branch"
+  read identically, which is why it says so in the code. The consequence worth stating rather
+  than discovering: **align and snapping work in drawn space**, so lining a pinned object up
+  with a world one lines up what is on screen — and because the offset is a constant,
+  `worldMovePatch` applying a drawn-space delta to the stored value lands exactly. That is
+  `publishMeasuredBounds`' own definition ("as the renderer last drew it") holding, the way
+  it already does for a tweened object under ▶.
+- **`cameraScrollOf` was split out of `cameraViewOf` rather than copied.** The violet frame
+  and the offset both need the clamped scroll, and a clamp written twice is a HUD drawn
+  inside the frame by one and outside it by the other — `textStyleOf`'s two-consumer rule,
+  on a number nobody can check by eye.
+
+**Top-level only, and — unusually — not for `physics`' reason.**
+
+- **Phaser honours a container child's scroll factor perfectly well.** This was read out of
+  `ContainerWebGLRenderer.js` rather than guessed: it sets
+  `child.setScrollFactor(childScrollFactorX * scrollFactorX, …)` before rendering each child
+  and restores it afterwards, so nesting genuinely **composes multiplicatively** and an
+  export could say it. That is the opposite of what a reader will assume from the two
+  neighbours that share this rule, and the reason the ban is argued from the other end.
+- **What cannot say it is the editor's canvas.** A scroll factor is drawn here as a position
+  offset, and a position offset composed through a rotated, unevenly scaled parent chain is
+  not a translation a child's own `x`/`y` can express. Refusing it in the document is
+  therefore honest where drawing it wrong would not be — the canvas and the export agreeing
+  is the property this whole feature exists to keep, and this is the one place it could have
+  been bought at the cost of itself.
+- **And it loses nothing, because a container *is* a node.** "Pin these five things" is said
+  on the group, which is top-level, and everything inside it moves together. The hostile
+  project's rotated group carries a real factor for exactly that, and its rotated child
+  carries an illegal one — the strip is asserted against the case that would be hardest to
+  draw.
+- **Strip on read, refuse on write**, for the seventh time: `scrollFactorOf(node, topLevel)`
+  answers `{1, 1}` for a nested node and `setNodeScrollFactor` reaches `scene.children`
+  directly, so `moveNode`, `groupSelection`, `pasteNode` and the tree's drag-to-nest each
+  need no guard, and a node dragged into a group and back out again keeps what it had —
+  `physicsOf`'s treatment of a nested body exactly. A prefab definition's children are
+  container children by the same mechanism, so one ban covers both; they take **different
+  code paths in the exporter** (`buildFactories` emits a definition's children through
+  `emitNode(..., true)` rather than through the container branch), which is why the hostile
+  project carries one of each.
+
+**The field, the reader, and the rest.**
+
+- **Two numbers rather than one**, which is the transform's Scale X/Y and a tile sprite's
+  Tile scale X/Y rather than the second-field-over-one-number this document refuses
+  everywhere else. They are a genuine two-axis fact: a side-scroller's sky wants
+  `{ x: 0.3, y: 1 }` so that it lags sideways and does not slide when the camera rises, and
+  a HUD wants both at zero. One number could say neither.
+- **`scrollFactorOf` is the only reader**, in the `blendModeOf` / `effectsOf` / `tweenOf` /
+  `physicsOf` / `guidesOf` / `tileMapOf` family, answering three questions at once: is there
+  a factor, is this node somewhere one would mean anything, and are both numbers ones Phaser
+  and the canvas can be handed. **It builds a fresh object per call, so
+  `useEditorStore((s) => scrollFactorOf(...))` is React error #185** — the `tileMapOf` trap,
+  fourteenth time. That needs saying twice as loudly here as anywhere else, because the
+  reader immediately above it in the file is documented as the *one* member of the family
+  that is safe in a selector: a bare string compares by value and a pair of numbers does not,
+  and anybody arriving from `blendModeOf` will carry the wrong half over.
+- **Repair, never drop** — `cameraOf`'s policy rather than `soundsOf`'s split, and *a repair
+  may narrow what the document says; it may never widen it* is satisfied trivially, there
+  being no gate inside a scroll factor for a repair to open. A nonsense number reads as 1,
+  which is the state every object was in before this field existed. A repair costs the
+  *number*, not the object and not the other axis.
+- **`MAX_SCROLL_FACTOR` is 10, exported, and it is the only runaway here.** A factor is a
+  multiplier on the camera's scroll, so a hand-edited six-figure one is an object that has
+  silently left the game the moment the camera moves. Exported where `DEFAULT_BURST` is not,
+  by that pair's split: a *limit* has to be the same number in the panel's field and in the
+  reader's clamp, or the control offers what the reader takes back. There is no seed beside
+  it, because a scroll factor is never added — it is set.
+- **Negative is legal and left alone**, which is deliberate rather than an oversight: an
+  object that travels *against* the camera is a real effect people reach for, and refusing
+  it would be refusing a thing Phaser does.
+- **Absent means `{ x: 1, y: 1 }`**, so `createNode` seeds nothing — the rule the asset
+  table, the tilemap helper, the prefab factories and `blendMode` all follow. It is the
+  deliberate contrast with `defaultEffect` and `defaultTween`, which both seed a *visible*
+  value because a thing that arrives doing nothing looks broken: a scroll factor is never
+  added, it is **chosen**, so there is no press to make visible and that rule does not
+  transfer.
+- **`setNodeScrollFactor` is a store action of its own, and `updateProps` genuinely could
+  not do it.** `updateProps` spreads, so it can set a key and can never *remove* one:
+  `{ scrollFactor: undefined }` survives in memory, vanishes through `JSON.stringify`, and
+  gives the document two spellings of "off". `setNodePhysics`, `setNodeControls`,
+  `setNodeTween`, `setNodeLabel` and `setNodeBlendMode` all `delete` for that reason and
+  this joins them, sixth. It also normalises `{ x: 1, y: 1 }` to absence in the same write,
+  so the panel can never put the default into the document.
+- **Nothing else in the store needed an edit**, and beside `removePrefab` and
+  `removeVariable` that reads like six forgotten steps. A scroll factor names nothing the
+  document holds — no node, no asset, no variable, no scene — so `removeAsset`,
+  `removeVariable`, `removePrefab`, `mapProjectNodes`, `ruleNames` and `duplicateScene` all
+  inherit the right answer. It is `effectsOf`'s "the first reader in that family with no
+  dangling reference to check", one field over.
+
+**The export.**
+
+- **One `modifiersFor` branch, the second since `tileSprite`**, following *that* function's
+  rule as the blend mode above it does: printed only where it differs from Phaser's default,
+  so `.setScrollFactor(1, 1)` is never a line on every object in the file and every project
+  that predates this exports byte for byte what it did before. A scroll factor means
+  something entirely alone — one fact about one object, like a tint or a flip — which is
+  what puts it on this side of the line rather than beside the emitter config and the
+  physics body, whose dials only mean anything next to each other.
+- **`setScrollFactor(x, y?)` returns `this`** (checked in `types/phaser.d.ts`, not recalled),
+  so unlike the physics setters and the filter calls it genuinely chains. The one-argument
+  form means **both** axes, which is Phaser's own shorthand, so a HUD emits
+  `.setScrollFactor(0)` rather than `.setScrollFactor(0, 0)`.
+- **A `tilemap` needed nothing**, and that was checked rather than assumed, because it is
+  the one type where one chain visibly has several objects to reach. `emitNode` emits the
+  further layers as siblings and reuses the *same chain string* for each, so a stack scrolls
+  as one piece for free. A map whose floor lagged behind its walls is exactly the failure
+  that would read as the feature half-working.
+- **A `particles` node is included, and that is the one place this parts company with the
+  blend mode directly above it.** That one excludes an emitter because its mode is already
+  inside the config literal `constructorFor` emits whole; `scrollFactor` is **not** a
+  `ParticleEmitterConfig` key at all — checked, the emitter reads `scrollFactorX`/
+  `scrollFactorY` off itself in its renderer — so the chain is the only place it can go. In
+  the editor the offset lands on the wrapper Container, which is what carries the position,
+  and the pink marker riding along is correct because the marker marks where the emitter is.
+  That is the opposite call from `applyEffects` and `applyBlend`, which both refuse that
+  wrapper, and the difference is that those are about pixels and this is about a place.
+- **No gate, no table, no `EmitContext` field, no `prepare` flag and no new module helper**,
+  so nothing is drawn from the module identifier set and **nothing above it moves** —
+  `toIdentifier` suffixes a clash and four helper names are asserted verbatim in the suite.
+  Iteration 31's, 36's, 37's and 38's "nothing moved", fifth time.
+- **No game-config key and no header note**, the next entry in the comment block above
+  `arcadeConfig` where the audio, camera, keyboard, touch, tween, label and glow refusals
+  already are. `cameras.main` is built for every Phaser game and a scroll factor is a
+  property of an object, so a module dropped into someone else's game needs nothing added.
+- **`constructorFor` gains no case, so every step of this feature is silent** — the renderer,
+  the exporter, the inspector and the store alike, exactly as the whole of physics and
+  cameras were. There is no exhaustive switch to catch a missed one. `parallax.spec.ts`,
+  `export.spec.ts` and `export-toolchain.spec.ts` stand in for the compiler.
+
+**The panel.**
+
+- **A new flat peer `Scroll` section between `Blend` and `Effects`**, rendered for every node
+  type because Phaser mixes `ScrollFactor` into the base `GameObject` and a `TilemapLayer`
+  and a `ParticleEmitter` each carry one too — so there is no eligibility list to keep in
+  step, `BlendSection`'s sentence one field over. Deliberately **not** titled `Camera`, which
+  `SceneInspector` already owns: a `Section` title is a persisted storage key, so two panels
+  sharing one would open and close together though they are about different things. Below
+  Blend because a blend mode is about the pixels and this is about the place.
+- **The labels are `Scroll factor X` and `Scroll factor Y`**, never a bare `X`/`Y`, which the
+  Transform section a few rows up this same panel owns, and clear of `SceneInspector`'s
+  `Camera X`/`Camera Y`. The suite matches a label exactly.
+- **A nested node gets a sentence, not a hidden section** — `NodeRulesSection`'s and
+  `CollidersSection`'s rule, *a control that says why it cannot beats one that is not there*.
+  **And its wording is deliberately clear of that section's own nested hint**, which says
+  "top level of the scene" a few rows down the same panel: both are hints and both render at
+  once for a nested node, so a spec reaching either by its text matched two. That is the
+  exactly-matched-label rule arriving on a *paragraph*, and it cost this feature's spec a run
+  before it was noticed.
+- **The physics interaction is stated rather than refused**, in Phaser's own words: its
+  `scrollFactorX` doc says *"scroll factor values other than 1 are not taken in to
+  consideration when calculating physics collisions. Bodies always collide based on their
+  world position."* So a pinned object collides where it is stored rather than where it is
+  drawn. The tween-versus-dynamic-body call and the `setText`-versus-label one: a combination
+  explained beats a combination silently refused. Shown only where a non-default factor and a
+  body are **both** present, so it is a fact about that object rather than a warning on every
+  object in the project — and it is the one hint here that names a state two sections apart
+  on the same panel.
+
+**The suite.**
+
+- **The instrument is an extent (`findDrawnBox`), never a centroid.** What is asserted is
+  *where* something is drawn, and `camera.spec.ts` records a centroid moving 14px on the
+  mobile project alone for a reason that is not position — a stroke lands on a different
+  sub-pixel phase on each of its four edges.
+- **The fixture colours are `blend.spec.ts`', reused rather than newly picked**, which is
+  strictly safer than a fresh pair: both were already checked by arithmetic against every hex
+  literal in `tests/` and every chrome colour in `EditorScene.ts` — `#aa66aa` at a worst
+  channel margin of 71 and `#448800` at 68 — and neither comes near the one fixture colour
+  added since. It is why that file carries no arithmetic table of its own.
+- **Every drawn claim needs a camera that opens scrolled**, which is not a contrivance to
+  make the test work: it is the only state in which the offset is non-zero, and therefore the
+  only one worth a screenshot. The claim is a *difference* between two objects that start at
+  the same stored `x`, so whatever the projection does to one it does to the other.
+- **The positive runtime claim is in `export.spec.ts` and can only be there**, because the
+  editor never applies the document's camera. The near side can say where an object is drawn
+  at the frame the game opens on; whether it then stays there while the camera *travels* is a
+  question about a camera in motion, which is what this canvas does not run. A pan rather
+  than a follow, for the fade's reason: a pan is a stated destination over a stated time
+  where a follow is a race with whatever it follows. And the world object is asserted to have
+  moved **first**, because "the HUD did not move" is true of an export where the camera never
+  panned at all.
+- **Both guards were checked by breaking them**, which is iteration 33's and 37's rule: the
+  `applyNode` offset was removed and the drawn test confirmed red, and the reader's
+  `topLevel` strip was removed and the nested test confirmed red. The second is stronger than
+  it looks — deleting the parameter's *use* is caught by `noUnusedParameters` before a test
+  runs at all, so the guard has a compiler behind it as well as a claim.
+- **`SCHEMA_VERSION` did not bump — the guides case, sixteenth time.** No new `NodeType`, so
+  a v14 `createDisplayObject` has a case for everything in the file, and `node.scrollFactor`
+  rides in on `scenes`, which `parseProject` passes through verbatim, **and on
+  `prefabs.children`, which `parsePrefabs` also passes through unvalidated** — so both homes
+  survive an old build's re-save. A v14 build draws the object at its document position,
+  emits no setter and carries the field back out untouched: **an old build doing less, not a
+  file breaking**, which is iterations 31, 33, 34, 36 and 37's edge exactly. Still contingent
+  on `parseProject` not reconstructing scenes or prefab children field by field.
+  `parallax.spec.ts` asserts the 14 in the saved artefact.
+- **`hasMotionIn` is untouched and records its sixteenth refusal**, and it is an easy one: a
+  parallax background moves only because the camera does, and this canvas never applies the
+  camera. There is nothing here for a ▶ to start and nothing it could stop.
+
+**What stays refused.** **No scroll speed and no drift** — iteration 19's refusal, intact and
+for its own reason: `tilePositionX += delta` is a per-frame increment, which is the one shape
+this vocabulary cannot name and the first thing that would need an emitted `update()`. That
+half of iteration 25's sentence stands; only the half riding beside it on a comma did not.
+**No scroll factor on a tilemap *layer*, a prefab child from outside, or a group's children
+individually** — `fx`'s and `blendMode`'s refusal verbatim: this is on a node, and a layer is
+not one. **No animating one** — a tween's `to` is six numeric properties that are one shape
+across the whole union, which is exactly the refusal that keeps a seventh out. **No rule
+action that sets one** — it is a standing fact about how an object is drawn rather than
+something that happens at a moment, which is the call `blendMode` and `fx` both made. **No
+camera-relative *size*** — `setScrollFactor` has no scale twin, and a HUD that resized with
+the zoom is the camera's `ignore` list and a second viewport rather than a field. And **no
+screen-space authoring mode**: a second coordinate system in the document is the rectangle
+iteration 21 refused when it made the touch pad's layout derived rather than stored.
 
 ## Tweens
 
@@ -5273,6 +5587,8 @@ tests/
                             remembered, persisted, and never in the document
   audio.spec.ts             a sound imported, registered, saved, reopened and exported
   camera.spec.ts            a camera drawn, clamped, followed, saved and exported
+  parallax.spec.ts          an object pinned to the camera, drawn where the game will
+                            put it, refused inside a group and repaired from a bad file
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
   play.spec.ts              that page run in the editor: a body that falls, and a
@@ -5563,6 +5879,39 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
+Scroll factors shipped in iteration 39 and are the entry worth reading first, because the
+check that found them was the one iteration 38 wrote down — and because what they found was
+a **new** way for this list to be wrong. The previous four lessons were all about a refusal
+being *dated*: 34 said a refusal list is a list of things somebody thought of, 37 said it
+gets longer in the direction it is already looking, 38 said the holes are in the sentences a
+feature wrote about itself before the closer existed. All three assume the sentence was true
+when it was written. This one was not.
+
+Run the grep 38 prescribed — `scene.start`, "game logic", everything older than iteration 28
+— and nineteen refusals come back. Eleven were already closed. Most survivors were one cheap
+member. The one that mattered read, in iteration 25: *"a layer that drifts is behaviour over
+time, and a layer that moves at a different rate to the camera is a second camera's
+question."* The first clause is a correct citation of iteration 19's real limit. The second
+is a **standing fact** — `setScrollFactor`, declared once at boot — smuggled in beside it on
+a comma, and it inherited the first clause's authority for fourteen iterations. Meanwhile
+the exporter had been emitting `setScrollFactor(0)` since iteration 21 for its own HUD, and
+the README had been advertising a "parallax background layer" since iteration 19.
+
+**So the reading to carry forward: a refusal sentence can weld a real limit to a fake one,
+and the fake half inherits the real half's authority.** A dated refusal is at least honest
+about its own iteration; this kind is not wrong about the vocabulary, it is wrong about the
+*feature*. **The check for iteration 40 is therefore to re-read every refusal that justifies
+itself by pointing at a neighbour** — the ones phrased "X's argument one type over", "the
+same sentence one feature on", "the `.tmj` argument at a smaller scale", "the second field
+over one number" — and ask whether the neighbour's argument actually reaches this case or
+only the case beside it. This file is full of those, and they are load-bearing when they are
+right; the borrowed ones are indistinguishable from them until somebody checks.
+
+What iteration 39 leaves is in "Parallax and pinning" above: no scroll speed or drift (still
+iteration 19's genuine limit, and still the first thing that would need an emitted
+`update()`), no factor on a tilemap layer or a prefab child from outside, no animating one,
+no rule action that sets one, no camera-relative size, and no screen-space authoring mode.
+
 Starting, stopping and bursting an emitter shipped in iteration 38 and is the entry worth
 reading first, because it is the **fourth** hole in a row that nothing on this list had ever
 named — and because it finally says where to look, where the three before it only said where
@@ -5579,9 +5928,11 @@ used the phrase twice in its own section.
 **So the reading to carry forward is narrower than 37's: the holes are in the sentences a
 feature wrote about itself before the thing that would close them existed.** A refusal is
 dated, and a dated refusal is a claim about the vocabulary of its own iteration, not about
-the document. The check for iteration 39 is mechanical, which is the point: `grep` this file
-for `scene.start` and for "game logic", and read every refusal older than iteration 28
-against what a rule can say now. The ones still standing after that are genuine.
+the document. The check it set for iteration 39 was mechanical, which was the point:
+`grep` this file for `scene.start` and for "game logic", and read every refusal older than
+iteration 28 against what a rule can say now. That check was run, and it worked — see the
+head of this section for what it turned up and for why the answer was not the kind of thing
+this paragraph was expecting.
 
 What iteration 38 leaves is short and is in "Making one throw" above: no pause or resume, no
 burst at a point, no emit or death zones, no follow target or `stopAfter`, no `advance` or
@@ -5893,7 +6244,12 @@ one thing: both are `readonly` and constructor-only, so they would have to join
 explain in a panel that currently needs none. **No scroll speed on a tile sprite** — a
 background that drifts is `tilePositionX += delta` in the game's own `update()`, which is
 behaviour over time and the `scene.start` argument; the document says where the pattern
-starts, which is the part that is layout. **Neither type animates**, which is not deferred
+starts, which is the part that is layout. **That refusal stands, and iteration 39 is the
+reason it is worth re-reading**: a tile sprite that *drifts* still needs the `update()` this
+vocabulary cannot emit, while a tile sprite that moves at a different rate to the camera —
+which is what "parallax background layer" in the README always meant — turned out to be a
+`scrollFactor` and a standing fact. The two were one sentence in iteration 25 and are two
+different things. **Neither type animates**, which is not deferred
 work at all: a `NineSlice` and a `TileSprite` carry no AnimationState, so this is Phaser's
 limit rather than this editor's. And **no per-corner insets beyond the four** — a nine-slice
 *is* four numbers, and anything finer is a second image.
@@ -5995,10 +6351,16 @@ settles it), and the renderer needing a Container where the exporter wanted sibl
 is left: **no per-layer tileset**, refused for the reason a sprite has no width — the tile
 size is derived from the tileset, so two layers of one map could disagree about how big a
 cell is. **No per-layer alpha**, which is a field and would be a second answer to the
-node's own. **No scroll factor and no parallax**, which is the tile sprite's refused scroll
-speed one type over: a layer that drifts is behaviour over time, and a layer that moves at
-a different rate to the camera is a second camera's question. And **no layer inside a
-layer**, which is not a thing Phaser has. The second hole is the one iteration 20 closed,
+node's own. **No scroll factor and no parallax** — and this one was *half wrong*, which
+iteration 39 found and closed; the sentence is kept as written because the correction is
+worth more than the tidy version. It said: "a layer that drifts is behaviour over time, and
+a layer that moves at a different rate to the camera is a second camera's question." The
+first clause is right and stands. The second is not: a thing that moves at a different rate
+to the camera is `setScrollFactor`, a standing fact declared once at boot, and it shipped as
+a **node**-level field — see "Parallax and pinning" above. What is still refused for a
+*layer* is the same thing refused for an `fx` and a `blendMode`: a scroll factor is on a
+node, and a layer is not one, so a parallax stack is several tilemap nodes rather than
+several layers of one. And **no layer inside a layer**, which is not a thing Phaser has. The second hole is the one iteration 20 closed,
 and it is worth reading what it used to say —
 "`setCollision([1, 2, 3])` is a line the user writes, and a per-tile flag in the schema is
 the beginning of a behaviour model" — beside where the line actually landed: which tiles are

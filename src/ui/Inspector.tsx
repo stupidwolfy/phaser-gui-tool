@@ -34,6 +34,9 @@ import {
   controlsOf,
   defaultEffect,
   blendModeOf,
+  scrollFactorOf,
+  isDefaultScrollFactor,
+  MAX_SCROLL_FACTOR,
   BLEND_MODES,
   effectsOf,
   findAsset,
@@ -3709,6 +3712,8 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
 
       <BlendSection node={node} />
 
+      <ScrollSection node={node} />
+
       <EffectsSection node={node} />
 
       {/* Last, and on this panel at all for `NodeCollisionsSection`'s reason:
@@ -4438,6 +4443,98 @@ function BlendSection({ node }: { node: GameObjectNode }) {
         Add and Screen lighten what is behind; Multiply darkens it. Normal is the default
         and stores nothing.
       </p>
+    </Section>
+  );
+}
+
+/**
+ * How far this object moves when the scene's camera does.
+ *
+ * On every node type, `BlendSection`'s reason one component over: Phaser mixes
+ * `ScrollFactor` into the base `GameObject`, and a `TilemapLayer` and a
+ * `ParticleEmitter` each carry one too — so there is no eligibility list here
+ * the way `PHYSICS_TYPES` is one, and nothing to keep in step with it.
+ *
+ * Its own flat peer titled `Scroll`, checked against every other `Section`
+ * title in this file and against the mobile tab bar's exactly-matched
+ * `Scene`/`Properties`/`File`. Deliberately **not** `Camera`, which
+ * `SceneInspector` already owns: a `Section` title is a persisted storage key,
+ * so two panels sharing one would open and close together though they are about
+ * different things. Below Blend because a blend mode is about the pixels and
+ * this is about the place.
+ */
+function ScrollSection({ node }: { node: GameObjectNode }) {
+  const scene = useActiveScene();
+  const setNodeScrollFactor = useEditorStore((s) => s.setNodeScrollFactor);
+  // Derived outside any selector: `scrollFactorOf` builds a fresh object per
+  // call, so `useEditorStore((s) => scrollFactorOf(...))` is React error #185 —
+  // the `tileMapOf` trap. `blendModeOf` next door is safe in a selector and this
+  // is not, which is exactly the assumption a reader arriving from there makes.
+  const topLevel = scene.children.some((child) => child.id === node.id);
+  const factor = scrollFactorOf(node, topLevel);
+
+  // `NodeRulesSection`'s rule: say why, rather than leave the section out. A
+  // silently absent control reads as a broken one, which is this file's
+  // most-repeated lesson — and here the fix is one sentence that also says
+  // where to put the factor instead.
+  //
+  // Worded deliberately clear of that section's own sentence, which says
+  // "top level of the scene" a few rows down this same panel. Both are hints
+  // and both render at once for a nested node, so a spec reaching either by its
+  // text would have matched two — the exactly-matched-label rule arriving on a
+  // paragraph, and it cost this feature's spec a run.
+  if (!topLevel) {
+    return (
+      <Section title="Scroll">
+        <p className="hint">
+          Only an object the scene holds directly can have a scroll factor. Put one on the
+          group instead, and everything inside it moves together.
+        </p>
+      </Section>
+    );
+  }
+
+  return (
+    <Section title="Scroll">
+      <div className="field-row">
+        <NumberField
+          // "Scroll factor X", never a bare "X": the Transform section a few
+          // rows up this same panel owns that, and `SceneInspector` owns
+          // "Camera X". The suite matches a label exactly.
+          label="Scroll factor X"
+          value={factor.x}
+          step={0.1}
+          min={-MAX_SCROLL_FACTOR}
+          max={MAX_SCROLL_FACTOR}
+          onChange={(x) => setNodeScrollFactor(node.id, { ...factor, x })}
+        />
+        <NumberField
+          label="Scroll factor Y"
+          value={factor.y}
+          step={0.1}
+          min={-MAX_SCROLL_FACTOR}
+          max={MAX_SCROLL_FACTOR}
+          onChange={(y) => setNodeScrollFactor(node.id, { ...factor, y })}
+        />
+      </div>
+      <p className="hint">
+        1 moves with the world, 0 pins this to the camera — a score or a health bar that
+        stays put while the level scrolls past. Between the two is parallax: a distant
+        background at 0.3 drifts slower than the ground.
+      </p>
+      {isDefaultScrollFactor(factor) || !physicsOf(node, topLevel) ? null : (
+        // Phaser's own sentence, from `ScrollFactor`'s doc comment: "scroll
+        // factor values other than 1 are not taken in to consideration when
+        // calculating physics collisions. Bodies always collide based on their
+        // world position." A combination explained beats a combination silently
+        // refused — the tween-versus-dynamic-body call — and it is shown only
+        // where both halves are actually present, so it is a fact about *this*
+        // object rather than a warning on every object in the project.
+        <p className="hint">
+          This object has a body, and Phaser collides bodies on their world position — so
+          it will collide where it is stored rather than where it is drawn.
+        </p>
+      )}
     </Section>
   );
 }

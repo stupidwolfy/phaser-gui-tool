@@ -1487,6 +1487,56 @@ export type GameObjectNode = {
      */
     blendMode?: BlendMode;
     /**
+     * How far this object moves when the scene's camera does, or absent for
+     * everything that simply sits in the world.
+     *
+     * The **sixth** optional field here, beside `physics`, `controls`, `tween`,
+     * `fx` and `blendMode`, and for `fx`'s reason: it is not a per-type
+     * setting, so every entry of `NodePropsByType` would carry the same pair
+     * and `createNode` would have to answer "what is this rectangle's scroll
+     * factor". Optional for the reason `guides` is, and read through
+     * `scrollFactorOf`, never directly.
+     *
+     * `1` is in sync with the camera — the default, and what absence means.
+     * `0` pins the object to the camera, which is a HUD: a score that stays in
+     * its corner while the world moves under it. Between the two is parallax.
+     *
+     * **Two numbers rather than one**, which is the transform's Scale X/Y and a
+     * tile sprite's Tile scale X/Y rather than the second-field-over-one-number
+     * this document refuses everywhere else. They are a genuine two-axis fact:
+     * a side-scroller's sky wants `{ x: 0.3, y: 1 }` so that it lags sideways
+     * and does not slide when the camera rises, and a HUD wants both at zero.
+     * One number could say neither.
+     *
+     * **Top-level only**, which is `physics`' and `controls`' rule for the
+     * third time — and, unusually, *not* for their reason. Those two are banned
+     * inside a container because an Arcade body and a drive-scheme both read
+     * their owner's `x`/`y` as *world* coordinates every step. Phaser has no
+     * such difficulty here: `ContainerWebGLRenderer` multiplies a child's
+     * scroll factor by its container's and restores it afterwards, so nesting
+     * genuinely composes and an export could say it. What cannot say it is the
+     * **editor's canvas**. It draws a scroll factor as a position offset rather
+     * than by setting one (see `EditorScene.applyNode`: setting one would pin
+     * the object to the *user's viewport*, which is not what the document
+     * means), and a position offset composed through a rotated, unevenly scaled
+     * parent chain is not a translation a child's own `x`/`y` can express. A
+     * container *is* a node, so "pin these five things" is said on the group
+     * and loses nothing. Enforced as strip on read, refuse on write, so
+     * `moveNode`, `groupSelection`, `pasteNode` and the tree's drag-to-nest
+     * each need no guard, and a node dragged into a group and back out again
+     * keeps what it had — `physicsOf`'s treatment of a nested body exactly.
+     *
+     * **Absent means `{ x: 1, y: 1 }`**, which is what keeps every project
+     * written before this exporting and drawing byte for byte what it did
+     * before — the rule the asset table, the tilemap helper, the prefab
+     * factories and `blendMode` all follow. It is also why `createNode` seeds
+     * nothing, and the deliberate contrast with `defaultEffect` and
+     * `defaultTween`, which both seed a *visible* value because a thing that
+     * arrives doing nothing looks broken: a scroll factor is never added, it is
+     * **set**, so there is no press to make visible.
+     */
+    scrollFactor?: ScrollFactor;
+    /**
      * Nested nodes, positioned relative to this one. Only a `container`
      * renders them, but the array is present on every node so that traversal,
      * cloning and the parser never have to branch on the type.
@@ -2411,6 +2461,85 @@ export function blendModeOf(node: GameObjectNode): BlendMode {
 }
 
 /**
+ * How far an object moves when the camera does, per axis.
+ *
+ * Phaser's own two numbers under Phaser's own names, for the reason
+ * `ImageAsset.sheet` holds `addTilesetImage`'s four: a shape that is handed
+ * almost verbatim to the call it describes cannot drift from it.
+ */
+export interface ScrollFactor {
+  x: number;
+  y: number;
+}
+
+/**
+ * The widest scroll factor the panel offers and the reader accepts.
+ *
+ * Exported, where `DEFAULT_BURST` beside it is not, and by that pair's split: a
+ * *limit* has to be the same number in the panel's field and in the reader's
+ * clamp, or the control offers what the reader takes back. There is no seed to
+ * go with it, because a scroll factor is never added — it is set.
+ *
+ * Ten rather than a larger number for the reason `MAX_EFFECTS` is four: it is
+ * the only runaway here. A factor is a multiplier on the camera's scroll, so a
+ * hand-edited six-figure one puts the object hundreds of thousands of pixels
+ * off the moment the camera moves a little — not a crash, but an object that
+ * has silently left the game. **Negative is legal and left alone**, and that is
+ * deliberate rather than an oversight: an object that travels *against* the
+ * camera is a real effect people reach for, and refusing it would be refusing a
+ * thing Phaser does.
+ */
+export const MAX_SCROLL_FACTOR = 10;
+
+/** Absence, said out loud — see `scrollFactorOf`. */
+const NO_SCROLL_FACTOR: ScrollFactor = { x: 1, y: 1 };
+
+/**
+ * The only reader of a node's scroll factor, in the `blendModeOf` / `effectsOf`
+ * / `tweenOf` / `physicsOf` / `guidesOf` / `tileMapOf` family, and it answers
+ * three questions at once: is there a factor here, is this node somewhere one
+ * would mean anything, and are both numbers ones Phaser and the canvas can be
+ * handed.
+ *
+ * **It builds a fresh object per call, so
+ * `useEditorStore((s) => scrollFactorOf(...))` is React error #185** — the
+ * `tileMapOf` trap, fourteenth time. Worth saying twice as loudly here as
+ * anywhere, because the reader immediately above it is documented as the *one*
+ * member of this family that is safe in a selector, and anybody arriving from
+ * `blendModeOf` will carry that over. A bare string compares by value; a pair
+ * of numbers does not.
+ *
+ * `topLevel` is `physicsOf`'s and `controlsOf`'s second argument and does their
+ * job: a factor found on a node inside a container or a prefab definition reads
+ * as **absent** rather than being deleted, so a node dragged into a group and
+ * back out again is the same node. See the field's own comment for why the ban
+ * is the editor's arithmetic rather than Phaser's limit — which is the opposite
+ * way round from those two neighbours and is the thing a reader will assume.
+ *
+ * Repair, never drop — `cameraOf`'s policy rather than `soundsOf`'s split, and
+ * *a repair may narrow what the document says; it may never widen it* is
+ * satisfied trivially, there being no gate inside a scroll factor to open. A
+ * nonsense number reads as 1, which is the state every object was in before
+ * this field existed.
+ */
+export function scrollFactorOf(node: GameObjectNode, topLevel: boolean): ScrollFactor {
+  const own = node.scrollFactor;
+  if (!topLevel || own === null || typeof own !== 'object') return { ...NO_SCROLL_FACTOR };
+
+  const axis = (value: unknown): number => {
+    const number = finiteOr(value, 1);
+    return Math.min(MAX_SCROLL_FACTOR, Math.max(-MAX_SCROLL_FACTOR, number));
+  };
+
+  return { x: axis(own.x), y: axis(own.y) };
+}
+
+/** Whether this is the factor absence already means, and so emits and draws nothing. */
+export function isDefaultScrollFactor(factor: ScrollFactor): boolean {
+  return factor.x === 1 && factor.y === 1;
+}
+
+/**
  * A line the user placed for things to line up on.
  *
  * Every other line an object can agree with is incidental — it is wherever some
@@ -3049,26 +3178,30 @@ export function isDefaultCamera(camera: SceneCamera): boolean {
 }
 
 /**
- * The part of the world the camera opens on, in scene coordinates.
+ * The scroll the camera actually opens on, after the bounds clamp.
  *
  * The arithmetic is Phaser's own, from `Camera.preRender` and `clampX`/`clampY`,
  * and it has to stay copied for `frameLayoutOf`'s reason: this is what the
  * editor draws, and a formula of our own would offer the user a shot their
- * exported game does not open on. Two parts of it are easy to get wrong by
- * guessing — the view is centred on the *unzoomed* viewport's middle rather
- * than pinned to its top-left, so zooming closes in on the middle of the shot
- * and not on its corner; and the bounds clamp moves the scroll rather than
- * cropping the view.
+ * exported game does not open on. The part that is easy to get wrong by
+ * guessing is that the bounds clamp moves the **scroll** rather than cropping
+ * the view — which is exactly why this is the half worth having on its own.
  *
  * The viewport is the scene's own width and height because that is the size of
  * the game canvas an export builds — the same "one number, one place" that
  * gives a sprite no width of its own.
  *
+ * Split out of `cameraViewOf` rather than copied, so the frame the canvas draws
+ * and the offset `scrollOffsetOf` applies cannot disagree about where the shot
+ * begins. Its two consumers would otherwise each carry a clamp, and a clamp
+ * written twice is a HUD drawn inside the frame by one and outside it by the
+ * other.
+ *
  * Where a follow would take it is deliberately not in here. The frame is the
  * shot the scene opens on; a camera in motion is the thing the editor does not
  * run, exactly as it does not run a physics step.
  */
-export function cameraViewOf(scene: SceneDoc): { x: number; y: number; width: number; height: number } {
+export function cameraScrollOf(scene: SceneDoc): { x: number; y: number } {
   const camera = cameraOf(scene);
   const width = scene.width / camera.zoom;
   const height = scene.height / camera.zoom;
@@ -3082,8 +3215,52 @@ export function cameraViewOf(scene: SceneDoc): { x: number; y: number; width: nu
     return Math.min(high, Math.max(low, scroll));
   };
 
-  const scrollX = clamp(camera.scrollX, width, scene.width);
-  const scrollY = clamp(camera.scrollY, height, scene.height);
+  return {
+    x: clamp(camera.scrollX, width, scene.width),
+    y: clamp(camera.scrollY, height, scene.height),
+  };
+}
+
+/**
+ * Where an object with this scroll factor sits, relative to where the document
+ * says it is, at the frame the game opens on.
+ *
+ * Phaser renders at `x - camera.scrollX * scrollFactorX`, so the world point a
+ * factor-`f` object occupies at the opening scroll is `x + scroll * (1 - f)`.
+ * That is the whole of the arithmetic, and it is why this is a *where* rather
+ * than a rate: a scroll factor changes what an object's stored `x`/`y` is
+ * measured **from** — the world origin at 1, the camera's own corner at 0.
+ *
+ * Two consumers, `textStyleOf`'s rule: `EditorScene` draws the offset and
+ * nothing in the export computes it at all, because there Phaser does it. So
+ * unlike `bodyShapeOf` this is not a pair that could disagree — it is the one
+ * side that has to *imitate* what the other side gets for free, which is
+ * `cameraViewOf`'s own position and why it sits beside it.
+ *
+ * **At the default scroll of `(0, 0)` it is exactly `(0, 0)` for every factor**,
+ * which is not a special case but the arithmetic agreeing: a camera that opens
+ * at the origin has not moved, so nothing is offset from anything. That is what
+ * makes this feature cost every existing project nothing, and it is also the
+ * canonical HUD case — a camera that *follows* a target still opens where it
+ * was put.
+ */
+export function scrollOffsetOf(scene: SceneDoc, factor: ScrollFactor): { x: number; y: number } {
+  if (isDefaultScrollFactor(factor)) return { x: 0, y: 0 };
+  const scroll = cameraScrollOf(scene);
+  return { x: scroll.x * (1 - factor.x), y: scroll.y * (1 - factor.y) };
+}
+
+/**
+ * The part of the world the camera opens on, in scene coordinates.
+ *
+ * See `cameraScrollOf` for the clamp; the centring here is the other half of
+ * Phaser's `preRender`.
+ */
+export function cameraViewOf(scene: SceneDoc): { x: number; y: number; width: number; height: number } {
+  const camera = cameraOf(scene);
+  const width = scene.width / camera.zoom;
+  const height = scene.height / camera.zoom;
+  const { x: scrollX, y: scrollY } = cameraScrollOf(scene);
 
   return {
     x: scrollX + scene.width / 2 - width / 2,

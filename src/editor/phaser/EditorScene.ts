@@ -30,6 +30,8 @@ import {
   prefabChildrenOf,
   sliceInsetsOf,
   spawnPointsOf,
+  scrollFactorOf,
+  scrollOffsetOf,
   textStyleOf,
   tileLayerOf,
   tileMapOf,
@@ -562,6 +564,13 @@ type Renderable =
 const EMPTY_GROUP_SIZE = 24;
 
 /**
+ * What a node with no scroll factor is offset by, shared rather than built per
+ * node per frame — `drawBodies` reads it once for every object in the scene.
+ * Frozen because it is handed out by reference.
+ */
+const ZERO_OFFSET: Readonly<{ x: number; y: number }> = Object.freeze({ x: 0, y: 0 });
+
+/**
  * Hit areas are expressed in the object's local space with (0,0) at its
  * top-left; Phaser applies origin, scale and rotation itself. An ellipse gets a
  * real elliptical test so its corners aren't clickable.
@@ -676,6 +685,20 @@ export class EditorScene extends Phaser.Scene {
    * object, and a glow must not destroy and recreate the sprite under it.
    */
   private nodeEffects = new Map<string, string>();
+
+  /**
+   * Where each object is drawn relative to where the document says it is,
+   * because of its scroll factor — by display key, and only for the nodes that
+   * have one, so the map is empty in every project that does not use the
+   * feature.
+   *
+   * Filled by `applyNode`, which is the one place the offset is worked out, and
+   * read by `drawBodies` and `drawTweenGhosts`. Three consumers and one
+   * computation, which is the point: a body outline or a tween ghost that
+   * recomputed it would be a second place for the sign to be wrong, and a wrong
+   * sign is a mark drawn at twice the distance in the opposite direction.
+   */
+  private scrollOffsets = new Map<string, { x: number; y: number }>();
 
   /**
    * The live tween on each display object, by display key.
@@ -1681,6 +1704,9 @@ export class EditorScene extends Phaser.Scene {
     // The controllers themselves need no removal — a `Controller` is destroyed
     // with its `FilterList`, which is destroyed with the game object above.
     this.nodeEffects.delete(key);
+    // And once more, one map over: a stale offset would have the next node to
+    // land on this key drawn somewhere its own factor never asked for.
+    this.scrollOffsets.delete(key);
     // A tween outliving its object is one writing to a destroyed target, and
     // the next node to land on this key would inherit a signature it was never
     // given. The same two lines, one map over.
@@ -3032,8 +3058,14 @@ export class EditorScene extends Phaser.Scene {
       const radians = (box.rotation * Math.PI) / 180;
       const cos = Math.cos(radians);
       const sin = Math.sin(radians);
-      const cx = node.transform.x;
-      const cy = node.transform.y;
+      // The same offset `applyNode` drew the object with, read back rather than
+      // recomputed, so the outline cannot separate from the box it is around.
+      // Added to the *document's* position rather than read off `object.x`,
+      // which would be identical today and would quietly start following a
+      // tweened object under ▶ — a behaviour change this has no business making.
+      const offset = this.scrollOffsets.get(node.id) ?? ZERO_OFFSET;
+      const cx = node.transform.x + offset.x;
+      const cy = node.transform.y + offset.y;
       // `Vector2` rather than a plain pair because that is what `strokePoints`
       // is typed to take, and the exported `.ts` is not the only thing here
       // compiled under `strict`.
@@ -3225,9 +3257,14 @@ export class EditorScene extends Phaser.Scene {
       // frame exactly as the child itself is. Built rather than borrowed from
       // the object, because the object is standing somewhere else.
       const local = new Phaser.GameObjects.Components.TransformMatrix();
+      // The destination in the frame the object itself is drawn in — a pinned
+      // object's ghost belongs beside the pinned object, not out in the world.
+      // Only ever non-zero for a top-level node, which is the only kind that
+      // can carry a factor at all.
+      const offset = this.scrollOffsets.get(key) ?? ZERO_OFFSET;
       local.applyITRS(
-        target.x,
-        target.y,
+        target.x + offset.x,
+        target.y + offset.y,
         Phaser.Math.DegToRad(target.rotation),
         target.scaleX,
         target.scaleY,
@@ -3421,7 +3458,9 @@ export class EditorScene extends Phaser.Scene {
         );
       }
 
-      this.applyNode(object, node, index, key);
+      // `parent === null` is the top-level test: every recursion into a
+      // `container` or an `instance` below passes one.
+      this.applyNode(object, node, index, key, parent === null);
     });
   }
 
@@ -3862,8 +3901,26 @@ export class EditorScene extends Phaser.Scene {
     node: GameObjectNode,
     index: number,
     key: string,
+    topLevel: boolean,
   ): void {
     const { transform } = node;
+
+    // A scroll factor moves where the object is *drawn* without moving what the
+    // document says, so it is worked out once here and remembered for the two
+    // marks that are drawn around this object rather than by it.
+    //
+    // It is drawn as an offset and never by setting `object.scrollFactorX`, and
+    // that is the whole reason this is three lines rather than one. The editor's
+    // `cameras.main` is the **user's own view** — pan, pinch, ⤢ Fit — so an
+    // object given a factor of 0 here would pin itself to the viewport and slide
+    // about the scene as the user looked around. The document means the *game's*
+    // camera, which this canvas never applies; what it can honestly say is where
+    // the object sits at the frame the game opens on, which is what
+    // `scrollOffsetOf` answers and what the violet frame already claims to show.
+    const factor = scrollFactorOf(node, topLevel);
+    const offset = scrollOffsetOf(activeScene(this.syncing), factor);
+    if (offset.x === 0 && offset.y === 0) this.scrollOffsets.delete(key);
+    else this.scrollOffsets.set(key, offset);
 
     // Always mirror the document, including mid-drag. An earlier version skipped
     // the object under the pointer to stop the rounded store value fighting the
@@ -3872,8 +3929,24 @@ export class EditorScene extends Phaser.Scene {
     // object stranded at a stale position. The drag now stores exact floats and
     // rounds once on release, so there is nothing to fight and the invariant is
     // simply: drawn position == stored position, always.
-    // …with exactly one exception, and it is deliberate rather than a hole in
-    // the paragraph above: while ▶ is on, a tween owns the properties it
+    // …with exactly two exceptions, and both are deliberate rather than holes
+    // in the paragraph above.
+    //
+    // The second one first, because it is the standing one: a node with a
+    // scroll factor is drawn at `x + scroll * (1 - factor)`, the place it
+    // occupies at the frame the game opens on. That is not the tween's kind of
+    // break. A tween's is *temporary and thrown away* — switch ▶ off and every
+    // object is back where the document put it. This one never goes away, and
+    // it does not need to: it is a **constant** per node, read off the
+    // document's own camera, so it is exact rather than drifting, it is zero
+    // for every node at the default factor and for every scene whose camera
+    // opens at the origin, and the drag cancels it by construction — that
+    // gesture applies a pointer *displacement* to each node's stored start
+    // value, and a constant added to both sides subtracts out. What it buys is
+    // the one thing that is not negotiable: the canvas and the export cannot
+    // disagree about where an object is drawn.
+    //
+    // And the first: while ▶ is on, a tween owns the properties it
     // drives. This is *not* the physics refusal. A physics step rewrites the
     // numbers the document is made of because there is nowhere else for the
     // result to go; a tween's result is thrown away the instant it stops, so
@@ -3893,8 +3966,8 @@ export class EditorScene extends Phaser.Scene {
     // are independently tweenable: an object sliding sideways under ▶ still
     // follows a vertical nudge, and a tween on alpha alone must not pin
     // anything at all.
-    if (!held.has('x')) object.x = transform.x;
-    if (!held.has('y')) object.y = transform.y;
+    if (!held.has('x')) object.x = transform.x + offset.x;
+    if (!held.has('y')) object.y = transform.y + offset.y;
     if (!held.has('rotation')) object.setRotation(Phaser.Math.DegToRad(transform.rotation));
     if (!held.has('scaleX')) object.scaleX = transform.scaleX;
     if (!held.has('scaleY')) object.scaleY = transform.scaleY;
