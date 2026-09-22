@@ -31,6 +31,8 @@ import {
   tileMapOf,
   touchZonesOf,
   blendModeOf,
+  scrollFactorOf,
+  isDefaultScrollFactor,
   effectsOf,
   tweenOf,
   withoutInstances,
@@ -2704,7 +2706,11 @@ function textStyleLines(style: TextStyle): string[] {
  * *controller*, and `filters` is nullable in a way no chain can narrow. They
  * are emitted as their own statements by `emitNode` instead.
  */
-function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimation>): string[] {
+function modifiersFor(
+  node: GameObjectNode,
+  animations: Map<string, UsedAnimation>,
+  topLevel: boolean,
+): string[] {
   const out: string[] = [];
   const { rotation, scaleX, scaleY } = node.transform;
 
@@ -2754,6 +2760,44 @@ function modifiersFor(node: GameObjectNode, animations: Map<string, UsedAnimatio
     if (blend !== 'NORMAL') out.push(`.setBlendMode(${str(blend)})`);
   }
   if (scaleX !== 1 || scaleY !== 1) out.push(`.setScale(${num(scaleX)}, ${num(scaleY)})`);
+
+  // The second new branch in this function since `tileSprite`, and it follows
+  // this function's rule as the blend mode above it does: printed only where it
+  // differs from Phaser's own default, so `.setScrollFactor(1, 1)` is never one
+  // line on every object in the file and every project that predates this
+  // exports byte for byte what it exported before. A scroll factor means
+  // something entirely alone — one fact about one object, like a tint or a flip
+  // — which is what puts it on this side of the line rather than beside the
+  // emitter config and the physics body, whose dials only mean anything next to
+  // each other.
+  //
+  // `setScrollFactor(x, y?)` returns `this` (checked in `types/phaser.d.ts`,
+  // not recalled), so it genuinely chains; and the one-argument form means both
+  // axes, which is why an object pinned on both is `.setScrollFactor(0)` rather
+  // than `.setScrollFactor(0, 0)` — Phaser's own shorthand, in Phaser's own
+  // spelling.
+  //
+  // **A `tilemap` needs nothing here**, and that is worth saying because it is
+  // the one type where one chain visibly has several objects to reach.
+  // `emitNode` emits the further layers as siblings and reuses *this same
+  // chain* string for each of them, so a stack scrolls as one piece for free. A
+  // map whose floor lagged behind its walls is exactly the failure that would
+  // read as the feature half-working.
+  //
+  // **A `particles` node is included**, and that is the one place this parts
+  // company with the blend mode directly above. That one excludes an emitter
+  // because its mode is already inside the config literal `constructorFor`
+  // emits whole; `scrollFactor` is *not* a `ParticleEmitterConfig` key at all
+  // (checked — the emitter reads `scrollFactorX`/`scrollFactorY` off itself in
+  // its renderer), so the chain is the only place it can go.
+  const scroll = scrollFactorOf(node, topLevel);
+  if (!isDefaultScrollFactor(scroll)) {
+    out.push(
+      scroll.x === scroll.y
+        ? `.setScrollFactor(${num(scroll.x)})`
+        : `.setScrollFactor(${num(scroll.x)}, ${num(scroll.y)})`,
+    );
+  }
 
   // White is Phaser's untinted state under the default multiply mode, so
   // emitting setTint(0xffffff) would be a no-op line on every one of these.
@@ -2824,7 +2868,10 @@ function emitNode(
   }
 
   const id = toIdentifier(node.name, used);
-  const modifiers = modifiersFor(node, ctx.animations);
+  // `!nested` is the top-level rule, already in hand: a container's children and
+  // a prefab definition's are both emitted with `nested` true, which is exactly
+  // the pair `scrollFactorOf` strips.
+  const modifiers = modifiersFor(node, ctx.animations, !nested);
   const chain = modifiers.length > 0 ? `\n      ${modifiers.join('\n      ')}` : '';
   lines.push(`const ${id} = ${constructor}${chain};`);
   // Carries the editor name through, so objects stay findable at runtime.

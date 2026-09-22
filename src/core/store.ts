@@ -35,6 +35,8 @@ import {
   defaultEffect,
   defaultTween,
   blendModeOf,
+  scrollFactorOf,
+  isDefaultScrollFactor,
   effectsOf,
   findAsset,
   findNode,
@@ -72,6 +74,7 @@ import {
   MAX_EFFECTS,
   RAW_DECIMALS,
   type BlendMode,
+  type ScrollFactor,
   type NodeEffect,
   type NodeTween,
   type VariableLabel,
@@ -750,6 +753,23 @@ export interface EditorState {
    * it also strips the pre-v15 `ParticlesProps.blendMode` in the same write.
    */
   setNodeBlendMode: (id: string, mode: BlendMode) => void;
+  /**
+   * Sets how far a top-level node moves when the camera does, per axis.
+   *
+   * Its own action rather than an `updateProps` patch because `{ x: 1, y: 1 }`
+   * is *absence* and a spread cannot remove a key — `setNodePhysics`,
+   * `setNodeControls`, `setNodeTween`, `setNodeLabel` and `setNodeBlendMode`'s
+   * reason, for the sixth time: `{ scrollFactor: undefined }` leaves the key
+   * holding undefined, which survives in memory, vanishes through
+   * `JSON.stringify`, and gives the document two spellings of one state.
+   *
+   * It reaches `scene.children` directly rather than through `mapNode`, and
+   * that **is** the refuse-on-write half of the top-level rule — a nested node
+   * is simply not in the array it searches. `setNodePhysics`' shape exactly,
+   * where `setNodeBlendMode` beside it deliberately uses `mapNode` because a
+   * blend mode means something at any depth.
+   */
+  setNodeScrollFactor: (id: string, factor: ScrollFactor | null) => void;
   /**
    * Binds a text node's caption to a variable, edits the format, or unbinds it
    * with `null`.
@@ -3267,6 +3287,37 @@ export const useEditorStore = create<EditorState>((set, get) => {
             return next;
           }),
         };
+      }),
+
+    setNodeScrollFactor: (id, factor) =>
+      editScene((scene) => {
+        // `scene.children` directly, which *is* the top-level rule — the same
+        // shape `setNodePhysics` and `setNodeControls` use, and for the reason
+        // `scrollFactorOf`'s second argument states. Returning the scene by
+        // identity keeps `editProject`'s "nothing happened, no undo step"
+        // contract: without it, re-typing the number already showing pushes a
+        // history entry.
+        const index = scene.children.findIndex((child) => child.id === id);
+        if (index < 0) return scene;
+        const node = scene.children[index];
+
+        // `null` and "both axes are 1" are one request, because absence is what
+        // the default means. Normalising here rather than in the caller is what
+        // stops the panel ever writing `{ x: 1, y: 1 }` into a document that
+        // would then say the default twice.
+        const wanted =
+          factor === null || isDefaultScrollFactor(factor) ? null : factor;
+        const current = scrollFactorOf(node, true);
+        if (wanted === null && node.scrollFactor === undefined) return scene;
+        if (wanted !== null && current.x === wanted.x && current.y === wanted.y) return scene;
+
+        const next = { ...node } as GameObjectNode;
+        if (wanted === null) delete next.scrollFactor;
+        else next.scrollFactor = { x: wanted.x, y: wanted.y };
+
+        const children = [...scene.children];
+        children[index] = next;
+        return { ...scene, children };
       }),
 
     addCollider: (aId, bId) =>

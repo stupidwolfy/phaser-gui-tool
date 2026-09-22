@@ -92,9 +92,10 @@ on a desktop.
   keep the size you drew them at, and only the edges and the middle stretch, which is what
   a dialog frame or a button needs. Leave Slice top and bottom at 0 for a bar that
   stretches sideways only
-- Repeat one image across a box with `+ Tiled`: a wall, water or a parallax background
-  layer. Tile offset scrolls the pattern inside the box and tile scale changes how big one
-  repeat is, neither of which moves or resizes the object itself
+- Repeat one image across a box with `+ Tiled`: a wall, water or a background layer. Tile
+  offset scrolls the pattern inside the box and tile scale changes how big one repeat is,
+  neither of which moves or resizes the object itself — and giving it a scroll factor
+  under Scroll is what makes it parallax as the camera travels
 - Put a **visual effect** on anything: under Effects in the inspector, give an object a
   glow, a blur, a drop shadow or a pixelate — as many as four, run in the order you list
   them, so a glow under a drop shadow and a shadow under a glow are two different pictures.
@@ -114,6 +115,12 @@ on a desktop.
   `this.cameras.main.setScroll(...)` / `setZoom(...)` / `startFollow(...)`. Nothing here
   moves your own view of the scene — pan and pinch as usual, and press ⤢ to see all of it
   again
+- Decide what the camera carries with it: under **Scroll** in the inspector, a scroll
+  factor of 1 means the object sits in the world and the camera moves past it, 0 pins it
+  to the camera — a score, a health bar or a pause button that stays in its corner while
+  the level scrolls — and anything between is parallax, so a distant background at 0.3
+  drifts slower than the ground in front of it. Set it on a group to pin everything inside
+  at once. It exports as a real `.setScrollFactor(...)`
 - Build a game out of several **scenes**: `+ Scene` in the scene panel adds one, the
   chips beside it switch between them, and the inspector duplicates or deletes the one
   you are in. Images, sounds, animations and prefabs are shared by all of them; the project
@@ -330,7 +337,7 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; thirty-eight iterations in, it is
+The goal is to eventually cover the whole Phaser surface; thirty-nine iterations in, it is
 a working editor but a small one.
 
 **Not built yet** — text has typography and its own imported fonts, with four limits: a
@@ -342,9 +349,14 @@ limits: one image per atlas (no multi-page packs), rotated frames are refused ra
 drawn on trust, an atlas cannot be a tileset, frames are named by the file rather than
 renameable here, and there is no packing or rect-editing in the editor — bring a `.json`. Panels and tiled images are in, with three limits: a
 panel's scalable regions stretch rather than repeating, a tiled image has an offset but no
-scroll speed (a background that drifts is one line in your own `update()`), and neither can
-play an animation, which is Phaser's limit rather than this editor's. Cameras are in, with
-five limits: one camera per scene, no fade, shake, pan or other effects over time, no follow
+scroll speed of its own (a background that *drifts* under its own steam is still one line in
+your own `update()` — a background that moves at a different rate to the camera is a scroll
+factor, and that is built), and neither can play an animation, which is Phaser's limit rather
+than this editor's. Scroll factors are in, with three limits: only an object the scene holds
+directly can have one, so a parallax stack is several objects rather than several layers of
+one map; nothing animates a factor; and an object pinned to the camera still collides on its
+world position, which is Phaser's rule rather than this editor's. Cameras are in, with
+four limits: one camera per scene, no follow
 offset or dead zone, no way to grab the camera frame on the canvas, and no button that
 points your own view through it. Audio is in, with four limits: no audio
 sprites, no per-play settings like rate or pan (those belong on the handle, in the line you

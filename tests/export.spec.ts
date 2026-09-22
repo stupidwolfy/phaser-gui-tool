@@ -2137,3 +2137,78 @@ test('the exported page throws nothing until a rule says to', async ({
 
   await run.close();
 });
+
+test('the exported page holds a pinned object still while the camera pans past a plain one', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The positive claim for a scroll factor, and the only place it can be
+  // made.** The editor never applies the document's camera — that is iteration
+  // 18's "drawn, never applied" and it has not moved — so the near side can
+  // only assert where an object is drawn at the frame the game *opens* on.
+  // Whether it then stays there while the camera travels is a question about a
+  // camera in motion, which is exactly what this canvas does not run.
+  //
+  // A pan rather than a follow, for the fade's reason one effect over: a pan is
+  // a stated destination over a stated time, where a follow is a race with
+  // whatever the followed object is doing. And the two objects are read from
+  // one screenshot each, so neither reading can drift against the other.
+  await editor.clearScene();
+
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Hud');
+  await editor.setField('Width', 160);
+  await editor.setField('Height', 120);
+  await editor.setField('X', 200);
+  await editor.setField('Y', 140);
+  await editor.setField('Scroll factor X', 0);
+  await editor.setField('Scroll factor Y', 0);
+
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'World');
+  await editor.setField('Width', 160);
+  await editor.setField('Height', 120);
+  await editor.setField('X', 200);
+  await editor.setField('Y', 400);
+  await editor.deselect();
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'the scene starts');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Pan the camera');
+  // A pan's two numbers are a *centre*, so this is the scene's own middle
+  // pushed 300 to the right — `cameraPan`'s label says "centre" for exactly
+  // this reason. Four seconds for the zoom test's reason: `runExportedPage`
+  // waits for a frame, so a short ramp is over before the first reading and
+  // both screenshots are of the finished state.
+  await editor.setField('Rule 1 do 1 centre x', 780);
+  await editor.setField('Rule 1 do 1 centre y', 270);
+  await editor.setField('Rule 1 do 1 duration', 4000);
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(page.context(), testInfo.outputPath('pinned'), exported.contents);
+
+  const shot = async () => run.page.locator('canvas').screenshot();
+  const firstHud = await findColorBox(run.page, await shot(), RECT_FILL);
+  const firstWorld = await findColorBox(run.page, await shot(), ELLIPSE_FILL);
+
+  // The world object travels left across the screen as the camera moves right.
+  // That is the "before" this claim needs: without it, an assertion that the
+  // HUD did not move is true of an export where the camera never panned at all.
+  const movedWorld = await reaches(
+    async () => findColorBox(run.page, await shot(), ELLIPSE_FILL),
+    (box) => box.count > 0 && box.x < firstWorld.x - 40,
+  );
+  expect(movedWorld.x).toBeLessThan(firstWorld.x - 40);
+
+  // And the HUD has not. Read from a screenshot taken after the world object
+  // has demonstrably travelled, so this is "still there *then*" rather than
+  // "still there before anything happened".
+  const stillHud = await findColorBox(run.page, await shot(), RECT_FILL);
+  expect(stillHud.count).toBeGreaterThan(0);
+  expect(Math.abs(stillHud.x - firstHud.x)).toBeLessThan(8);
+
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});

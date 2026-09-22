@@ -215,6 +215,14 @@ export function hostileProject(): Project {
               // dropping it is asserted rather than assumed.
               touch: true,
             },
+            // A scroll factor in a *definition*, which is the second illegal
+            // place and a different code path from the nested one above:
+            // `buildFactories` emits a definition's children through
+            // `emitNode(..., true)` rather than through the container branch,
+            // so a strip that only covered one would pass every other claim in
+            // the suite. The instance placing this prefab is top-level and can
+            // carry one itself, which is where a pinned prefab says it.
+            scrollFactor: { x: 0, y: 0 },
             // A tween in a *definition*, which is the only thing that puts
             // `scene.tweens.add` through both toolchains — the one line whose
             // receiver differs between a Scene method and a factory body, and
@@ -1086,6 +1094,15 @@ export function hostileProject(): Project {
             // line reached neither export toolchain.
             transform: { x: 700, y: 400, rotation: 12.5, scaleX: 1, scaleY: 1 },
             props: { alpha: 1 },
+            // A scroll factor on a *container*, which is the type worth putting
+            // it on: a group is how the document says "pin these things", since
+            // a factor on a child is stripped. Both axes differ and neither is
+            // round, so an axis swap in the emit reads as 0.25 where 0.75 is
+            // wanted rather than as the same number twice — `gravityY: 940`'s
+            // trick, and the Matter push's. It is also the only place
+            // `.setScrollFactor(x, y)`'s two-argument form meets
+            // `Phaser.GameObjects.Container` under `tsc --strict`.
+            scrollFactor: { x: 0.25, y: 0.75 },
             children: [
               {
                 id: 'e1',
@@ -1115,6 +1132,17 @@ export function hostileProject(): Project {
                   // the emitted `update()` ever reads.
                   touch: true,
                 },
+                // And a scroll factor on that same nested node, the third thing
+                // here the store cannot reach to write. `scrollFactorOf` strips
+                // it, so the emit must carry no setter for this child — and it
+                // is not the body's and the controls' reason. Those two are
+                // banned because they read world coordinates; Phaser would
+                // honour this one perfectly well, multiplying it by the
+                // container's. What cannot say it is the editor's canvas, which
+                // draws a factor as a position offset and has no way to express
+                // one through a rotated parent — and this group is rotated 12.5
+                // degrees for that very reason.
+                scrollFactor: { x: 0, y: 0 },
                 children: [],
               },
             ],
