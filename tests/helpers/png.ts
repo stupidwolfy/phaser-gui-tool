@@ -210,3 +210,45 @@ export function tilePng(size: number, groundHex: string, markHex: string): Buffe
 
   return encodePng(size, size, raw);
 }
+
+/**
+ * An image that is opaque down one side and fully transparent down the other.
+ *
+ * The fixture a mask needs, and **no existing builder here can stand in for
+ * it**: `solidPng`, `rectsPng`, `stripPng`, `framePng` and `tilePng` all write
+ * an alpha of 255 into every pixel, because until masks every feature in this
+ * suite cared about *colour*. A mask reads nothing but alpha —
+ * `Phaser.Filters.Mask`'s whole fragment shader is
+ * `color *= invert ? (1.0 - a) : a` — so a fully opaque fixture masks nothing
+ * and a test built on one passes whatever the feature does.
+ *
+ * Split down the **vertical** axis, and asymmetric on purpose: a mask that
+ * covered the object symmetrically could not tell "masked" from "inverted",
+ * and `invert` is one of the kind's two fields. The transparent side is still
+ * written in colour rather than left black, so nothing downstream depends on
+ * how the browser's canvas premultiplies it on the import re-encode.
+ *
+ * The import path keeps this a PNG rather than turning it into a JPEG —
+ * `assets.ts` only picks JPEG for a source that was already one, precisely
+ * because JPEG has no alpha channel. A mask fixture is the sharpest case for
+ * that rule there is: as a JPEG it would be a rectangle that masks nothing.
+ */
+export function halfAlphaPng(width: number, height: number, hex: string): Buffer {
+  const [r, g, b] = rgb(hex);
+  const raw = Buffer.alloc(height * (1 + width * 4));
+  const solidTo = Math.floor(width / 2);
+
+  for (let y = 0; y < height; y += 1) {
+    const start = y * (1 + width * 4);
+    raw[start] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const i = start + 1 + x * 4;
+      raw[i] = r;
+      raw[i + 1] = g;
+      raw[i + 2] = b;
+      raw[i + 3] = x < solidTo ? 255 : 0;
+    }
+  }
+
+  return encodePng(width, height, raw);
+}

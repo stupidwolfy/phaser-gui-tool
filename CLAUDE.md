@@ -140,7 +140,14 @@ simply wrong, a standing fact carried in on a comma beside a real limit. The fir
 to close a hole by finding a *false* argument rather than a dated one, and the first ever to
 give `applyNode`'s "drawn position == stored position" a **standing** exception, because a
 canvas that showed a pinned object somewhere the exported game would not is the one
-disagreement this project refuses hardest.
+disagreement this project refuses hardest. Iteration 40 (shipped) let an object be painted
+only where a picture says: a `mask` effect, which is the **last of the three** things the one
+sentence that found filters and blend modes named — and the second iteration running to close
+a hole by finding a *false* argument, because the clause that kept masks out ("the first
+thing in this document that points at another node") was wrong about a document holding
+`followId`, both sides of a collider and ten `RuleAction` node ids. The first feature here
+whose refusal was **one sentence covering six filters at once**, which is where a welded
+argument is hardest to see.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -1825,10 +1832,11 @@ question.**
   compiler reads, and it sits on the object named `arcade body` — the one fill in the
   project nothing measures, and a name that already collides with a helper, so the
   `arcadeBodyFilters` binding beside it is a free test of the suffix rule.
-- **What stays refused.** **No masks**, which is the obvious next ask and is a genuine
-  iteration: `addMask` takes a texture or another game object, so it needs a picker, a
-  dangling-reference story and a `removeAsset` patch — and it would be the first thing in
-  this document that points *at another node*. **No camera-wide effects here** — a filter on
+- **What stays refused.** **Masks shipped in iteration 40**, and the sentence that used to
+  stand here is kept in `EFFECT_KINDS`' comment as a worked example rather than deleted: it
+  refused six filters at once, and the clause doing the real work — that a mask "would be the
+  first thing in this document that points *at another node*" — was false. **No camera-wide
+  effects here** — a filter on
   `cameras.main` is a property of the view, and iteration 31 already put what happens to a
   view on a rule. **No custom shader**, which is code in the document, the emit-zone
   argument and the gradient fill's. **No animating an effect** — a tween's `to` is six
@@ -1836,6 +1844,170 @@ question.**
   which is exactly the refusal that keeps a seventh tween property out. And **no effect on a
   tilemap layer, a prefab child from outside, or a group's children individually**: an
   effect is on a node, and a layer is not one.
+
+### Masks
+
+A fifth `NodeEffect` kind: `{ kind: 'mask'; assetId; invert }`, drawn as a real Phaser 4
+`addMask` and painting the object **only where its image is opaque**. It is the last of the
+three things named in the one sentence that found filters and blend modes, and the second
+iteration running to close a hole by finding an argument that was *false* rather than dated.
+
+- **The refusal covered six filters in one sentence, and that is where it went wrong.**
+  `EFFECT_KINDS`' comment said `addMask`, `addDisplacement`, `addBlend`, `addGradientMap`,
+  `addCombineColorMatrix` and `addImageLight` "all take a **texture or another game
+  object**, which is a reference into the document … which is an iteration rather than a
+  member", and CLAUDE.md's copy added that a mask "would be the first thing in this document
+  that points *at another node*". That last clause is **false** — `SceneCamera.followId`,
+  both sides of a `SceneCollider` and nine `RuleAction` members all name a node, each with a
+  dangling-reference story already written — and a mask sourced from a *texture* never needs
+  the "or another game object" half at all. What was left was four real costs, every one of
+  them machinery this project already had.
+- **So the lesson is narrower than iteration 39's and is its second instance.** That one
+  found a fake limit riding beside a real one on a comma, inside a single sentence about a
+  single feature. This one is a fake limit riding beside a real one **across six features at
+  once**: the sentence was true of `addDisplacement` and `addImageLight`, and a reader
+  checking it would have found it true — of the case beside the one they were asking about.
+  **A refusal that covers a list is the hardest kind to check, because it is right about
+  most of the list.** The survivors are now argued one at a time for exactly that reason.
+- **`assetId: string | null`, the spelling five props interfaces already use**, so nothing
+  here is a new shape. `invert` is a boolean rather than a mode word — `NodeControls.touch`'s
+  call — and it is the one dial that makes a mask expressive: keep the shape, or cut a hole.
+- **There is no `frame`, and that is Phaser's doing rather than a field left for later.**
+  `Mask.setTexture` reads `textures.getFrame(key).glTexture`, and every frame of a sheet
+  shares the one `glTexture` of the image it was cut from — so naming a frame would change
+  nothing about what is sampled. A `frame` here would be a field the document holds, the
+  panel offers and the picture ignores, which is worse than an absent one. **Read out of
+  `node_modules/phaser/src/filters/Mask.js`, not recalled**, and it is the fact in this
+  iteration that would most obviously have been got wrong by guessing.
+- **The two fields are a prefix of `addMask`'s own argument list**, which is what chose them:
+  the signature is `(mask, invert, viewCamera, viewTransform, scaleFactor)` and the third
+  argument would have to be invented. `addGlow`'s rule, one kind over.
+- **The mask is stretched across the object, not aligned to it in pixels.** Its whole
+  fragment shader is `color *= invert ? (1.0 - a) : a`, sampled at `outTexCoord` — the
+  *object's* texel, because the filter is `internal`. That is what lets one mask image work
+  on objects of any size, and it is why nothing here has a width or an offset.
+- **`internal` for iteration 35's reason, and the package states it in as many words**: an
+  internal mask "will match the object/view being filtered", an external one "will match the
+  context of the camera". External is the camera-shaped answer, and iteration 31 already put
+  what happens to a view on a rule.
+- **A mask with no usable texture adds no pass at all, and this is the one real decision in
+  the feature.** It is the single place `PLACEHOLDER_TEXTURE`'s rule is deliberately not
+  followed, so `maskTextureKeyFor` carries the paragraph: the placeholder is a 96px **opaque**
+  square, so as a mask it would do nothing — and inverted it would erase the object outright,
+  which looks like the editor having deleted something. The placeholder exists so an
+  unfinished *object* stays selectable and draggable; a mask is not an object, it is a pass
+  over one, and the honest empty state for a pass is not to run it. So "no image chosen", "the
+  image is gone" and "the image is still decoding" stay **one state and one code path** — that
+  state is simply *unmasked*. It is what `attachEffects` already produces in an export running
+  without WebGL, so the canvas and the export still agree.
+- **`effectsOf` still takes no `Project`, and that is now a decision rather than an
+  accident.** It stopped being the one reader in its family with no reference to check, and it
+  still does not check one. `soundsOf` takes the project and *drops* a dangling row because
+  `sound.add(undefined)` is not something Phaser can be asked for; `labelOf` drops because a
+  label with no variable has nothing to append. A mask needs neither, because a mask naming
+  nothing lands in a state both sides already have a code path for. Widening the signature
+  would put a `Project` through thirteen call sites to answer a question that already has a
+  safe answer.
+- **What that does not excuse is the document holding the dangling id.** `removeAsset` clears
+  a mask's `assetId` and `countAssetUses` counts one, by the rule that the editor may never
+  leave a dangling reference — those two are the guard and the reader is only the fallback.
+- **Both store edits are of a shape the file did not have: not keyed on the node's type.**
+  `fx` is on the base node, so any of the ten types can carry a mask. `countAssetUses` counts
+  **per effect** rather than per node, because `MAX_EFFECTS` is four and two masks over one
+  picture are two uses of it. And `removeAsset`'s branch is computed *first* and merged
+  *last*, because the type branches `return` — a sprite with both a dangling `props.assetId`
+  and a mask over the same image has to have both cleared, and a mask branch written after
+  them would never run for one.
+- **The reference is cleared and the effect kept**, which is `removeAsset`'s own rule rather
+  than `removeAudio`'s ten lines up: a `SceneSound` *is* a reference and goes with the file,
+  where an object that has an image is still an object. The mask keeps its `invert`.
+- **`syncTextures` must clear `nodeEffects`, and that is the whole renderer story.**
+  `applyEffects` is cache-guarded on the effect list, and a texture arriving between one sync
+  and the next does not change that list by a character — the node still says
+  `assetId: 'a1'`, exactly as it did while the image was decoding. So the re-sync the decode
+  triggers would find every signature unchanged, skip every apply, and the mask would never
+  be applied at all. **This is `syncFonts`' `textStyles.clear()` one cache over**, and the
+  irony is that the fix now belongs in `syncTextures` itself. The guard family arriving
+  inverted for the second time: those exist to stop an apply firing on every store change,
+  and this one has to *break* a guard, because what changed is outside the document the
+  signature is computed from. The removal loop clears it too — a texture that has *gone*
+  changes what a mask draws just as much as one that has arrived.
+- **Only a cold boot reaches that**, so `masks.spec.ts` carries one reload test, and **it was
+  verified by deleting the line and watching it go red** — iteration 33's and 37's rule, that
+  a guard test which has never failed asserts nothing. The decode cache in `assets.ts` is
+  module-level, so `newProject` followed by `openFile` re-opens a project the page has
+  already decoded and every other test in the file silently asserts the synchronous path
+  twice.
+- **`effectCallFor` gained a required parameter rather than a rename.** It needs a texture
+  *key*, which is `collectAssets`' answer rather than anything the node knows, so it takes
+  the table. The `clampFrame` → `resolveFrame` rule does not apply: that exists for a widened
+  **return** type, which compiles silently wherever it was not updated, and a new required
+  parameter is named by the compiler at the one call site.
+- **A mask naming an image the table does not hold emits no call**, which is the renderer's
+  "no usable texture, no pass" answered on the far side so the two cannot disagree about a
+  picture. The calls are therefore built *before* the gate in `emitNode`, or a node whose
+  only effect is one of those would emit an `enableFilters` and an empty `if` block.
+- **`collectAssets` and `usedIn` both gained a branch, and missing the second is the silent
+  half.** The pair is two questions: what the texture is *called* across the file, and what
+  *one scene* preloads. A key the scene never loaded makes `getFrame` answer null, so the
+  mask quietly does nothing — an export that looks almost right, which is the failure
+  `collectAssets`' own comment already names for emitters. Both reach prefab definitions and
+  rule-spawned prefabs through `emittedNodes`, which needed no edit.
+- **`shapeOf` gains nothing, and nothing measures differently.** A mask must not destroy and
+  recreate the object under it, and filters do not touch `object.width`/`height` — so a
+  masked object is still grabbable over its whole *unmasked* box, which is correct: the
+  document says the object is that size, and the mask says what of it is painted.
+- **`SCHEMA_VERSION` did not bump — the guides case, seventeenth time.** No new `NodeType`,
+  and `node.fx` rides in on `scenes` (verbatim) and on `prefabs.children` (unvalidated), so
+  both homes survive an old build's re-save: a v14 build's `effectsOf` drops the unknown kind
+  through its `default: break`, draws the object unmasked and carries the field back out. The
+  one edge worth recording rather than discovering is that a v14 build's `removeAsset` does
+  not know to strip a mask's `assetId`, so deleting an image there can leave a dangling one —
+  which is not the invariant breaking, because the invariant is about *the editor*, the
+  reader draws the object unmasked either way, and a current build fixes it on the next
+  delete. An old build doing less, not a file breaking.
+- **A mask is the one kind `defaultEffect` cannot seed visibly**, and the comment says so
+  beside four that can. There is nothing to seed an image with, and seeding the first asset in
+  the table would silently re-cut the object with a picture nobody chose — `createNode`'s
+  "adding an object must never open a file dialog", one level up. So it arrives inert and the
+  panel says what it wants: `AlignSection`'s rule, that a control which says why it cannot
+  beats one that is not there.
+- **The suite's instrument is an extent and a count together, and neither is enough alone.**
+  A glow is found by a colour on nothing else; a blur by the exact fill ceasing to exist. What
+  a mask leaves behind is *still exactly the object's own colour* — so a count says something
+  was taken away and an **extent** says a *side* was, which is the claim a fade or a tint
+  could not make. Every drawn claim is a **ratio against the unmasked shot**, because the two
+  projects draw at different zooms.
+- **`halfAlphaPng` exists because every other builder in `png.ts` writes an alpha of 255.**
+  Until masks, every feature in this suite cared about colour; a mask reads nothing but alpha,
+  so a fully opaque fixture masks nothing and a test built on one passes whatever the feature
+  does. It is split down one axis and **asymmetric on purpose**: a symmetric mask cannot tell
+  "masked" from "inverted", and `invert` is one of the kind's two fields. It also makes the
+  sharpest case there is for `assets.ts` only picking JPEG for a source that was already one —
+  as a JPEG this fixture would be a rectangle that masks nothing.
+- **The hostile project's masks are on a node of their own in the registered-never-started
+  scene**, and both halves are deliberate. A node of their own because `MAX_EFFECTS` is four
+  and the sprite there already carries three, so a fifth would be dropped by `effectsOf` on
+  the way past and the dangling case would silently vanish. That scene because the emitted
+  `.ts` carries every scene, so `tsc --strict` meets the call without any frame paying to
+  render it. One names `sheet-1`, whose file name is hostile, which is the only place the
+  emitted key and the `ASSETS` table have to agree about a hostile string; the other dangles,
+  and must emit **no call at all** — in the exported `.ts` that is the difference between a
+  wrong picture and a compile error.
+- **`hasMotionIn` is untouched and records its seventeenth refusal**: a mask does not move.
+
+**What stays refused.** **No mask from another node**, which is the half of the old sentence
+that is still true and is a genuinely different feature: it needs a node picker, and a mask
+node would have to be drawn and then not drawn. **No geometry mask** — Phaser's other mask
+kind takes a `Graphics`, which is a shape this document has no way to describe: the emit-zone
+argument and the gradient fill's. **No `viewCamera`, `viewTransform` or `scaleFactor`** —
+every one is past where the prefix stops, and the last two only mean anything for a
+GameObject mask. **The other four texture-taking filters** are now each a *pure loosening* of
+the machinery this built, one member and one picker apiece, which is worth saying because
+their cost genuinely dropped when this shipped. **No animating a mask** — a tween's `to` is
+six numeric properties that are one shape across the whole union. And **no mask on a tilemap
+layer, a prefab child from outside, or a group's children individually** — `fx`'s and
+`blendMode`'s refusal verbatim: this is on a node, and a layer is not one.
 
 ## Blend modes
 
@@ -1847,8 +2019,9 @@ mode is a standing fact about *how an object is drawn* rather than a step of a s
   running.** *A refusal list is a list of things somebody thought of, and the hole that
   survives is the one nothing prompted the question.* Iteration 35 quoted that against
   filters, and the sentence it quoted named **three** things absent from `src/`: masks,
-  filters and blend modes. Filters shipped. Masks are refused with an argument. Blend modes
-  were never mentioned again — and the grep that found them was one line long: `blendMode`
+  filters and blend modes. Filters shipped, and masks followed in iteration 40 — when the
+  argument that had refused them turned out to be six filters priced in one sentence, with a
+  false clause doing the deciding. Blend modes were never mentioned again — and the grep that found them was one line long: `blendMode`
   lived in exactly one place, as a **per-type particles prop**, so a fire emitter could say
   "add me to what is behind" while a glowing sprite, a highlight panel and a text caption
   could not. The list never named it because the list is a record of questions somebody
@@ -5563,6 +5736,9 @@ tests/
                             document that never moves
   effects.spec.ts           a glow drawn outside the object it is on, a blur that
                             takes its fill away, and a list that keeps its order
+  masks.spec.ts             an object painted only where a picture is opaque,
+                            inverted, unpointed when its image goes, and still
+                            masked after a cold open
   blend.spec.ts             an object composited over what is behind it, a mode
                             that round-trips, and an emitter that keeps the one
                             it was written with
@@ -5598,7 +5774,9 @@ tests/
   helpers/editor.ts         the page object: panels, fields, gestures, downloads
   helpers/pixels.ts         canvas readback, colour centroids and colour extents
   helpers/hostile.ts        the project made of everything a project should not contain
-  helpers/png.ts            solid, striped, framed, marked and rect-painted PNGs
+  helpers/png.ts            solid, striped, framed, marked, rect-painted and
+                            half-transparent PNGs — the last for masks, which
+                            read alpha where everything else reads colour
   helpers/atlas.ts          an atlas image and both packer JSON shapes, from one array
   helpers/wav.ts            a synthesised WAV, for the same reason and with no encoder
 ```
@@ -5879,7 +6057,50 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
-Scroll factors shipped in iteration 39 and are the entry worth reading first, because the
+Masks shipped in iteration 40 and are the entry worth reading first, because the check that
+found them was the one iteration 39 wrote down — and because they are the second hole in a
+row closed by finding an argument that was **false** rather than dated.
+
+Run that check — re-read every refusal that justifies itself by pointing at a neighbour —
+and the one that fails hardest is not phrased like a citation at all. It is a *list*.
+`EFFECT_KINDS`' comment refused six filters in one sentence: `addMask`, `addDisplacement`,
+`addBlend`, `addGradientMap`, `addCombineColorMatrix` and `addImageLight` "all take a
+texture or another game object … which is an iteration rather than a member", and this file's
+copy of it added that a mask "would be the first thing in this document that points *at
+another node*". The document has held `followId` since iteration 18, both sides of a
+`SceneCollider` since 20, and a `nodeId` on nine `RuleAction` members since 28 — every one
+with a dangling-reference story already written. And a mask fed a *texture* never needed the
+"or another game object" half at all.
+
+**So the reading to carry forward is narrower than iteration 39's, and it is about the
+shape of the sentence rather than its content: a refusal that covers a list is the hardest
+kind to check, because it is right about most of the list.** Iteration 39 found a fake limit
+riding beside a real one inside one sentence about one feature. This was a fake limit riding
+beside a real one across six features at once — and anyone who spot-checked it would have
+picked `addDisplacement` or `addImageLight`, found the sentence true, and moved on. The list
+was doing the work of six arguments while having been thought through for about two.
+
+**The check for iteration 41 is therefore to find every refusal in this file that refuses
+more than one thing in a single breath** — the ones that name three or four or six things
+and then give one reason — and split them: write the reason out once per item, and see which
+ones stop being reasons when they have to stand alone. Two are already visible from here.
+"No canvas-only modes, no ERASE, no custom blend equation, no per-layer or per-child blend,
+no camera-wide blend, and no animating one" is six refusals and about three arguments. So is
+particles' "no `stopAfter`, no `flow`, no emit or death zone, no follow target". The
+survivors of this iteration's own list are the model: `addDisplacement`,
+`addGradientMap`, `addCombineColorMatrix` and `addImageLight` are now each named with their
+own cost, and three of the four turn out to be one member and one picker rather than an
+iteration.
+
+What iteration 40 leaves is in "Masks" above: no mask from another node (the half of that
+sentence which was always true), no geometry mask, no `viewCamera`/`viewTransform`/
+`scaleFactor`, no animating a mask, and no mask on a tilemap layer or a prefab child from
+outside. **And the four remaining texture-taking filters are now a pure loosening** of the
+machinery masks built, which is the part of this worth carrying: their price dropped the
+moment somebody paid it once.
+
+Scroll factors shipped in iteration 39, and were the entry worth reading first before that,
+because the
 check that found them was the one iteration 38 wrote down — and because what they found was
 a **new** way for this list to be wrong. The previous four lessons were all about a refusal
 being *dated*: 34 said a refusal list is a list of things somebody thought of, 37 said it
@@ -5900,12 +6121,13 @@ the README had been advertising a "parallax background layer" since iteration 19
 **So the reading to carry forward: a refusal sentence can weld a real limit to a fake one,
 and the fake half inherits the real half's authority.** A dated refusal is at least honest
 about its own iteration; this kind is not wrong about the vocabulary, it is wrong about the
-*feature*. **The check for iteration 40 is therefore to re-read every refusal that justifies
-itself by pointing at a neighbour** — the ones phrased "X's argument one type over", "the
+*feature*. The check it set for iteration 40 was to re-read every refusal that justifies
+itself by pointing at a neighbour — the ones phrased "X's argument one type over", "the
 same sentence one feature on", "the `.tmj` argument at a smaller scale", "the second field
 over one number" — and ask whether the neighbour's argument actually reaches this case or
-only the case beside it. This file is full of those, and they are load-bearing when they are
-right; the borrowed ones are indistinguishable from them until somebody checks.
+only the case beside it. **That check was run and it worked**; see the head of this section
+for what it turned up, and note that the answer was a refusal covering a *list*, which is
+the same failure one order of magnitude up.
 
 What iteration 39 leaves is in "Parallax and pinning" above: no scroll speed or drift (still
 iteration 19's genuine limit, and still the first thing that would need an emitted
@@ -5971,15 +6193,19 @@ lesson repeating inside the paragraph that states it. **The reading to carry for
 sentence naming three gaps is not a list of three tasks, and the one that is neither done
 nor argued against is the one to go back to.** What blend modes leave is short, and all of
 it is in the section above: no canvas-only modes, no ERASE, no custom blend equation, no
-per-layer or per-child blend, no camera-wide blend, and no animating one. **Masks are now
-the last of the three still standing**, and still an iteration rather than a member.
+per-layer or per-child blend, no camera-wide blend, and no animating one. **Masks were the
+last of the three still standing, and iteration 40 closed them** — so that sentence about
+three gaps is now fully discharged, and what it cost is recorded at the head of this
+section: the argument still standing against masks was itself the same failure one order of
+magnitude up, a single refusal covering six filters at once.
 
 Visual effects shipped in iteration 35, and they were the entry worth reading first before
 that, because nothing on this list had ever named them either. What that feature leaves is
-short, because it adds no table, no node type and no reference. **No masks**, which is the
-obvious next ask and is an iteration rather than a member: `addMask` takes a texture or another game object, so it needs a picker, a
-dangling-reference story and a `removeAsset` patch — and it would be the first thing in
-this document that points at *another node*. **No camera-wide effects here**, since a
+short, because it adds no table, no node type and no reference. **Masks were the one entry
+here that has since shipped** — iteration 40 took them, and the sentence that stood in this
+spot is worth reading beside what it cost: it said `addMask` "would be the first thing in
+this document that points at *another node*", which was false, and it priced six filters
+together. What was true of it is kept in "Masks" above. **No camera-wide effects here**, since a
 filter on `cameras.main` is a property of the view and iteration 31 already put what
 happens to a view on a rule. **No custom shader**, which is code in the document — the
 emit-zone argument and the gradient fill's. **No animating an effect**: a tween's `to` is
@@ -5988,7 +6214,10 @@ per-kind, which is exactly the refusal that keeps a seventh tween property out. 
 eight remaining built-in filters — vignette, barrel, bokeh, tilt shift, threshold,
 quantize, key, blocky — are a **pure loosening**, one union member and one emit case each;
 the first two are effects on a view rather than on an object, and the rest are dials nobody
-has asked for yet.
+has asked for yet. Since iteration 40 the four *texture*-taking ones —
+`addDisplacement`, `addGradientMap`, `addCombineColorMatrix` and `addImageLight` — are a
+loosening too, each one member and one picker, because masks paid for the asset plumbing
+they all share.
 
 Spawning shipped in iteration 34, and it is worth reading beside the list below because it is
 the one entry nothing on that list had ever named. `destroy` had been in `RuleAction` since

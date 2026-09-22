@@ -97,13 +97,19 @@ on a desktop.
   neither of which moves or resizes the object itself — and giving it a scroll factor
   under Scroll is what makes it parallax as the camera travels
 - Put a **visual effect** on anything: under Effects in the inspector, give an object a
-  glow, a blur, a drop shadow or a pixelate — as many as four, run in the order you list
-  them, so a glow under a drop shadow and a shadow under a glow are two different pictures.
-  They are real Phaser filters and the canvas draws them exactly as the exported game does,
-  which makes this the one thing in the editor you can tune by eye and trust. They work on
-  every kind of object, groups and prefabs included, and export as
+  glow, a blur, a drop shadow, a pixelate or a mask — as many as four, run in the order you
+  list them, so a glow under a drop shadow and a shadow under a glow are two different
+  pictures. They are real Phaser filters and the canvas draws them exactly as the exported
+  game does, which makes this the one thing in the editor you can tune by eye and trust.
+  They work on every kind of object, groups and prefabs included, and export as
   `object.enableFilters()` plus a real `addGlow(...)`. Effects need WebGL; a browser
   without it draws the object plain, here and in the game alike
+- **Mask** an object with a picture: choose an image on a Mask effect and the object is
+  painted only where that image is opaque — a porthole, a torn edge, a health bar that
+  empties into a shape. The image is stretched over whatever it is masking, so one mask
+  works on objects of any size, and Invert swaps what is kept for what is cut. A mask with
+  no image chosen simply does nothing, and deleting the image leaves the effect in place
+  ready for another one
 - Give a scene **sound**: import an MP3, OGG, WAV, M4A or WebM under Audio in the scene
   panel, press ▶ on its row to hear it, and add it to the scene to set its volume, whether
   it loops and whether it starts with the scene. Exported code preloads exactly the sounds

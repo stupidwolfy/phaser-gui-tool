@@ -2198,7 +2198,29 @@ export type NodeEffect =
       color: string;
     }
   /** Phaser's pixel size is `2 + amount`, so 0 is the smallest mosaic there is. */
-  | { kind: 'pixelate'; amount: number };
+  | { kind: 'pixelate'; amount: number }
+  /**
+   * An image whose **alpha** decides what of the object is painted.
+   *
+   * `Phaser.Filters.Mask` multiplies the input by the mask's alpha in the
+   * corresponding texel — `color *= invert ? (1.0 - a) : a` is the whole of its
+   * fragment shader — and an *internal* filter's texel is the object's own, so
+   * the picture is stretched across whatever it is masking rather than aligned
+   * to it in pixels. That is what makes one mask image work on objects of
+   * different sizes, and it is why nothing here has a width.
+   *
+   * `assetId` is `string | null` because "none chosen yet" is a state this one
+   * arrives in — see `defaultEffect`, where it is the only kind that cannot
+   * obey that function's own rule.
+   *
+   * **There is no `frame`, and that is a fact about Phaser rather than a field
+   * left for later.** `Mask.setTexture` reads `textures.getFrame(key).glTexture`,
+   * and every frame of a sheet shares the one `glTexture` of the image it was
+   * cut from — so naming a frame would change nothing about what is sampled.
+   * A `frame` here would be a field the document holds, the panel offers and
+   * the picture ignores, which is worse than an absent one.
+   */
+  | { kind: 'mask'; assetId: string | null; invert: boolean };
 
 /**
  * Every effect kind, for the inspector's picker and for `effectsOf`'s refusal.
@@ -2211,11 +2233,35 @@ export type NodeEffect =
  * `create()` before anything is drawn.
  *
  * What is left out is left out per reason rather than per taste, and none of it
- * is a field away. `addMask`, `addDisplacement`, `addBlend`, `addGradientMap`,
- * `addCombineColorMatrix` and `addImageLight` all take a **texture or another
- * game object**, which is a reference into the document: an `AssetPicker`, a
- * dangling-reference story, a `removeAsset` patch and a `collectAssets` branch,
- * which is an iteration rather than a member. `addSampler` takes a **callback**,
+ * is a field away.
+ *
+ * **`addMask` used to be left out by this same sentence, and iteration 40 took
+ * it out of the group — the correction is worth keeping rather than tidying
+ * away.** One sentence priced six filters at once on the grounds that they "all
+ * take a texture or another game object, which is a reference into the
+ * document", and CLAUDE.md's copy of it added that a mask "would be the first
+ * thing in this document that points *at another node*". That last clause is
+ * **false**: `SceneCamera.followId`, both sides of a `SceneCollider` and nine
+ * `RuleAction` members all name a node, each with a dangling-reference story
+ * already written. And a mask sourced from a *texture* never needs the "or
+ * another game object" half at all — `Mask` takes `string | GameObject`, and
+ * this document hands it the first. What was left was four real costs, every
+ * one of them machinery this project already had: `AssetPicker`, a fallback
+ * state, a `removeAsset` patch and the `collectAssets`/`usedIn` pair. That is
+ * an iteration's *work*, which is what an iteration is for; it was never a
+ * different kind of thing from the four kinds that shipped in iteration 35.
+ *
+ * The lesson generalises and is iteration 39's own: **a refusal sentence can
+ * weld a real limit to a fake one, and a sentence covering six things at once
+ * is where that is hardest to see.** So the survivors are now argued one at a
+ * time. `addDisplacement`, `addGradientMap`, `addCombineColorMatrix` and
+ * `addImageLight` are each a **pure loosening** of the machinery a mask now
+ * builds — one member, one emit case and one picker apiece — rather than
+ * anything structural; they are out because nobody has asked, not because they
+ * cost what masks were said to. `addBlend` composites a second texture with a
+ * blend equation, which is `BLEND_MODES`' question with a picture on the other
+ * side of it and belongs beside that field rather than here. `addSampler` takes
+ * a **callback**,
  * which is code in the document and the emit-zone argument. `addWipe` and
  * `addParallelFilters` are a **progress animated over time** — the
  * `scene.start` argument — and the second is two nested lists where this is one.
@@ -2231,6 +2277,7 @@ export const EFFECT_KINDS: readonly NodeEffect['kind'][] = [
   'blur',
   'shadow',
   'pixelate',
+  'mask',
 ];
 
 /**
@@ -2274,11 +2321,24 @@ const MAX_PIXELATE = 64;
  *   `soundsOf`'s split, and satisfied trivially here because there is no gate
  *   inside an effect to open: a clamped strength says less and never more.
  *
- * Unlike every neighbour in that family this one has **no dangling reference to
- * check**, because an effect names nothing the document holds — no node, no
- * asset, no variable. That is also why `removeAsset`, `removeVariable`,
- * `removePrefab` and `mapProjectNodes` need no edit at all, which on that
- * checklist reads exactly like four forgotten steps.
+ * **It takes no `Project`, and since iteration 40 that is a decision rather
+ * than a happy accident.** A `mask` names an image, so this is no longer the
+ * one reader in the family with no reference to check — and it still does not
+ * check it. `soundsOf` takes the project and *drops* a row whose `audioId`
+ * dangles, because `sound.add(undefined)` is not something Phaser can be asked
+ * for; `labelOf` takes it and drops, because a label with no variable has
+ * nothing to append. A mask needs neither, because a mask naming nothing lands
+ * in a state both sides already have a code path for — **no usable texture, so
+ * no pass** — which is the state every object was in before the kind existed.
+ * Widening this signature would put a `Project` through thirteen call sites to
+ * answer a question that already has a safe answer.
+ *
+ * What that does *not* excuse is the document holding the dangling id in the
+ * first place: `removeAsset` clears a mask's `assetId` and `countAssetUses`
+ * counts one, by the rule that the editor may never leave a dangling
+ * reference. Those two are the guard; this is only the fallback.
+ * `removeVariable`, `removePrefab` and `mapProjectSprites` still need no edit
+ * at all, which on that checklist reads exactly like three forgotten steps.
  *
  * A fresh array every call, so `useEditorStore((s) => effectsOf(...))` is an
  * infinite render loop (React error #185) — the `tileMapOf` trap, thirteenth
@@ -2333,6 +2393,18 @@ export function effectsOf(node: GameObjectNode): NodeEffect[] {
       case 'pixelate':
         out.push({ kind: 'pixelate', amount: clamp(effect.amount, 1, 0, MAX_PIXELATE) });
         break;
+      case 'mask':
+        // The one kind with nothing to clamp: an id is a name or it is not, and
+        // whether it names an image that still exists is deliberately not asked
+        // here — see the note above about this reader taking no `Project`. A
+        // non-string id reads as `null`, which is the "none chosen" state the
+        // panel already offers rather than a repair of anything.
+        out.push({
+          kind: 'mask',
+          assetId: typeof effect.assetId === 'string' ? effect.assetId : null,
+          invert: effect.invert === true,
+        });
+        break;
       default:
         // An unknown kind costs this effect and nothing else — see above.
         break;
@@ -2362,6 +2434,16 @@ export function defaultEffect(kind: NodeEffect['kind']): NodeEffect {
       return { kind: 'shadow', x: 6, y: 6, decay: 0.1, power: 1, color: '#000000' };
     case 'pixelate':
       return { kind: 'pixelate', amount: 6 };
+    // The one kind that cannot obey the rule above, which is why it is worth a
+    // comment of its own rather than a line. There is nothing to seed an image
+    // with: seeding the first asset in the table would silently re-cut the
+    // object with a picture the user never chose, which is worse than an effect
+    // that arrives doing nothing — and `createNode`'s "adding an object must
+    // never open a file dialog" is the same refusal one level up. So a mask
+    // arrives inert and the panel says what it wants, which is `AlignSection`'s
+    // rule: a control that says why it cannot beats one that is not there.
+    case 'mask':
+      return { kind: 'mask', assetId: null, invert: false };
   }
 }
 

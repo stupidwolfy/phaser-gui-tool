@@ -6,7 +6,7 @@ import { findColor, findColorBox } from './helpers/pixels';
 import { reaches } from './helpers/poll';
 import { serveDirectory } from './helpers/server';
 import { hostileProject } from './helpers/hostile';
-import { solidPng } from './helpers/png';
+import { halfAlphaPng, solidPng } from './helpers/png';
 
 /**
  * Code export, verified by *running the exported page* rather than by reading
@@ -137,6 +137,16 @@ test('an export of a hostile project runs, and injects nothing', async ({
   // own overlay into somebody's game.
   expect(exported.contents).not.toContain('guide-1');
   expect(exported.contents).not.toContain('guides');
+
+  // Two masks sit on one node in the registered-never-started scene, and only
+  // one of them names an image the project holds — so exactly one `addMask`
+  // reaches the output. The dangling one must contribute *no call at all*
+  // rather than one naming a key nothing declares, which in the emitted `.ts`
+  // is the difference between a wrong picture and a compile error. Scoped to a
+  // count rather than a `not.toContain`, because the live mask makes that
+  // string legitimately present — the trap `particles.spec.ts` records paying
+  // for when a whole-file absence assertion became somebody else's to keep.
+  expect(exported.contents.split('.addMask(')).toHaveLength(2);
 
   const run = await runExportedPage(page.context(), testInfo.outputPath('hostile'), exported.contents);
 
@@ -2210,5 +2220,52 @@ test('the exported page holds a pinned object still while the camera pans past a
 
   expect(run.errors).toEqual([]);
 
+  await run.close();
+});
+
+test('a mask exports as an addMask on the object, and cuts it when run', async ({
+  editor,
+  page,
+}, testInfo) => {
+  const FILL = '#448800';
+
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Width', 240);
+  await editor.setField('Height', 240);
+  await editor.setField('Fill', FILL);
+  await editor.setField('X', 480);
+  await editor.setField('Y', 270);
+
+  await editor.openPanel('inspect');
+  await editor.panel('inspect').getByRole('button', { name: '+ Add an effect' }).click();
+  await editor.setChoice('Effect 1 kind', 'Mask');
+  await editor.importImage({ name: 'cut.png', buffer: halfAlphaPng(64, 64, '#aa66aa') });
+
+  const module = await editor.exportCode('ts');
+  // The two halves of the collector pair, asserted separately because they are
+  // two different questions and each fails on its own. `collectAssets` decides
+  // what the image is *called* across the file, which is the argument to the
+  // call; `usedIn` decides what this scene *preloads*, and missing that one is
+  // the silent half — Phaser's `getFrame` answers null for a key the cache does
+  // not hold, so the mask quietly does nothing rather than failing loudly.
+  expect(module.contents).toContain('.addMask("cut", false)');
+  expect(module.contents).toContain('this.load.image("cut", ASSETS["cut"])');
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(page.context(), testInfo.outputPath('mask'), exported.contents);
+
+  // The positive runtime claim, which the editor's own canvas cannot make on
+  // this side of the export: the filter really runs in a game that is not this
+  // one. An extent rather than a count alone, because what is asserted is that
+  // a *side* of the object is gone — the half a fade or a tint could not
+  // produce. The object is 240 wide in a 960-wide scene, so a mask that did
+  // nothing would read about twice this.
+  const shot = await run.page.locator('canvas').screenshot();
+  const box = await findColorBox(run.page, shot, FILL);
+  expect(box.count).toBeGreaterThan(100);
+  expect(box.width).toBeLessThan(box.height * 0.75);
+
+  expect(run.errors).toEqual([]);
   await run.close();
 });
