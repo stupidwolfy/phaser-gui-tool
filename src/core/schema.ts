@@ -3410,6 +3410,50 @@ export type RuleAction =
    */
   | { kind: 'setVelocity'; nodeId: string; x: number; y: number }
   /**
+   * Start a `particles` node emitting; stop one; or throw a single burst.
+   *
+   * Iteration 15 refused exactly this, thirteen iterations before there was
+   * anywhere to put it, and it used the phrase rules were later built to
+   * answer: *"an emitter that starts switched off and is triggered later is a
+   * line of game logic"*, and *"no follow target, timed burst or `stopAfter` —
+   * behaviour over time is game logic, the `scene.start` argument again."*
+   * Both sentences were right when they were written and neither was ever
+   * revisited, so until iteration 38 a particle emitter in an exported game ran
+   * from the moment the scene booted, for ever, with no way to say otherwise —
+   * which makes a puff of smoke when something is hit, the commonest thing
+   * anybody wants particles for, the one thing this document could not say.
+   *
+   * Three kinds rather than one with a verb field: the camera effects' call,
+   * because the union is already discriminated on `kind` at the reader and at
+   * the emitter and a second discriminant inside one case is a switch inside a
+   * switch for nothing.
+   *
+   * Named for the *type* rather than for Phaser's class, because `particles` is
+   * the word this document already uses — `NodeType`, `SECTION_TITLE` and the
+   * tree's add button all say it. The emit uses Phaser's own verbs (`.start()`,
+   * `.stop()`, `.explode(n)`), which is the `collide`/`collider` split kept
+   * exactly: one is the word a person reads, one is the API.
+   *
+   * **There is still no `emitting` prop, which is what keeps iteration 15's
+   * refusal true rather than overturning it.** Whether an emitter runs is
+   * `previewMotion`'s answer in the editor, and in the export it is *derived*
+   * from whether a rule starts or bursts it — `ctx.ruleEmitters`, which is
+   * `ctx.ruleTweens`' `paused: true` one type over. A document field would be
+   * the second answer to one question that sentence exists to refuse.
+   *
+   * Both refusals — a node that is gone, a node that is not a `particles` one —
+   * cost the **action** rather than the rule, which is `destroy`'s and
+   * `setVelocity`'s split. See `ruleActionsOf`.
+   */
+  | { kind: 'startParticles'; nodeId: string }
+  | { kind: 'stopParticles'; nodeId: string }
+  /**
+   * `count` is a particle count, not a duration: `explode(n)` throws `n` at
+   * once and halts the flow. Repaired and clamped, never dropped — see
+   * `ruleActionsOf`.
+   */
+  | { kind: 'burstParticles'; nodeId: string; count: number }
+  /**
    * `destroy`'s inverse, and the reason it took until iteration 34 is that
    * nothing was missing: iteration 12 has been emitting one factory function
    * per prefab since prefabs existed, called once per placement and never
@@ -3518,6 +3562,11 @@ export const RULE_ACTION_KINDS: readonly RuleAction['kind'][] = [
   // Beside `startTween`, the other verb that sets an object moving — that one
   // through the tween manager, this one through the physics engine.
   'setVelocity',
+  // The three particles verbs together, since only the first two are a pair and
+  // the third is what either of them is usually reached for.
+  'startParticles',
+  'stopParticles',
+  'burstParticles',
   // The camera between the object verbs and the variables, so the picker reads
   // as four groups. The order is free: the suite picks an option by its label.
   'cameraShake',
@@ -3570,6 +3619,33 @@ export interface SceneRule {
 
 /** The smallest timer delay a rule may ask for, in milliseconds. */
 const MIN_TIMER_DELAY = 1;
+
+/**
+ * The particle count a fresh `burstParticles` arrives with, and the most one
+ * may ask for.
+ *
+ * The cap is `MIN_TIMER_DELAY`'s job and `MAX_EFFECTS`': the one thing in this
+ * action that can run away. `explode(n)` allocates `n` particles on the frame
+ * it fires, so a hand-edited six-figure count is a dropped frame in the
+ * *player's* game — and on a looping timer it is every frame after it.
+ *
+ * The floor is 1 for the opposite reason: `explode(0)` is an action that runs
+ * perfectly and throws nothing, which this file records more often than any
+ * other failure as being indistinguishable from the feature being broken.
+ *
+ * Rounded as well as clamped, which none of `finiteOr`'s other callers do: a
+ * count is a count, `explode` loops over it, and `explode(24.5)` in generated
+ * code a person is meant to read is a number that says the exporter is not
+ * sure what it is printing.
+ *
+ * The cap is exported and the seed is not, which is `MAX_EFFECTS`' split and
+ * `DEFAULT_SHAKE`'s: a *limit* has to be the same number in the panel's field
+ * and in the reader's clamp or the control offers what the reader takes back,
+ * while a seed is the panel's own answer and is written there as a literal —
+ * `setVelocity`'s 450 for its reason.
+ */
+const DEFAULT_BURST = 24;
+export const MAX_BURST = 500;
 
 /**
  * This scene's rules, validated against the project and the scene they belong
@@ -4005,6 +4081,46 @@ function ruleActionsOf(
         break;
       }
 
+      case 'startParticles':
+      case 'stopParticles':
+      case 'burstParticles': {
+        // **No hand-matched list, and the absence is deliberate** — which needs
+        // saying because `PHYSICS_TYPES` and `TAPPABLE_TYPES` sit a few hundred
+        // lines up and the code here reads exactly like a third one forgotten.
+        // Those two exist because their question has six answers apiece and no
+        // compile-time link back to the union. "Can this throw particles" has
+        // one answer and it is the type's own name, so a set would be a list to
+        // keep in step with nothing.
+        //
+        // Both refusals cost the **action**, never the rule — `destroy`'s and
+        // `setVelocity`'s split, for its reason: a node reaches nothing outside
+        // the action that names it, so dropping one strictly *narrows* what the
+        // rule says, where a dangling variable would reopen a gate. If it was
+        // the only action the empty-`do` check below takes the rule, which is a
+        // lone `destroy` of a missing node's treatment already.
+        //
+        // No top-level guard of its own, and that is not an omission: `byId` is
+        // built from `scene.children` alone, so a particles node inside a
+        // container or a prefab definition is already out.
+        const verb = row.kind;
+        if (byId.get(nodeId)?.type !== 'particles') break;
+        if (verb === 'burstParticles') {
+          // Repaired and clamped, never dropped — `cameraPan`'s policy. There
+          // is no gate inside this action for a repair to open, so "a repair
+          // may narrow what the document says, it may never widen it" is
+          // satisfied trivially. See `MAX_BURST` for both ends.
+          const count = Math.round(finiteOr(row.count, DEFAULT_BURST));
+          actions.push({
+            kind: 'burstParticles',
+            nodeId,
+            count: Math.min(MAX_BURST, Math.max(1, count)),
+          });
+          break;
+        }
+        actions.push({ kind: verb, nodeId });
+        break;
+      }
+
       // The five camera effects, and the whole block is **repair, never drop**
       // — `cameraOf`'s policy rather than `soundsOf`'s split, and it is the
       // first action block in this function where that needs no argument at
@@ -4186,6 +4302,15 @@ export function spawnPointsOf(project: Project, scene: SceneDoc): SpawnPoint[] {
  * one shows in the scene's own list and on no object's panel — which is the
  * camera effects' consequence arriving on a trigger, and is correct for their
  * reason: it is about no object.
+ *
+ * The three particles verbs need no case either, and there the absence is the
+ * *good* answer rather than merely a correct one: they carry a `nodeId`, so
+ * `'nodeId' in action` finds them with no edit, and a rule whose only action is
+ * one of them therefore appears on that emitter's own panel — where a camera
+ * effect or a spawn, naming nothing a scene holds, appears only in the scene's
+ * list. Iteration 37's note, one feature on: the *field name* is what makes
+ * this and `ruleUsesVariable` and the store's `remapActionRefs` all inherit the
+ * right answer, so naming it anything else would have cost three edits.
  */
 export function ruleNames(rule: SceneRule, nodeId: string): boolean {
   const when = rule.when;

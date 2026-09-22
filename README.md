@@ -78,7 +78,8 @@ on a desktop.
   grows and fades, how many and how often, gravity, tint and blend mode. It sits still
   until you press ▶ in the toolbar, so an emitter stays where you put it while you place
   the rest of the scene, and exports as a real `this.add.particles(...)` with every
-  setting in one object
+  setting in one object. In the game it runs from the start unless a rule says
+  otherwise — see **Throw something at a moment** below
 - Make an object **move by itself**: switch on Tween in the inspector and say where its
   X, Y, rotation, scale or alpha should end up, over how long, with which easing, and
   whether it goes back again and repeats. The destination is drawn on the canvas as a
@@ -122,7 +123,8 @@ on a desktop.
   objects touching, an object being tapped, a key being pressed, a timer firing or a variable
   changing; *what* is
   building a prefab, removing an object, showing or hiding one, setting an object's text,
-  playing a sound or an animation, starting a movement, pushing an object with physics, going
+  playing a sound or an animation, starting a movement, pushing an object with physics,
+  starting, stopping or bursting a particle emitter, going
   to another scene, changing a number — or moving the
   camera: shake it when something is hit, flash or fade it in a colour of your choosing, pan
   it somewhere, zoom it in or out, each over a time and an easing you set. Declare
@@ -146,6 +148,16 @@ on a desktop.
   there gravity, drag and anything it collides with take over. The editor never runs it —
   nothing here simulates a body, and nothing is drawn for a speed the way a ring is drawn for
   a spawn, because a speed has no place on the canvas to be — so press **Play** to watch it go
+- **Throw something at a moment**: a rule can *Start particles*, *Stop particles* or *Burst
+  particles* — so smoke puffs when something is hit, a thruster runs only while it should,
+  and a shower of sparks is one row of settings. A burst throws a count you set, all at once,
+  at the emitter's own position, and the flow stops there. The three are offered as soon as
+  the scene holds an emitter. **An emitter a rule starts or bursts waits for it** — it stays
+  quiet from the boot instead of running the moment the game opens, which is the difference
+  between a puff of smoke and a smoke machine, and you do not set it anywhere: the export
+  works it out from the rule. One a rule only *stops* was running all along. The editor still
+  fires no rule, so the canvas shows what it always did — the emitter's marker until you
+  press ▶, and everything it throws once you do
 - **Act on a number reaching something**: pick *a variable changes* as a rule's moment and
   add a check, and you have `when Score changes, only if Score is at least 10, go to the Win
   scene`. The rule runs on every change from 10 upwards rather than only the first time, so
@@ -318,7 +330,7 @@ phone users take, not a degraded mode.
 
 ## Status
 
-The goal is to eventually cover the whole Phaser surface; thirty-two iterations in, it is
+The goal is to eventually cover the whole Phaser surface; thirty-eight iterations in, it is
 a working editor but a small one.
 
 **Not built yet** — text has typography and its own imported fonts, with four limits: a
@@ -356,6 +368,13 @@ Scenes are in, with one limit: nothing in the editor starts one scene from anoth
 that is a line of game logic rather than a piece of layout — the export registers them all
 and leaves `this.scene.start('Level 2')` to you. Prefabs are in, with two limits: a prefab cannot contain another prefab,
 and an instance cannot override part of what it draws — detach it and edit the copy.
+
+Particles are in, and a rule can start, stop or burst one, with five limits: there is no
+pause or resume (start and stop are the pair); a burst happens at the emitter's own position
+rather than at a point you name; there are no emit or death zones, no follow target and no
+`stopAfter`; nothing can read back whether an emitter is running; and an emitter still has
+no *setting* for whether it waits — that is worked out from the rule, so an emitter no rule
+starts runs from the boot as it always did.
 
 Play is in, with four limits: it plays a
 snapshot, so an edit reaches the game on the next Restart rather than live; errors go to

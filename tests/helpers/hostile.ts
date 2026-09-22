@@ -559,6 +559,28 @@ export function hostileProject(): Project {
               // every colour assertion in `export.spec.ts` — correct behaviour,
               // and not what those assertions are about.
               { kind: 'setVelocity' as const, nodeId: 'a', x: 240, y: -180 },
+              // The three particles verbs, and the split between them is the
+              // whole of what they are here for. `atlas-emitter` is *started*,
+              // so it is the only place `emitting: false` reaches the emitted
+              // config literal and meets `ParticleEmitterConfig` under
+              // `tsc --strict`. `n` is only *stopped*, so its config must stay
+              // untouched — which is what keeps the `blendMode: "ADD"`
+              // assertion beside it passing unchanged, and is the fixture half
+              // of `ctx.ruleEmitters`' start-and-burst-but-never-stop rule.
+              { kind: 'startParticles' as const, nodeId: 'atlas-emitter' },
+              { kind: 'stopParticles' as const, nodeId: 'n' },
+              // `o` has no image, so it emits a `missingReason` comment and no
+              // binding at all — the `bindings.get(...)?.[0] === undefined`
+              // path, which has to answer with no line rather than an
+              // identifier nothing declared. Only the toolchain specs can see
+              // that the result still compiles.
+              { kind: 'burstParticles' as const, nodeId: 'o', count: 37 },
+              // Two ways to dangle, as a pair on purpose: either alone cannot
+              // tell "costs the action" from "costs the rule". `d` is a text
+              // node, which is the wrong *type* rather than a missing id —
+              // `rule-x15`/`rule-x16`'s shape, inside one rule.
+              { kind: 'startParticles' as const, nodeId: 'no-such-emitter' },
+              { kind: 'stopParticles' as const, nodeId: 'd' },
               { kind: 'setVar' as const, variableId: 'var-1', value: 7 },
               { kind: 'addVar' as const, variableId: 'var-2', by: -1 },
               // Text into a text variable, and a caption onto the one text node

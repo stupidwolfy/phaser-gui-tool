@@ -6,6 +6,7 @@ import { findColor, findColorBox } from './helpers/pixels';
 import { reaches } from './helpers/poll';
 import { serveDirectory } from './helpers/server';
 import { hostileProject } from './helpers/hostile';
+import { solidPng } from './helpers/png';
 
 /**
  * Code export, verified by *running the exported page* rather than by reading
@@ -24,6 +25,17 @@ const ELLIPSE_FILL = '#ffb84f';
  */
 const LABEL_FILL = '#ff2ec4';
 /** The fill of the rectangle nested in the hostile project's group. */
+/**
+ * The particle a burst throws, picked by arithmetic rather than by eye — which
+ * `TOUCH_COLOR`, `TWEEN_COLOR`, `SPAWN_COLOR` and `GLOW` all record nearly
+ * getting wrong. Its worst per-channel margin against every other fixture
+ * colour in this file, the hostile project's own fills and the scene
+ * background is **126**, against `findColor`'s tolerance of 24. An export
+ * draws no editor chrome, so unlike every near-side spec there is no palette
+ * of guides, outlines and markers to clear as well. Re-run that check when a
+ * fixture colour is added here.
+ */
+const PARTICLE_FILL = '#00ff6a';
 const NESTED_FILL = '#22d3ee';
 /** The fill of the rectangle inside the hostile project's prefab. */
 const PREFAB_FILL = '#7ee787';
@@ -2041,6 +2053,86 @@ test('a Matter push is in Matter own units', async ({ editor, page }, testInfo) 
   );
   expect(after.count).toBeGreaterThan(100);
   expect(after.x).toBeGreaterThan(before.x + 40);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('the exported page throws nothing until a rule says to', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The positive claim for the particles verbs, and the only place it can be
+  // made** — the editor fires no rule, so `rules.spec.ts` can only say that the
+  // config and the call are emitted and that the canvas does nothing with them.
+  //
+  // It is also the claim that proves the whole shape of the feature. There is
+  // no `emitting` prop in the document: the exporter *derives* one from the
+  // rule, so an emitter that waits is only possible because `ctx.ruleEmitters`
+  // exists. Before iteration 38 every emitter in every export ran from the
+  // boot, which is exactly what the "before" reading below would see.
+  await editor.clearScene();
+  await editor.addObject('Particles');
+  await editor.setField('Name', 'Puff');
+  await editor.importImage({ name: 'spark.png', buffer: solidPng(64, 64, PARTICLE_FILL) });
+  await editor.setField('X', 480);
+  await editor.setField('Y', 270);
+  // Every source of randomness pinned, `particles.spec.ts`' fixture and its
+  // reasons: no speed, so the particles stay on the emitter and inside the
+  // region being counted; constant scale and alpha, so the blob is one size and
+  // opaque enough to clear `findColor`'s alpha threshold; and a lifespan long
+  // enough that nothing dies between the poll and the assertion.
+  await editor.setField('Speed min', 0);
+  await editor.setField('Speed max', 0);
+  await editor.setField('Scale start', 1);
+  await editor.setField('Scale end', 1);
+  await editor.setField('Alpha start', 1);
+  await editor.setField('Alpha end', 1);
+  await editor.setField('Lifespan', 8000);
+  await editor.deselect();
+
+  // A one-shot timer rather than a tap: nothing has to be pressed, and the
+  // delay is what makes "before" mean before.
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'a timer fires');
+  await editor.openRule(name);
+  await editor.setField('Rule 1 every', 1500);
+  await editor.setChoice('Rule 1 do 1', 'Burst particles');
+  await editor.setField('Rule 1 do 1 count', 60);
+
+  const exported = await editor.exportCode('html');
+  // Derived, not stored — the line the document never says.
+  expect(exported.contents).toContain('emitting: false,');
+  expect(exported.contents).toContain('.explode(60);');
+  // A moment Phaser already delivers, so iteration 28's line does not move.
+  expect(exported.contents).not.toContain('update()');
+
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('burst'),
+    exported.contents,
+  );
+
+  // The half that only means anything because the derivation exists: with
+  // `emitting: false` the emitter never flows, so the canvas holds none of its
+  // colour at all. Without that line this reading is non-zero on the first
+  // frame and the test fails loudly rather than passing for the wrong reason.
+  const before = await findColor(
+    run.page,
+    await run.page.locator('canvas').screenshot(),
+    PARTICLE_FILL,
+  );
+  expect(before.count, 'the emitter threw before its rule fired').toBe(0);
+
+  // And then the rule fires. Polled, because what a running game is doing at
+  // one wall-clock instant is a race with the frame rate.
+  const thrown = await reaches(
+    async () =>
+      (await findColor(run.page, await run.page.locator('canvas').screenshot(), PARTICLE_FILL))
+        .count,
+    (count) => count > 100,
+  );
+  expect(thrown).toBeGreaterThan(100);
   expect(run.errors).toEqual([]);
 
   await run.close();
