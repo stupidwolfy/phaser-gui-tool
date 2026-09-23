@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { strFromU8, unzipSync } from 'fflate';
 import { expect, test } from './helpers/fixtures';
 import type { EditorPage } from './helpers/editor';
 import { blockTtf } from './helpers/ttf';
@@ -148,7 +149,8 @@ test('a font survives a save and an open', async ({ editor }, testInfo) => {
   // The canvas first, then the file: on mobile the file sheet covers the canvas,
   // so a reading taken after a save screenshots the sheet.
   const saved = await editor.saveToFile();
-  const parsed = JSON.parse(saved.contents);
+  const entries = unzipSync(saved.archive);
+  const parsed = JSON.parse(strFromU8(entries['project.json']));
 
   // Asserted in the artefact so a future bump is a deliberate act, the way
   // `audio.spec`, `guides.spec` and the rest each assert their own. This is the
@@ -160,12 +162,14 @@ test('a font survives a save and an open', async ({ editor }, testInfo) => {
   // this one was derived from the extension, since the import was handed no
   // mime at all.
   expect(parsed.fonts[0].mimeType).toBe('font/ttf');
-  expect(parsed.fonts[0].dataUrl).toMatch(/^data:font\/ttf;base64,/);
+  expect(parsed.fonts[0].dataUrl).toBeUndefined();
+  expect(parsed.fonts[0].path).toMatch(/^assets\/fonts\/[0-9a-f]+\.ttf$/);
+  expect(Buffer.from(entries[parsed.fonts[0].path])).toEqual(chunky().buffer);
   // The link is the family named in the node, not an id.
   expect(parsed.scenes[0].children[0].props.fontFamily).toBe('ChunkyBlock');
 
-  const path = testInfo.outputPath('with-font.phaser.json');
-  await fs.writeFile(path, saved.contents, 'utf8');
+  const path = testInfo.outputPath('with-font.phaser.zip');
+  await fs.writeFile(path, saved.archive);
 
   await editor.newProject();
   await editor.openFile(path);
@@ -186,8 +190,8 @@ test('a font is applied after a cold boot decodes it', async ({ editor }, testIn
   const wanted = await drawnWidth(editor);
 
   const saved = await editor.saveToFile();
-  const path = testInfo.outputPath('cold-boot.phaser.json');
-  await fs.writeFile(path, saved.contents, 'utf8');
+  const path = testInfo.outputPath('cold-boot.phaser.zip');
+  await fs.writeFile(path, saved.archive);
 
   // A reload, and then the file — not a `newProject` and the file. The reload
   // is what empties the module-level decode cache, which is the only way to

@@ -1,4 +1,5 @@
 import { expect, type CDPSession, type Dialog, type Locator, type Page } from '@playwright/test';
+import { strFromU8, unzipSync } from 'fflate';
 import { PREFS_KEY } from '../../src/io/prefs';
 import {
   countColorIn,
@@ -1658,7 +1659,7 @@ export class EditorPage {
   }
 
   /** Saves the project and returns the file the browser was handed. */
-  async saveToFile(): Promise<{ name: string; contents: string }> {
+  async saveToFile(): Promise<{ name: string; contents: string; archive: Buffer }> {
     await this.openPanel('file');
     const download = this.page.waitForEvent('download');
     await this.panel('file')
@@ -1668,7 +1669,20 @@ export class EditorPage {
     const stream = await file.createReadStream();
     const chunks: Buffer[] = [];
     for await (const chunk of stream) chunks.push(chunk as Buffer);
-    return { name: file.suggestedFilename(), contents: Buffer.concat(chunks).toString('utf8') };
+    const archive = Buffer.concat(chunks);
+    const entries = unzipSync(archive);
+    const manifest = JSON.parse(strFromU8(entries['project.json'])) as Record<string, unknown>;
+    // Preserve the JSON-shaped view used throughout the older editing tests,
+    // while returning the real archive for ZIP-specific assertions and opens.
+    for (const key of ['assets', 'audio', 'fonts'] as const) {
+      const records = (manifest[key] ?? []) as Array<Record<string, unknown>>;
+      manifest[key] = records.map(({ path, mimeType, ...record }) => ({
+        ...record,
+        mimeType,
+        dataUrl: `data:${mimeType};base64,${Buffer.from(entries[path as string]).toString('base64')}`,
+      }));
+    }
+    return { name: file.suggestedFilename(), contents: JSON.stringify(manifest), archive };
   }
 
   /** Opens a project file through the `<input type="file">` path. */
