@@ -62,7 +62,9 @@ on a desktop.
   inspector, and place it again from the Prefabs list in the scene panel. Every placement
   is linked to the one definition, so editing it changes all of them at once — detach an
   instance into an ordinary group, edit it with the usual tools, then **Replace** the
-  prefab from it. Deleting a prefab detaches its instances rather than deleting the
+  prefab from it. **Manage prefabs** under the Prefabs list renames or deletes any
+  prefab, including one no scene places and only a rule builds, and says where each is
+  used. Deleting a prefab detaches its instances rather than deleting the
   objects, and exported code gets one factory function per prefab, called once per
   placement
 - Paint a level out of **tiles**: `+ Tiles` adds a map, an imported image sliced into

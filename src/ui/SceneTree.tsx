@@ -1,6 +1,14 @@
 import { useState, type DragEvent, type MouseEvent } from 'react';
-import { useActiveScene, useEditorStore, usePrefabs, useScenes } from '../core/store';
-import { findParent, type GameObjectNode, type NodeType } from '../core/schema';
+import {
+  countPrefabSpawns,
+  countPrefabUses,
+  useActiveScene,
+  useEditorStore,
+  usePrefabs,
+  useScenes,
+} from '../core/store';
+import { findParent, type GameObjectNode, type NodeType, type Prefab } from '../core/schema';
+import { TextField } from './fields';
 
 /**
  * The object types the add row offers.
@@ -211,7 +219,8 @@ function ScenesSection() {
 }
 
 /**
- * The prefab library, as one placing button per definition.
+ * The prefab library, as one placing button per definition — and, behind one
+ * toggle, the definitions' own controls.
  *
  * It lives in the scene panel rather than in the inspector or a fourth mobile
  * tab for two reasons. Placing needs no selection, while the inspector's scene
@@ -223,10 +232,26 @@ function ScenesSection() {
  * Every button keeps the `+ ` prefix. That is not decoration: the mobile tab
  * bar's labels are single common words matched exactly, so a prefab a user
  * names "Scene" would otherwise be a second button reading exactly "Scene".
+ *
+ * **Rename and delete are here as well as on an instance's panel**, because a
+ * prefab that only a rule's `spawn` builds is placed nowhere, and until they
+ * were, a definition nothing placed had no controls anywhere: renaming the
+ * exported factory or deleting the definition meant placing one first. The
+ * instance's panel keeps its copy — one field, two controls, both writing
+ * `renamePrefab`, which is the tile eraser's rule.
+ *
+ * They sit behind a single "Manage prefabs" toggle rather than always open, and
+ * the reason is where this panel is: on screen at all times, with the tree
+ * underneath it on a phone sheet. Three rows per prefab would push every object
+ * down for an action taken a handful of times in a project's life. A per-prefab
+ * button in the grid was the other shape, and a grid cell cannot hold a card.
+ * Whether it is open is editor state held here, like the tree's collapsed
+ * groups — never saved and never undoable.
  */
 function PrefabsSection() {
   const prefabs = usePrefabs();
   const placePrefab = useEditorStore((s) => s.placePrefab);
+  const [managing, setManaging] = useState(false);
 
   // A library nobody has put anything in is not worth a heading: the way to
   // make a prefab is to select objects, which the inspector then offers.
@@ -247,7 +272,92 @@ function PrefabsSection() {
           </button>
         ))}
       </div>
+      <button
+        className={`btn btn--add btn--block ${managing ? 'is-active' : ''}`}
+        aria-pressed={managing}
+        onClick={() => setManaging(!managing)}
+        title="Rename or delete a prefab, placed or not"
+      >
+        Manage prefabs
+      </button>
+      {managing &&
+        prefabs.map((prefab, index) => (
+          <PrefabCard key={prefab.id} prefab={prefab} index={index + 1} />
+        ))}
     </>
+  );
+}
+
+/**
+ * One definition's controls: its name, where it is used, and deleting it.
+ *
+ * The field is `Prefab <n> name`, indexed the way `Variable <n> name` and
+ * `Rule <n> name` are, and it must not be the inspector's `Prefab name`: on the
+ * desktop layout this panel and the inspector are on screen together, so with
+ * an instance selected both fields are visible at once and a label matched
+ * exactly would name two of them.
+ *
+ * The delete button carries the prefab's name for the same reason in the other
+ * direction — the inspector's is a bare `Delete prefab` and the tree's rows are
+ * `Delete <object>`, so a named `Delete prefab <name>` collides with neither.
+ * No confirm, which is the inspector's button's call: it is one undo step.
+ */
+function PrefabCard({ prefab, index }: { prefab: Prefab; index: number }) {
+  // Both counts are plain numbers, so selecting them is safe — unlike every
+  // reader in `schema.ts` that builds a fresh object per call.
+  const uses = useEditorStore((s) => countPrefabUses(s.project, prefab.id));
+  const spawns = useEditorStore((s) => countPrefabSpawns(s.project, prefab.id));
+  const renamePrefab = useEditorStore((s) => s.renamePrefab);
+  const removePrefab = useEditorStore((s) => s.removePrefab);
+
+  return (
+    <div className="prefab-card">
+      <TextField
+        label={`Prefab ${index} name`}
+        value={prefab.name}
+        onChange={(name) => renamePrefab(prefab.id, name)}
+      />
+      <p className="hint" title={`Prefab ${index} use`}>
+        {prefabUsage(uses, spawns)}
+      </p>
+      <button
+        className="btn btn--block btn--danger"
+        onClick={() => removePrefab(prefab.id)}
+        title={prefabRemovalSummary(uses, spawns)}
+      >
+        Delete prefab {prefab.name}
+      </button>
+    </div>
+  );
+}
+
+const plural = (count: number, word: string): string =>
+  `${count} ${word}${count === 1 ? '' : 's'}`;
+
+/**
+ * Where a definition is used, in words.
+ *
+ * The third case is the one worth having this for: a definition that is placed
+ * nowhere and built by no rule is dead weight in the export's factory list, and
+ * this is the only place in the editor that can say so.
+ */
+function prefabUsage(uses: number, spawns: number): string {
+  if (uses === 0 && spawns === 0) return 'Placed nowhere and built by nothing.';
+  if (uses === 0) return `Placed nowhere — only rules build it (${plural(spawns, 'spawn action')}).`;
+  const placed = uses === 1 ? 'Placed once' : `Placed ${uses} times`;
+  return spawns === 0 ? `${placed}.` : `${placed} · built by ${plural(spawns, 'spawn action')}.`;
+}
+
+/**
+ * What deleting a prefab is about to do, for the title of every button that
+ * does it — the library's and an instance's panel alike, so the two cannot
+ * drift apart about a press that detaches instances and strips rule actions.
+ */
+export function prefabRemovalSummary(uses: number, spawns: number): string {
+  return (
+    `Detaches ${plural(uses, 'instance')}` +
+    (spawns > 0 ? `, removes ${plural(spawns, 'spawn action')}` : '') +
+    ' and removes the prefab'
   );
 }
 
