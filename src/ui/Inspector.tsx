@@ -35,6 +35,7 @@ import {
   defaultEffect,
   blendModeOf,
   scrollFactorOf,
+  particleFollowOf,
   isDefaultScrollFactor,
   MAX_SCROLL_FACTOR,
   BLEND_MODES,
@@ -3384,7 +3385,79 @@ function ParticlesSection({
           onChange={(alpha) => setProp({ alpha })}
         />
       </Section>
+
+      <FollowSection node={node} />
     </>
+  );
+}
+
+/**
+ * What an emitter follows: a trail behind a player, sparks on a coin.
+ *
+ * A flat peer of the particles sections rather than a row inside Emission,
+ * because it is about where the emitter *is* rather than how it throws — and a
+ * `Section` title is a storage key, so it is `Follow` and collides with nothing.
+ * The label is `Emitter follows`, never a bare `Follows`, beside the scene
+ * panel's `Camera follows` that the suite matches exactly.
+ *
+ * Every state that cannot follow is a sentence rather than a missing control,
+ * `AlignSection`'s rule — and the wording of the nested one is its own, because
+ * the Physics, Scroll and Rules hints a few rows down say "top level of the
+ * scene" and a spec reaching one by its text would match all of them.
+ */
+function FollowSection({ node }: { node: Extract<GameObjectNode, { type: 'particles' }> }) {
+  const scene = useActiveScene();
+  const setParticleFollow = useEditorStore((s) => s.setParticleFollow);
+  const topLevel = scene.children.some((child) => child.id === node.id);
+  const following = particleFollowOf(node, scene, topLevel);
+
+  if (!topLevel) {
+    return (
+      <Section title="Follow">
+        <p className="hint">
+          Only an emitter placed directly in the scene can follow something — move
+          it out of its group to leave a trail.
+        </p>
+      </Section>
+    );
+  }
+
+  // Everything the reader would honour: another top-level object that is not an
+  // emitter, since a following emitter's own position is only an offset.
+  const candidates = scene.children.filter(
+    (child) => child.id !== node.id && child.type !== 'particles',
+  );
+  const { rotation, scaleX, scaleY } = node.transform;
+  const transformed = rotation % 360 !== 0 || scaleX !== 1 || scaleY !== 1;
+
+  return (
+    <Section title="Follow">
+      <SelectField
+        label="Emitter follows"
+        value={node.props.followId ?? ''}
+        options={[
+          { value: '', label: 'Nothing' },
+          ...candidates.map((child) => ({ value: child.id, label: child.name || child.type })),
+        ]}
+        onChange={(id) => setParticleFollow(node.id, id === '' ? null : id)}
+      />
+      {following !== null && (
+        <p className="hint">
+          X and Y are now measured from {following.name || 'the object it follows'}:
+          particles leave from there, and ones already thrown stay behind as a trail.
+        </p>
+      )}
+      {following === null && node.props.followId !== undefined && transformed && (
+        <p className="hint">
+          Not following while this emitter is turned or scaled — Phaser would turn and
+          scale the followed object's position with it. Set its rotation to 0 and its
+          scale to 1 to bring the trail back.
+        </p>
+      )}
+      {candidates.length === 0 && (
+        <p className="hint">Add another object to the scene for this emitter to follow.</p>
+      )}
+    </Section>
   );
 }
 

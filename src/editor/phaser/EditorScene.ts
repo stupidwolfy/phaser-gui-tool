@@ -32,6 +32,7 @@ import {
   rulePointsOf,
   scrollFactorOf,
   scrollOffsetOf,
+  particleFollowOf,
   textStyleOf,
   tileLayerOf,
   tileMapOf,
@@ -51,6 +52,7 @@ import {
   type ImageAsset,
   type ParticlesProps,
   type Project,
+  type SceneDoc,
   type SpawnPoint,
   type TextProps,
   type TileCell,
@@ -688,9 +690,15 @@ export class EditorScene extends Phaser.Scene {
 
   /**
    * Where each object is drawn relative to where the document says it is,
-   * because of its scroll factor — by display key, and only for the nodes that
-   * have one, so the map is empty in every project that does not use the
-   * feature.
+   * because of its scroll factor or because it is an emitter following
+   * something — by display key, and only for the nodes that have one, so the
+   * map is empty in every project that uses neither feature.
+   *
+   * Named for what it is rather than for its first cause. A following
+   * emitter's `x`/`y` is an offset from its target, so it is drawn at the
+   * target's document position plus that — a constant per sync exactly as the
+   * scroll offset is, which is why the two add and nothing downstream has to
+   * know which of them it is looking at.
    *
    * Filled by `applyNode`, which is the one place the offset is worked out, and
    * read by `drawBodies` and `drawTweenGhosts`. Three consumers and one
@@ -698,7 +706,7 @@ export class EditorScene extends Phaser.Scene {
    * recomputed it would be a second place for the sign to be wrong, and a wrong
    * sign is a mark drawn at twice the distance in the opposite direction.
    */
-  private scrollOffsets = new Map<string, { x: number; y: number }>();
+  private drawOffsets = new Map<string, { x: number; y: number }>();
 
   /**
    * The live tween on each display object, by display key.
@@ -1755,7 +1763,7 @@ export class EditorScene extends Phaser.Scene {
     this.nodeEffects.delete(key);
     // And once more, one map over: a stale offset would have the next node to
     // land on this key drawn somewhere its own factor never asked for.
-    this.scrollOffsets.delete(key);
+    this.drawOffsets.delete(key);
     // A tween outliving its object is one writing to a destroyed target, and
     // the next node to land on this key would inherit a signature it was never
     // given. The same two lines, one map over.
@@ -1987,7 +1995,18 @@ export class EditorScene extends Phaser.Scene {
         // anything else moves only what was pressed, which is also what makes a
         // mouse press-and-drag on an unselected object still work.
         const movesSelection = id !== null && selected.length > 1 && selected.includes(id);
-        const ids = movesSelection ? selected : id ? [id] : [];
+        const picked = movesSelection ? selected : id ? [id] : [];
+        // A following emitter whose target is in the same drag is carried by it —
+        // it is drawn at the target plus its own offset — so moving it as well
+        // would move the trail twice. Every node here takes one displacement, so
+        // this is `compensateFollowers` for equal deltas, answered by leaving it
+        // out rather than by subtracting.
+        const scene = activeScene(state.project);
+        const ids = picked.filter((nodeId) => {
+          const node = scene.children.find((child) => child.id === nodeId);
+          const target = node ? particleFollowOf(node, scene, true) : null;
+          return target === null || !picked.includes(target.id);
+        });
 
         const nodes = ids.flatMap((nodeId) => {
           const node = findNode(children, nodeId);
@@ -2006,7 +2025,9 @@ export class EditorScene extends Phaser.Scene {
           pointerX: pointer.worldX,
           pointerY: pointer.worldY,
           startBounds: this.boundsOfSet(nodes.map((item) => item.id)),
-          targets: this.snapTargetsFor(nodes.map((item) => item.id), state.project),
+          // Everything picked, carried trails included: a trail riding along
+          // with the drag is not a line anything should snap to.
+          targets: this.snapTargetsFor(picked, state.project),
           snappedX: false,
           snappedY: false,
         };
@@ -3021,6 +3042,7 @@ export class EditorScene extends Phaser.Scene {
       this.destroyDisplayObject(id, object);
     }
 
+    this.applyFollows(scene);
     this.publishMeasuredBounds();
 
     // After the objects, not before: `zoomToFit` frames the scene rectangle,
@@ -3107,7 +3129,7 @@ export class EditorScene extends Phaser.Scene {
       // Added to the *document's* position rather than read off `object.x`,
       // which would be identical today and would quietly start following a
       // tweened object under ▶ — a behaviour change this has no business making.
-      const offset = this.scrollOffsets.get(node.id) ?? ZERO_OFFSET;
+      const offset = this.drawOffsets.get(node.id) ?? ZERO_OFFSET;
       const cx = node.transform.x + offset.x;
       const cy = node.transform.y + offset.y;
 
@@ -3341,7 +3363,7 @@ export class EditorScene extends Phaser.Scene {
       // object's ghost belongs beside the pinned object, not out in the world.
       // Only ever non-zero for a top-level node, which is the only kind that
       // can carry a factor at all.
-      const offset = this.scrollOffsets.get(key) ?? ZERO_OFFSET;
+      const offset = this.drawOffsets.get(key) ?? ZERO_OFFSET;
       local.applyITRS(
         target.x + offset.x,
         target.y + offset.y,
@@ -4019,10 +4041,23 @@ export class EditorScene extends Phaser.Scene {
     // camera, which this canvas never applies; what it can honestly say is where
     // the object sits at the frame the game opens on, which is what
     // `scrollOffsetOf` answers and what the violet frame already claims to show.
+    const scene = activeScene(this.syncing);
     const factor = scrollFactorOf(node, topLevel);
-    const offset = scrollOffsetOf(activeScene(this.syncing), factor);
-    if (offset.x === 0 && offset.y === 0) this.scrollOffsets.delete(key);
-    else this.scrollOffsets.set(key, offset);
+    const scroll = scrollOffsetOf(scene, factor);
+    // And a trail: Phaser fires a following emitter's particles at the target's
+    // `x`/`y` plus the emitter's own, so the emitter's stored position is an
+    // offset and it is drawn beside the target. The target's **document**
+    // position, never where it is drawn — that is the number Phaser reads, a
+    // scroll factor on the target changes where the *target* is drawn and not
+    // what `target.x` holds. `particleFollowOf` answers null below the top
+    // level, so this is zero for every derived child.
+    const followed = particleFollowOf(node, scene, topLevel);
+    const offset = {
+      x: scroll.x + (followed?.transform.x ?? 0),
+      y: scroll.y + (followed?.transform.y ?? 0),
+    };
+    if (offset.x === 0 && offset.y === 0) this.drawOffsets.delete(key);
+    else this.drawOffsets.set(key, offset);
 
     // Always mirror the document, including mid-drag. An earlier version skipped
     // the object under the pointer to stop the rounded store value fighting the
@@ -4301,7 +4336,7 @@ export class EditorScene extends Phaser.Scene {
     // time: the scene syncs on every store change, so an unguarded rebuild
     // means nothing ever visibly travels anywhere.
     const signature =
-      tween !== null && node.visible ? this.tweenSignatureOf(node, tween) : '';
+      tween !== null && node.visible ? this.tweenSignatureOf(node, tween, key) : '';
 
     if (live && this.nodeTweenSignatures.get(key) === signature) {
       return live.held;
@@ -4326,11 +4361,15 @@ export class EditorScene extends Phaser.Scene {
    * cannot disagree about what counts as the same tween — which would leave one
    * of them rebuilding on every store change.
    */
-  private tweenSignatureOf(node: GameObjectNode, tween: NodeTween): string {
+  private tweenSignatureOf(node: GameObjectNode, tween: NodeTween, key: string): string {
     const from = TWEEN_PROPERTIES.filter((property) => property in tween.to).map((property) =>
       property === 'alpha' ? node.props.alpha : node.transform[property],
     );
-    return JSON.stringify([tween, from]);
+    // And the draw offset `startTween` adds to the destination, so a trail's own
+    // tween re-aims when the object it follows is moved rather than going on
+    // travelling to where that object used to be.
+    const offset = this.drawOffsets.get(key) ?? ZERO_OFFSET;
+    return JSON.stringify([tween, from, offset.x, offset.y]);
   }
 
   /**
@@ -4349,13 +4388,20 @@ export class EditorScene extends Phaser.Scene {
 
     const held = new Set<TweenProperty>();
     const targets: Record<string, number> = {};
+    // A tween's `x`/`y` is a destination in the document's terms, and the object
+    // is drawn offset from those — by a scroll factor, or by the target a trail
+    // follows, whose `to.x` in the export moves the *offset*. Adding the same
+    // constant `applyNode` drew it with is what keeps the canvas tweening to the
+    // place the game will, and what the ghost beside it already assumes.
+    const offset = this.drawOffsets.get(key) ?? ZERO_OFFSET;
     for (const property of TWEEN_PROPERTIES) {
       const value = tween.to[property];
       if (value === undefined) continue;
       held.add(property);
       // `TWEEN_PHASER_KEY`, never the document's own name — `rotation` on a
       // Game Object is radians, and this document's is degrees.
-      targets[TWEEN_PHASER_KEY[property]] = value;
+      targets[TWEEN_PHASER_KEY[property]] =
+        property === 'x' ? value + offset.x : property === 'y' ? value + offset.y : value;
     }
 
     this.nodeTweens.set(key, {
@@ -4372,7 +4418,7 @@ export class EditorScene extends Phaser.Scene {
       }),
       held,
     });
-    this.nodeTweenSignatures.set(key, this.tweenSignatureOf(node, tween));
+    this.nodeTweenSignatures.set(key, this.tweenSignatureOf(node, tween, key));
   }
 
   /**
@@ -4625,6 +4671,44 @@ export class EditorScene extends Phaser.Scene {
     if (!running && emitter.emitting) emitter.stop(true);
 
     this.markerOf(group).setVisible(!running);
+  }
+
+  /**
+   * Points each following emitter at the object it follows, so a trail under ▶
+   * is left behind a *moving* target rather than only drawn beside a still one.
+   *
+   * The wrapper already stands where the game will fire from — the target's
+   * document position plus the offset, through `drawOffsets` — so the inner
+   * emitter is told to follow the target's display object *less the position
+   * that object stands at when nothing is moving it*. At rest that adds nothing;
+   * while a tween holds the target it adds exactly how far the tween has taken
+   * it, and the particles already in flight stay where they were fired, which
+   * is Phaser's own trail and the export's.
+   *
+   * A pass of its own after `syncNodes` rather than a line in `applyEmitter`,
+   * because an emitter can come before its target in the array and the target's
+   * display object may be the one this very sync has just built.
+   */
+  private applyFollows(scene: SceneDoc): void {
+    for (const node of scene.children) {
+      if (node.type !== 'particles') continue;
+      const emitter = this.emitters.get(node.id);
+      if (!emitter) continue;
+      const target = particleFollowOf(node, scene, true);
+      const object = target ? this.displayObjects.get(target.id) : undefined;
+      if (!target || !object) {
+        if (emitter.follow !== null) emitter.stopFollow();
+        continue;
+      }
+      // Where `applyNode` puts the target when no tween holds it — the same sum,
+      // so the difference is zero whenever nothing is moving.
+      const rest = scrollOffsetOf(scene, scrollFactorOf(target, true));
+      emitter.startFollow(
+        object,
+        -(target.transform.x + rest.x),
+        -(target.transform.y + rest.y),
+      );
+    }
   }
 
   /**

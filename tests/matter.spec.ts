@@ -130,10 +130,10 @@ test('the engine, the Matter dials and the rows they hide survive a save', async
 
   // The engine is a field on `scene.physics`, which rides in on `scenes` — the
   // one part of a file `parseProject` passes through verbatim — so this is the
-  // guides case and the engine did not move the version. It reads 15 because a
-  // round body did (see `SCHEMA_VERSION`). Asserted so a future bump is a
+  // guides case and the engine did not move the version. It reads 16 because a
+  // round body and then a particle trail did (see `SCHEMA_VERSION`). Asserted so a future bump is a
   // deliberate act rather than a surprise.
-  expect(saved.schemaVersion).toBe(15);
+  expect(saved.schemaVersion).toBe(16);
 
   const path = testInfo.outputPath('matter.phaser.json');
   await fs.writeFile(path, file.contents, 'utf8');

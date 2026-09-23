@@ -223,10 +223,10 @@ test('a body and the scene gravity survive a save and an open, at schema 12', as
   // Asserted so that a future bump is a deliberate act rather than something
   // that happens to a file — the guides and scenes precedent. A body rides in
   // on `scenes`, which the parser passes through verbatim, so a build that
-  // predates it opens this file and draws it identically. It reads 15 because
-  // other features bumped it and then a round body did — the first physics
-  // field to, because an old build's field-by-field `physicsOf` loses it.
-  expect(project.schemaVersion).toBe(15);
+  // predates it opens this file and draws it identically. It reads 16 because
+  // other features bumped it — a round body among them, the first physics field
+  // to, because an old build's field-by-field `physicsOf` loses it.
+  expect(project.schemaVersion).toBe(16);
   // The engine rides here beside the gravity, and an Arcade scene says so
   // explicitly once anything has written the field — which is what makes
   // "absent means Arcade" a rule about *older files* rather than about this one.
@@ -348,9 +348,10 @@ test('a round body survives a save and an open', async ({ editor }, testInfo) =>
 
   const saved = await editor.saveToFile();
   const project = JSON.parse(saved.contents);
-  // 15 because of this field: an older build rebuilds a body field by field and
-  // would draw, export and — on the next edit — save this circle as a box.
-  expect(project.schemaVersion).toBe(15);
+  // At least 15 because of this field (16 since particle trails): an older build
+  // rebuilds a body field by field and would draw, export and — on the next
+  // edit — save this circle as a box.
+  expect(project.schemaVersion).toBe(16);
   expect(project.scenes[0].children[0].physics.shape).toBe('circle');
 
   const path = testInfo.outputPath('round.phaser.json');

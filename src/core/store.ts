@@ -37,6 +37,8 @@ import {
   blendModeOf,
   scrollFactorOf,
   isDefaultScrollFactor,
+  particleFollowOf,
+  compensateFollowers,
   effectsOf,
   findAsset,
   findNode,
@@ -770,6 +772,23 @@ export interface EditorState {
    * blend mode means something at any depth.
    */
   setNodeScrollFactor: (id: string, factor: ScrollFactor | null) => void;
+  /**
+   * Makes a top-level emitter follow another top-level object, or stop, with
+   * `null`.
+   *
+   * **The emitter does not move on the canvas**, which is `moveNode`'s
+   * reparenting rule arriving on a follow: while a follow is in force the
+   * stored `x`/`y` is an offset from the target, so starting one rewrites the
+   * position as "where it is drawn, less the target", and stopping one adds the
+   * target back. Both sides go through `particleFollowOf`, so a follow the
+   * reader would not honour — a turned emitter, a target that is gone — moves
+   * nothing when it is set or cleared either.
+   *
+   * An action of its own rather than an `updateProps` patch, for
+   * `setNodeScrollFactor`'s reason: a spread can set a key and never remove
+   * one. And `scene.children` directly, which *is* the top-level rule.
+   */
+  setParticleFollow: (id: string, targetId: string | null) => void;
   /**
    * Binds a text node's caption to a variable, edits the format, or unbinds it
    * with `null`.
@@ -1889,7 +1908,10 @@ export const useEditorStore = create<EditorState>((set, get) => {
     // so an alignment that has nothing left to do would otherwise leave an undo
     // step that undoes nothing. Pressing Left twice is the normal case, not an
     // edge one — the second press is how you check the first.
-    const moves = [...deltasFor(boxes)].flatMap(([id, { dx, dy }]) => {
+    // A following emitter moves by its own delta *less* its target's, or a row
+    // holding a player and its trail would carry the trail twice.
+    const deltas = compensateFollowers(activeScene(state.project), deltasFor(boxes));
+    const moves = [...deltas].flatMap(([id, { dx, dy }]) => {
       if (dx === 0 && dy === 0) return [];
       const node = findNode(children, id);
       return node ? [{ id, patch: worldMovePatch(children, node, dx, dy) }] : [];
@@ -2077,6 +2099,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
             followId: index < 0 ? null : copy.children[index].id,
           };
         }
+        // And every trail, whose target is one of the nodes just cloned — the
+        // camera's index trick for a fourth kind of reference. Top level only,
+        // because `particleFollowOf` honours nothing deeper. Left alone, a
+        // copied emitter would name its target in the scene it was copied
+        // from, the reader would drop it, and the copy would draw at its bare
+        // offset in the corner — a trail silently lost on a duplicate.
+        copy.children = copy.children.map((child) => {
+          if (child.type !== 'particles' || child.props.followId === undefined) return child;
+          const at = current.children.findIndex((node) => node.id === child.props.followId);
+          if (at < 0) return child;
+          return { ...child, props: { ...child.props, followId: copy.children[at].id } };
+        });
         // And the colliders, whose two sides name nodes just cloned — the
         // camera's argument twice over, and the same index trick. A row left
         // pointing into the scene it was copied from is one `collidersOf`
@@ -3008,13 +3042,21 @@ export const useEditorStore = create<EditorState>((set, get) => {
       const ids = selectionRoots(children, state.selectedIds);
       if (ids.length === 0) return;
 
+      // Every root takes the same delta, so a following emitter whose target is
+      // also moving is carried by it and takes none of its own — which is what
+      // `compensateFollowers` answers for equal deltas.
+      const deltas = compensateFollowers(
+        activeScene(state.project),
+        new Map(ids.map((id) => [id, { dx, dy }])),
+      );
+
       // One undo step for the whole selection, nested inside whatever
       // transaction the caller has open for the key press itself.
       state.beginTransaction();
-      for (const id of ids) {
+      for (const [id, delta] of deltas) {
         const node = findNode(children, id);
-        if (!node) continue;
-        state.updateTransform(id, worldMovePatch(children, node, dx, dy));
+        if (!node || (delta.dx === 0 && delta.dy === 0)) continue;
+        state.updateTransform(id, worldMovePatch(children, node, delta.dx, delta.dy));
       }
       state.endTransaction();
     },
@@ -3380,6 +3422,45 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
         const children = [...scene.children];
         children[index] = next;
+        return { ...scene, children };
+      }),
+
+    setParticleFollow: (id, targetId) =>
+      editScene((scene) => {
+        const index = scene.children.findIndex((child) => child.id === id);
+        if (index < 0) return scene;
+        const node = scene.children[index];
+        if (node.type !== 'particles') return scene;
+        const wanted = targetId ?? undefined;
+        // By identity when nothing changes, or `editProject` pushes an undo step
+        // for re-picking the option already showing.
+        if (node.props.followId === wanted) return scene;
+
+        const props = { ...node.props };
+        if (wanted === undefined) delete props.followId;
+        else props.followId = wanted;
+        const next = { ...node, props };
+
+        // Where it is drawn stays where it is drawn: the offset changes by
+        // whatever the active target changes by.
+        const before = particleFollowOf(node, scene, true);
+        const after = particleFollowOf(next, scene, true);
+        const shiftX = (before?.transform.x ?? 0) - (after?.transform.x ?? 0);
+        const shiftY = (before?.transform.y ?? 0) - (after?.transform.y ?? 0);
+        const moved =
+          shiftX === 0 && shiftY === 0
+            ? next
+            : {
+                ...next,
+                transform: {
+                  ...next.transform,
+                  x: next.transform.x + shiftX,
+                  y: next.transform.y + shiftY,
+                },
+              };
+
+        const children = [...scene.children];
+        children[index] = moved;
         return { ...scene, children };
       }),
 

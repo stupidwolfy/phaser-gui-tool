@@ -163,7 +163,7 @@ test('every typography field survives a save and an open', async ({ editor }) =>
   // them opens this file, draws the text with the three keys it knows and
   // carries the rest back out on a re-save. It reads 10 because fonts added a
   // project-level table one iteration later; typography itself did not bump.
-  expect(project.schemaVersion).toBe(15);
+  expect(project.schemaVersion).toBe(16);
   expect(project.scenes[0].children[0].props).toMatchObject({
     bold: true,
     italic: true,

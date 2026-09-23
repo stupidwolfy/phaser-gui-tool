@@ -40,7 +40,7 @@ const FILL = '#ffe066';
 const FONT = 96;
 
 /** The version a saved file must carry: a label rides in on `scenes`, verbatim. */
-const SCHEMA = 15;
+const SCHEMA = 16;
 
 /** One text object, alone, readable, with one variable for it to follow. */
 async function setup(editor: EditorPage, value: number | string = 1234): Promise<void> {

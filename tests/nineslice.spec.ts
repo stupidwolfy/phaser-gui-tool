@@ -157,7 +157,7 @@ test('a panel and a tiled image survive a save and an open', async ({
   // mobile the file sheet covers the canvas a `findDrawn` would screenshot.
   const saved = await editor.saveToFile();
   const parsed = JSON.parse(saved.contents);
-  expect(parsed.schemaVersion).toBe(15);
+  expect(parsed.schemaVersion).toBe(16);
 
   const nodes = parsed.scenes[0].children;
   const panel = nodes.find((node: { type: string }) => node.type === 'nineslice');

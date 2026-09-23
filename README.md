@@ -82,6 +82,13 @@ on a desktop.
   the rest of the scene, and exports as a real `this.add.particles(...)` with every
   setting in one object. In the game it runs from the start unless a rule says
   otherwise — see **Throw something at a moment** below
+- Leave a **particle trail**: the emitter's *Follow* section picks an object for it to
+  follow — smoke behind a player, sparks on a coin. The emitter stays where it is drawn
+  and its X and Y become an offset from what it follows; move the object and the emitter
+  goes with it, and under ▶ a tweened object leaves its particles behind as a trail. It
+  exports as a real `emitter.startFollow(player)`. A following emitter can't be turned or
+  scaled (Phaser would turn and scale the followed object's position with it — the panel
+  says so), and only objects placed directly in the scene can follow or be followed
 - Make an object **move by itself**: switch on Tween in the inspector and say where its
   X, Y, rotation, scale or alpha should end up, over how long, with which easing, and
   whether it goes back again and repeats. The destination is drawn on the canvas as a
@@ -407,8 +414,9 @@ and an instance cannot override part of what it draws — detach it and edit the
 
 Particles are in, and a rule can start, stop or burst one, with five limits: there is no
 pause or resume (start and stop are the pair); a burst happens at the emitter's own position
-rather than at a point you name; there are no emit or death zones, no follow target and no
-`stopAfter`; nothing can read back whether an emitter is running; and an emitter still has
+rather than at a point you name; there are no emit or death zones and no `stopAfter`, and a
+trail cannot follow another emitter or hide when its object does; nothing can read back
+whether an emitter is running; and an emitter still has
 no *setting* for whether it waits — that is worked out from the rule, so an emitter no rule
 starts runs from the boot as it always did.
 

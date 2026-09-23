@@ -164,7 +164,12 @@ is used and a delete, behind one toggle — and like iteration 32 it changes the
 all. Iteration 44 (shipped) let a body be round: a `shape` on the physics body, whose radius
 is the circle inscribed in the object and is never stored — the "no circular bodies" hole
 iteration 16 left, and the first bump taken because iteration 41 said the next edge of its
-kind should bump rather than be recorded.
+kind should bump rather than be recorded. Iteration 45 (shipped) let an emitter follow an
+object: a `followId` on the particles props, with the emitter's own `x`/`y` read as an offset
+from what it follows because that is what Phaser computes — the "no follow target" clause of
+iteration 15's list, split out and found to be a standing fact declared once at boot, the
+camera's `followId` one type over. The check iteration 40 prescribed, run on the particles
+list it named, and the fourth bump on the wrong-picture edge.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -1662,6 +1667,84 @@ does *over time*, and two decisions carry the rest of it.
   Scale X/Y and the object's own Alpha are a few rows up the same panel, so bare "Scale"
   and "Alpha" would be ambiguous to a reader and to `labelled()`'s exact-match locator
   alike — the "Animation name, not Name" rule.
+
+### Trails
+
+`ParticlesProps.followId` makes an emitter follow another top-level object, exported as a
+bare `emitter.startFollow(target)` in `create()`'s epilogue. It is iteration 40's check run on
+the list that check named: particles' "no `stopAfter`, no `flow`, no emit or death zone, no
+follow target" was four refusals and one reason ("behaviour over time"), and the follow did
+not survive standing alone. `startFollow` is declared once at boot — the camera's `followId`,
+iteration 18, one type over.
+
+- **The emitter's own `x`/`y` is the offset, and there are no offset fields.** Read out of the
+  4.2.1 tarball rather than recalled: `emitParticle` fires at `follow.x + followOffset.x`, and
+  `ParticleEmitterWebGLRenderer` then draws through the emitter's own
+  `applyITRS(x, y, rotation, scale)`. So an emitter at `(ox, oy)` following a player spawns at
+  `player + (ox, oy)` whatever anybody meant, and emitting `add.particles(ox, oy, …)` plus a
+  bare `startFollow` is exactly the document. Two offset fields would be a second answer to the
+  same question. It is also why nothing in `constructorFor` changed.
+- **A turned or scaled emitter does not follow.** The same `applyITRS` turns and scales the
+  *target's position* about the scene origin, and no emit undoes that. `particleFollowOf`
+  answers null, the field is kept, and the Follow section says why. Setting rotation back to 0
+  brings the trail back. This narrows what the document says and never widens it.
+- **`particleFollowOf` is the only reader.** It answers null unless the emitter is top-level,
+  the target is a direct child of the scene, the target is neither the emitter itself nor
+  another emitter (whose `x` is an offset), and the emitter is unturned and unscaled. It hands
+  back a document node by identity, so it is safe in a zustand selector.
+- **Setting or clearing a follow does not move the emitter on the canvas.**
+  `setParticleFollow` rewrites `x`/`y` by the active target's position before and after, which
+  is `moveNode`'s reparenting rule. Both sides go through the reader, so a follow it would not
+  honour moves nothing either.
+- **`drawOffsets` replaced `scrollOffsets`**, because a trail is drawn at the target's
+  *document* position plus the offset, and that is a per-sync constant exactly as a scroll
+  offset is. The two add together. It is the document position rather than the drawn one
+  because that is what Phaser reads: a target's scroll factor moves the target's picture, not
+  `target.x`. The drag, the hit area, the handles and the tween ghost needed nothing.
+  `startTween` now adds the offset to its `x`/`y` targets. That fixes a latent disagreement for
+  scroll factors too: a pinned object's tween used to aim at the unoffset destination.
+- **Moving a trail and its target together must not move the trail twice.**
+  - `compensateFollowers` takes the target's delta back off the follower's. It is used by
+    align, distribute and the arrow keys.
+  - The drag leaves a carried follower out of the moving list, and still passes it to
+    `snapTargetsFor` so nothing snaps to it.
+  - It is not in `selectionRoots`: deleting a player and its trail together must delete both.
+  - The align test is the sharp one. "Right" moves the player 388 and not the emitter, so the
+    offset has to lose 388.
+- **▶ previews a real trail behind a tweened target.** `applyFollows` runs after `syncNodes`,
+  because a target can come later in the array. It points the inner emitter at the target's
+  display object less that object's rest position. At rest that adds nothing; while a tween
+  holds the target, the particles fire from where it is, and the ones already thrown stay put.
+- **The export line is in the epilogue**, after the camera's `startFollow`, for that line's
+  reason: an emitter can come before what it follows. A target that emitted nothing gets a
+  comment, and an emitter that emitted nothing gets nothing, since `missingReason` has already
+  spoken. There is no gate, helper or table, so a project with no trail is byte for byte what
+  it was.
+- **`duplicateScene` remaps `followId` by the camera's index trick.** `deleteNode` prunes
+  nothing: a dangling id reads as absent, the camera precedent. The emitter then draws at its
+  bare offset, which is also exactly what the export would do.
+- **`SCHEMA_VERSION` bumped to 16, on the wrong-picture edge.** A v15 build ignores the field
+  and draws and exports the emitter at its offset, near the scene's corner. `trails.spec.ts`
+  asserts the 16.
+- **The suite:**
+  - `trails.spec.ts` measures the marker (centroids) for set, clear, target moved, aligned,
+    nudged, turned and duplicated, and the ▶ trail as a colour extent in scene units.
+  - `export.spec.ts` runs a following emitter at offset (0, 0) behind a yoyoing tween. A
+    dropped follow would put every particle in the scene's corner.
+  - The hostile project's registered-never-started scene holds five trails, of which exactly
+    one may emit a call. This is where `startFollow` meets `tsc --strict`.
+  - The turned strip, both compensations, `applyFollows` and the emitted line were each removed
+    and the suite confirmed red.
+
+**What stays refused.**
+- **No `trackVisible`.** It is one boolean, but the canvas would have to mirror a target's
+  visibility onto an emitter, and a rule hiding the player is the only moment it matters. That
+  makes it a loosening.
+- **No following an emitter**: its `x` is an offset.
+- **No follow inside a group or a prefab definition**: there is no binding to call it on, and
+  a definition shares its ids across placements.
+- **No turned or scaled follower**, above.
+- **No tether line on the canvas**: the marker already stands where the particles leave from.
 
 ## Visual effects
 
@@ -5355,9 +5438,10 @@ first rule action whose result the canvas is **already showing**.
 **What stays refused.** **No `pause` / `resume`** — `stop`/`start` is the pair
 `playSound`/`stopSound` already established, and a second spelling of one idea is two
 notions of one state. **No burst at a point** — above; it would be the second thing this
-document can say that has a where. **No `stopAfter`, no `flow`, no emit or death zone, no
-follow target** — the rest of iteration 15's refusals, each still its own argument, and the
-zone one is still the `.tmj` argument at a smaller scale. **Nothing reads whether an emitter
+document can say that has a where. **No `stopAfter`, no `flow`, no emit or death zone** —
+the rest of iteration 15's refusals, each still its own argument, and the zone one is still
+the `.tmj` argument at a smaller scale. (The follow target that used to be on this list
+shipped in iteration 45; see "Trails".) **Nothing reads whether an emitter
 is running** — that is a rule about rules. **No `advance` or `duration` on a start**, which
 are a fast-forward and a stop-after in disguise. And **no "while" trigger, no sequencing, no
 `onComplete`** — iteration 28's line, unmoved.
@@ -6079,6 +6163,9 @@ tests/
   nineslice.spec.ts         a panel whose corners hold, and a texture that repeats
   typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
   fonts.spec.ts             a font imported, drawn, round-tripped, removed and exported
+  trails.spec.ts            an emitter following an object: unmoved when set, carried
+                            when its object moves, moved once when both are, off when
+                            turned, and a real trail under ▶
   physics.spec.ts           a body drawn, never simulated, sized to hold what it is
                             turned with, round when asked, and refused inside a group
   matter.spec.ts            a scene switched to Matter: a body that turns, dials that
@@ -6393,6 +6480,14 @@ with the `VITE_BASE` env var for a fork or custom domain.
 
 ## Not built yet
 
+Particle trails shipped in iteration 45, and they are the result of the check iteration 40
+prescribed: split every refusal that names several things with one reason. Particles' "no
+`stopAfter`, no `flow`, no emit or death zone, no follow target" was named there as one of
+two candidates. Taken one at a time, zones are still the `.tmj` argument and `stopAfter` is
+still behaviour over time, but the follow was the camera's `followId` again. The other
+candidate named alongside it, blend's six refusals, has not been split yet. What trails leave
+is in "Trails" above.
+
 Masks shipped in iteration 40 and are the entry worth reading first, because the check that
 found them was the one iteration 39 wrote down — and because they are the second hole in a
 row closed by finding an argument that was **false** rather than dated.
@@ -6493,7 +6588,7 @@ head of this section for what it turned up and for why the answer was not the ki
 this paragraph was expecting.
 
 What iteration 38 leaves is short and is in "Making one throw" above: no pause or resume, no
-burst at a point, no emit or death zones, no follow target or `stopAfter`, no `advance` or
+burst at a point, no emit or death zones, no `stopAfter` (the follow target shipped in 45), no `advance` or
 `duration` on a start, and nothing that reads whether an emitter is running. And the
 `emitting` prop is **not** on that list — it is refused and stays refused, because the
 exporter derives one.
@@ -6892,9 +6987,10 @@ than overturning it. See "Making one throw" above. What is left of that iteratio
 **No emit or death zones** —
 a zone is a geometry object, i.e. a second sub-format inside the document with its own
 parser, picker and validator, which is the `.tmj` argument at a smaller scale. **No
-follow target or `stopAfter`, and no `advance` or `duration` on a start** — the first two
-are still behaviour over time with no moment to hang them on, and the last two are a
-fast-forward and a stop-after in disguise. **No per-particle animation**: `ParticlesProps` would grow an
+`stopAfter`, and no `advance` or `duration` on a start** — the first is still behaviour over
+time with no moment to hang it on, and the last two are a fast-forward and a stop-after in
+disguise. The follow target that used to lead this sentence shipped in iteration 45: split
+from the list, it was a standing fact declared once at boot. See "Trails". **No per-particle animation**: `ParticlesProps` would grow an
 `animationId` and `collectAnimations` a branch, which is a pure loosening later rather than
 a format break, and the editor's whole clip story is built around a Sprite's
 `AnimationState`. **No multi-frame particles**: a `frames` array would be the second
