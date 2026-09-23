@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { strFromU8, unzipSync } from 'fflate';
 import { expect, test } from './helpers/fixtures';
 import { SCENE } from './helpers/editor';
 import { solidPng } from './helpers/png';
@@ -39,13 +40,19 @@ test('imports an image, draws it, and keeps it across a save and an open', async
   expect(Math.abs(drawn.y - centre.y)).toBeLessThan(4);
 
   const saved = await editor.saveToFile();
-  const parsed = JSON.parse(saved.contents);
+  const entries = unzipSync(saved.archive);
+  const parsed = JSON.parse(strFromU8(entries['project.json']));
   expect(parsed.assets).toHaveLength(1);
-  // Import re-encodes to PNG or JPEG, and nothing else is allowed back in.
-  expect(parsed.assets[0].dataUrl).toMatch(/^data:image\/png;base64,/);
+  expect(parsed.assets[0].dataUrl).toBeUndefined();
+  expect(parsed.assets[0].path).toMatch(/^assets\/images\/[0-9a-f]+\.png$/);
+  // Images are deliberately re-encoded on import, so assert the native PNG
+  // signature rather than comparing with the pre-import source encoding.
+  expect(Buffer.from(entries[parsed.assets[0].path]).subarray(0, 8)).toEqual(
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+  );
 
-  const path = testInfo.outputPath('with-image.phaser.json');
-  await fs.writeFile(path, saved.contents, 'utf8');
+  const path = testInfo.outputPath('with-image.phaser.zip');
+  await fs.writeFile(path, saved.archive);
 
   await editor.newProject();
   await editor.openFile(path);
