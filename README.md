@@ -4,8 +4,8 @@ A visual editor for the [Phaser](https://phaser.io) game framework that runs ent
 
 **→ [Open the editor](https://stupidwolfy.github.io/phaser-gui-tool/)**
 
-No install, no account, no server. Projects are saved as a plain JSON file on your own
-device, and nothing you make is ever uploaded anywhere. It works on a phone as well as
+No install, no account, no server. Projects are saved as a `.phaser.zip` archive on your
+own device, and nothing you make is ever uploaded anywhere. It works on a phone as well as
 on a desktop.
 
 ## What it does
@@ -200,7 +200,7 @@ on a desktop.
   to the group's own contents)
 - Undo/redo, grouped by gesture — one drag, one field edit or one held arrow key is one
   step
-- Save and open `.phaser.json` project files from your device, with an autosaved draft in
+- Save and open `.phaser.zip` project archives from your device, with an autosaved draft in
   the browser so a closed tab doesn't lose your work
 - **Play it, without leaving the editor.** The Play button in the toolbar runs your
   project — the real exported game, the same one the `.html` export gives you, in a frame
@@ -250,7 +250,7 @@ has.
 
 ### Images
 
-Imported images are stored **inside the project file**, as data URLs. One `.phaser.json`
+Imported images are stored **inside the project archive**, as native binary files. One `.phaser.zip`
 is the whole project: nothing breaks when you move it, rename a folder or send it to
 someone else, and there is no server here to hold the files instead.
 
@@ -358,6 +358,20 @@ Where the File System Access API exists (desktop Chrome and Edge), **Save** writ
 the same file. Everywhere else — including Chrome on Android and Safari on iOS — it
 downloads the file, and **Open** uses a normal file picker. That fallback is the path most
 phone users take, not a degraded mode.
+
+The archive contains a `project.json` manifest plus binary assets at deterministic paths:
+`assets/images/<id>.png` (or `.jpg`), `assets/audio/<id>.<format>`, and
+`assets/fonts/<id>.<format>`. The manifest references those paths and never embeds asset
+data URLs. Supported images are PNG and JPEG; audio is MP3, OGG, WAV, MP4/M4A or WebM;
+fonts are TTF, OTF, WOFF or WOFF2. Names cannot influence archive paths, and unsafe,
+missing, duplicate, corrupt or excessively large entries are rejected when opening.
+
+Existing `.phaser.json` files still open, including their embedded data URLs, so older
+work can be migrated simply by opening it and saving. Legacy JSON is **import-only**:
+every explicit save uses `.phaser.zip`. Browser autosave remains JSON in `localStorage`
+because that API cannot store ZIP bytes directly and retains its existing quota limit.
+Both archive creation and extraction happen entirely in the browser; no project or asset
+is uploaded.
 
 ## Status
 

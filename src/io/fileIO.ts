@@ -1,4 +1,5 @@
 import { DEFAULT_FRAME_RATE } from '../core/defaults';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import {
   BASE_FRAME,
   FONT_FAMILY,
@@ -23,18 +24,26 @@ import {
  * fallback is not a degraded mode, it is the path most phone users will take.
  */
 
-export const FILE_EXTENSION = '.phaser.json';
+export const FILE_EXTENSION = '.phaser.zip';
+export const LEGACY_FILE_EXTENSION = '.phaser.json';
 const FILE_TYPE_OPTIONS = {
-  description: 'Phaser GUI project',
-  accept: { 'application/json': ['.json'] as string[] },
+  description: 'Phaser GUI project archive',
+  // Include the ordinary suffix as well as our compound one. Some platform
+  // pickers match only the final extension and otherwise hide `.phaser.zip`
+  // files even though their names end with the advertised compound suffix.
+  accept: { 'application/zip': [FILE_EXTENSION, '.zip'] as string[] },
 };
+const OPEN_FILE_TYPE_OPTIONS = [
+  FILE_TYPE_OPTIONS,
+  { description: 'Legacy Phaser GUI project', accept: { 'application/json': [LEGACY_FILE_EXTENSION, '.json'] as string[] } },
+];
 
 // The File System Access API is still not in lib.dom for every TS release, and
 // it is absent at runtime on most mobile browsers. Declaring only what we use
 // keeps the feature detection honest instead of pretending the API is always
 // there.
 interface FileSystemWritable {
-  write: (data: string) => Promise<void>;
+  write: (data: string | Blob | Uint8Array) => Promise<void>;
   close: () => Promise<void>;
 }
 interface FileHandle {
@@ -45,11 +54,11 @@ interface FileHandle {
 interface PickerWindow {
   showSaveFilePicker?: (options: {
     suggestedName?: string;
-    types?: typeof FILE_TYPE_OPTIONS[];
+    types?: Array<{ description: string; accept: Record<string, string[]> }>;
   }) => Promise<FileHandle>;
   showOpenFilePicker?: (options: {
     multiple?: boolean;
-    types?: typeof FILE_TYPE_OPTIONS[];
+    types?: Array<{ description: string; accept: Record<string, string[]> }>;
   }) => Promise<FileHandle[]>;
 }
 
@@ -83,6 +92,159 @@ export function suggestedFileName(project: Project): string {
 export const serializeProject = (project: Project): string =>
   JSON.stringify(project, null, 2);
 
+const MAX_ARCHIVE_ENTRY_SIZE = 32 * 1024 * 1024;
+const MAX_ARCHIVE_SIZE = 128 * 1024 * 1024;
+const MIME_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'audio/mpeg': 'mp3',
+  'audio/ogg': 'ogg',
+  'audio/wav': 'wav',
+  'audio/mp4': 'm4a',
+  'audio/webm': 'webm',
+  'font/ttf': 'ttf',
+  'font/otf': 'otf',
+  'font/woff': 'woff',
+  'font/woff2': 'woff2',
+};
+
+const safeAssetName = (id: string): string =>
+  Array.from(strToU8(id), (byte) => byte.toString(16).padStart(2, '0')).join('');
+
+function decodeAsset(dataUrl: string, expectedMime: string): Uint8Array {
+  const match = /^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/.exec(dataUrl);
+  if (!match || match[1] !== expectedMime || !MIME_EXTENSIONS[expectedMime]) {
+    throw new ProjectParseError(`Asset has unsupported or mismatched MIME type "${expectedMime}".`);
+  }
+  try {
+    const binary = atob(match[2]);
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    throw new ProjectParseError(`Asset data for "${expectedMime}" is not valid base64.`);
+  }
+}
+
+function encodeDataUrl(mime: string, bytes: Uint8Array): string {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return `data:${mime};base64,${btoa(binary)}`;
+}
+
+/** Builds the portable ZIP used for explicit saves. Autosave deliberately uses serializeProject. */
+export function createProjectArchive(project: Project): Uint8Array {
+  const entries: Record<string, Uint8Array> = {};
+  const usedPaths = new Set<string>();
+  const pack = <T extends ImageAsset | AudioAsset | FontAsset>(
+    asset: T,
+    folder: 'images' | 'audio' | 'fonts',
+  ): Omit<T, 'dataUrl'> & { path: string } => {
+    const extension = MIME_EXTENSIONS[asset.mimeType];
+    if (!extension) throw new ProjectParseError(`Asset "${asset.name}" has unsupported MIME type "${asset.mimeType}".`);
+    const path = `assets/${folder}/${safeAssetName(asset.id)}.${extension}`;
+    if (usedPaths.has(path)) throw new ProjectParseError(`Duplicate asset id "${asset.id}" cannot be saved.`);
+    usedPaths.add(path);
+    entries[path] = decodeAsset(asset.dataUrl, asset.mimeType);
+    const { dataUrl: _dataUrl, ...record } = asset;
+    return { ...record, path };
+  };
+
+  const manifest = {
+    ...project,
+    assets: project.assets.map((asset) => pack(asset, 'images')),
+    audio: project.audio.map((asset) => pack(asset, 'audio')),
+    fonts: project.fonts.map((asset) => pack(asset, 'fonts')),
+  };
+  entries['project.json'] = strToU8(JSON.stringify(manifest, null, 2));
+  return zipSync(entries, { level: 6 });
+}
+
+function validateZipDirectory(bytes: Uint8Array): void {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const names = new Set<string>();
+  let total = 0;
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65_557); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new ProjectParseError('That file is not a valid ZIP project archive.');
+  const count = view.getUint16(eocd + 10, true);
+  let i = view.getUint32(eocd + 16, true);
+  if (count === 0xffff || i === 0xffffffff) throw new ProjectParseError('ZIP64 project archives are not supported.');
+  // Reading the declared central directory detects duplicate names, which an
+  // object-based unzip API necessarily hides.
+  for (let entry = 0; entry < count; entry++) {
+    if (i + 46 > bytes.length || view.getUint32(i, true) !== 0x02014b50) {
+      throw new ProjectParseError('The project archive has a malformed directory.');
+    }
+    const size = view.getUint32(i + 24, true);
+    const nameLength = view.getUint16(i + 28, true);
+    const extraLength = view.getUint16(i + 30, true);
+    const commentLength = view.getUint16(i + 32, true);
+    if (i + 46 + nameLength + extraLength + commentLength > bytes.length) {
+      throw new ProjectParseError('The project archive has a malformed directory.');
+    }
+    const name = strFromU8(bytes.subarray(i + 46, i + 46 + nameLength));
+    if (!name || name.startsWith('/') || name.includes('\\') || name.split('/').some((part) => part === '..' || part === '')) {
+      throw new ProjectParseError(`The project archive contains an unsafe path: "${name}".`);
+    }
+    if (names.has(name)) throw new ProjectParseError(`The project archive contains duplicate entry "${name}".`);
+    names.add(name);
+    if (size > MAX_ARCHIVE_ENTRY_SIZE) throw new ProjectParseError(`Archive entry "${name}" is too large.`);
+    total += size;
+    if (total > MAX_ARCHIVE_SIZE) throw new ProjectParseError('The project archive expands beyond the 128 MB safety limit.');
+    i += 46 + nameLength + extraLength + commentLength;
+  }
+  if (!count) throw new ProjectParseError('The project archive is empty.');
+}
+
+/** Safely restores an archive to the existing data-URL based runtime model. */
+export function parseProjectArchive(bytes: Uint8Array): Project {
+  validateZipDirectory(bytes);
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(bytes);
+  } catch {
+    throw new ProjectParseError('The project archive is corrupt or uses an unsupported ZIP feature.');
+  }
+  const manifestBytes = files['project.json'];
+  if (!manifestBytes) throw new ProjectParseError('The project archive is missing project.json.');
+  let raw: unknown;
+  try {
+    raw = JSON.parse(strFromU8(manifestBytes));
+  } catch {
+    throw new ProjectParseError('project.json is not valid JSON.');
+  }
+  if (typeof raw !== 'object' || raw === null) throw new ProjectParseError('project.json does not contain a project object.');
+  const manifest = raw as Record<string, unknown>;
+  const restore = (key: 'assets' | 'audio' | 'fonts', prefix: string): unknown[] => {
+    const records = manifest[key];
+    if (records === undefined) return [];
+    if (!Array.isArray(records)) throw new ProjectParseError(`project.json has an invalid ${key} table.`);
+    return records.map((value, index) => {
+      if (typeof value !== 'object' || value === null) throw new ProjectParseError(`Invalid ${key} record ${index + 1}.`);
+      const record = value as Record<string, unknown>;
+      if (typeof record.path !== 'string' || typeof record.mimeType !== 'string') throw new ProjectParseError(`${key} record ${index + 1} has no path or MIME type.`);
+      const extension = MIME_EXTENSIONS[record.mimeType];
+      const expected = typeof record.id === 'string' && extension
+        ? `assets/${prefix}/${safeAssetName(record.id)}.${extension}`
+        : '';
+      if (!expected || record.path !== expected) throw new ProjectParseError(`Asset path "${record.path}" does not match its id and MIME type.`);
+      const content = files[record.path];
+      if (!content) throw new ProjectParseError(`The project archive is missing referenced asset "${record.path}".`);
+      const { path: _path, ...asset } = record;
+      return { ...asset, dataUrl: encodeDataUrl(record.mimeType, content) };
+    });
+  };
+  const hydrated = { ...manifest, assets: restore('assets', 'images'), audio: restore('audio', 'audio'), fonts: restore('fonts', 'fonts') };
+  const project = parseProject(JSON.stringify(hydrated));
+  if (project.assets.length !== hydrated.assets.length || project.audio.length !== hydrated.audio.length || project.fonts.length !== hydrated.fonts.length) {
+    throw new ProjectParseError('project.json contains an invalid asset record.');
+  }
+  return project;
+}
+
 export interface SaveResult {
   /** False when the user dismissed the picker — not an error, just a no-op. */
   saved: boolean;
@@ -95,11 +257,14 @@ export interface SaveResult {
  * mechanism that works on every browser including phones.
  */
 export function downloadFile(
-  contents: string,
+  contents: string | Blob | Uint8Array,
   fileName: string,
   mimeType = 'application/json',
 ): void {
-  const blob = new Blob([contents], { type: mimeType });
+  const blob = new Blob(
+    [contents instanceof Uint8Array ? Uint8Array.from(contents).buffer : contents],
+    { type: mimeType },
+  );
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -119,7 +284,7 @@ export async function saveProject(
   project: Project,
   forcePrompt = false,
 ): Promise<SaveResult> {
-  const contents = serializeProject(project);
+  const contents = createProjectArchive(project);
   const fileName = suggestedFileName(project);
 
   const showSaveFilePicker = picker().showSaveFilePicker;
@@ -147,7 +312,7 @@ export async function saveProject(
     }
   }
 
-  downloadFile(contents, fileName);
+  downloadFile(contents, fileName, 'application/zip');
   return { saved: true, fileName };
 }
 
@@ -579,8 +744,14 @@ export function parseProject(contents: string): Project {
         `(format v${candidate.schemaVersion}, this build reads v${SCHEMA_VERSION}).`,
     );
   }
-  if (!Array.isArray(candidate.scenes) || candidate.scenes.length === 0) {
-    throw new ProjectParseError('That project has no scenes.');
+  if (
+    !Array.isArray(candidate.scenes) ||
+    candidate.scenes.length === 0 ||
+    candidate.scenes.some(
+      (scene) => typeof scene !== 'object' || scene === null || typeof scene.id !== 'string' || !scene.id,
+    )
+  ) {
+    throw new ProjectParseError('That project has no valid scenes.');
   }
 
   const assets = parseAssets(candidate.assets);
@@ -635,6 +806,14 @@ export interface OpenResult {
   fileName: string;
 }
 
+async function parseProjectFile(file: File): Promise<Project> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const isZip = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b &&
+    (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07);
+  if (isZip || file.name.toLowerCase().endsWith('.zip')) return parseProjectArchive(bytes);
+  return parseProject(strFromU8(bytes));
+}
+
 /** Resolves to null if the user dismissed the picker. */
 export async function openProject(): Promise<OpenResult | null> {
   const showOpenFilePicker = picker().showOpenFilePicker;
@@ -642,11 +821,13 @@ export async function openProject(): Promise<OpenResult | null> {
     try {
       const [handle] = await showOpenFilePicker({
         multiple: false,
-        types: [FILE_TYPE_OPTIONS],
+        types: OPEN_FILE_TYPE_OPTIONS,
       });
       const file = await handle.getFile();
-      const project = parseProject(await file.text());
-      currentHandle = handle;
+      const project = await parseProjectFile(file);
+      // Legacy JSON is import-only: Save always produces an archive and must
+      // never silently overwrite the user's migration source with ZIP bytes.
+      currentHandle = file.name.toLowerCase().endsWith(FILE_EXTENSION) ? handle : null;
       return { project, fileName: handle.name };
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return null;
@@ -655,9 +836,9 @@ export async function openProject(): Promise<OpenResult | null> {
     }
   }
 
-  const file = await pickFileViaInput('application/json,.json');
+  const file = await pickFileViaInput('.phaser.zip,.phaser.json,.zip,.json,application/zip,application/json');
   if (!file) return null;
-  const project = parseProject(await file.text());
+  const project = await parseProjectFile(file);
   currentHandle = null; // No handle on this path: saving re-downloads.
   return { project, fileName: file.name };
 }
