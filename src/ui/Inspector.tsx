@@ -3916,6 +3916,33 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
               }
             />
 
+            {/* Shown for both kinds and both engines: a shape is a fact about
+                the body, like its kind, and switching the scene's engine must
+                not make it look as though it had gone. "Body shape" rather than
+                "Shape" because the suite matches a label exactly and "Body" is
+                the row above. There is no radius field — it is the circle
+                inscribed in the object, so resizing the object resizes it. */}
+            <SelectField
+              label="Body shape"
+              value={body.shape}
+              options={[
+                { value: 'box', label: 'Box' },
+                { value: 'circle', label: 'Circle' },
+              ]}
+              onChange={(shape) =>
+                setNodePhysics(node.id, { shape: shape === 'circle' ? 'circle' : 'box' })
+              }
+            />
+            {engine === 'arcade' &&
+              body.shape === 'circle' &&
+              Math.abs(node.transform.scaleX) !== Math.abs(node.transform.scaleY) && (
+                <p className="hint">
+                  Scaled unevenly: Arcade collides this as a circle, but the box it meets
+                  the world edge with follows each axis&apos;s scale. Scale X and Scale Y
+                  equal make it exact.
+                </p>
+              )}
+
             {/* A static body genuinely has none of these — Phaser's StaticBody
                 carries no velocity, bounce, drag, mass or gravity — so they are
                 absent rather than disabled. A disabled field says "not now"; these

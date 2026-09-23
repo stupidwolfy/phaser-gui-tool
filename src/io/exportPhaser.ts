@@ -1807,12 +1807,17 @@ function physicsUsedIn(scene: SceneDoc): PhysicsUse {
   let any = false;
   let dynamic = false;
   let turned = false;
+  let circle = false;
   for (const node of scene.children) {
     const body = physicsOf(node, true);
     if (!body) continue;
     any = true;
     if (body.kind === 'dynamic') dynamic = true;
-    if (bodyIsTurned(node.transform.rotation)) turned = true;
+    // A round body is the same at every angle, so a turned one needs no box
+    // grown to hold it — which is why only a *box* body turns the fit helper
+    // on, and why a project whose only turned bodies are round emits none.
+    if (body.shape === 'circle') circle = true;
+    else if (bodyIsTurned(node.transform.rotation)) turned = true;
   }
   // `dynamic` and `turned` gate the two *Arcade* helpers, so a Matter scene
   // must not turn either on: `arcadeBody` throws on a Matter object by design,
@@ -1826,6 +1831,8 @@ function physicsUsedIn(scene: SceneDoc): PhysicsUse {
     matter,
     dynamic: arcade && dynamic,
     turned: arcade && turned,
+    circle: arcade && circle,
+    matterCircle: matter && circle,
     // A jump is the only thing that has to know what is underneath, so a
     // top-down Matter scene emits no tracker and no listener.
     grounded:
@@ -1846,6 +1853,14 @@ interface PhysicsUse {
   matter: boolean;
   dynamic: boolean;
   turned: boolean;
+  /** A round body in an Arcade scene, which is what needs `fitBodyToCircle`. */
+  circle: boolean;
+  /**
+   * A round body in a Matter scene, which is the only thing that needs the
+   * Matter helper to take its shape from the config rather than always build a
+   * rectangle.
+   */
+  matterCircle: boolean;
   /** A Matter scene with something that jumps, which is the only thing that
    * needs the grounded tracker. */
   grounded: boolean;
@@ -1968,6 +1983,79 @@ function buildFitHelper(fn: string, language: SceneLanguage, indent: string): st
 }
 
 /**
+ * The helper that gives one object a round Arcade body: the circle inscribed in
+ * what it draws, centred on it.
+ *
+ * It reads the object rather than being handed a radius, for `fitBodyToAngle`'s
+ * reason: a `text` node's size is measured against the font at runtime, so a
+ * radius the exporter printed would be right for every type but one. And it is
+ * the same `min(|w|, |h|) / 2` `bodyRadiusOf` draws on the canvas — two calls,
+ * so nothing of our own to disagree about.
+ *
+ * The two branches are the fit helper's trap again, and a second trap besides,
+ * all read out of Phaser 4.2.1's source rather than remembered:
+ *
+ * - **`Body.setCircle` takes source pixels**, radius and offset alike, and
+ *   Phaser multiplies both by the object's own scale: the body sits at
+ *   `x + scaleX · (offset.x − displayOriginX)` and collides with radius
+ *   `halfWidth`, which is the source radius times `|scaleX|`. So the source
+ *   radius is the drawn one over `|scaleX|`, and the offset that centres it is
+ *   the origin less that radius, signed by the scale — a flipped object would
+ *   otherwise put its body a whole diameter to one side.
+ * - **`StaticBody.setCircle` takes canvas pixels, and sets its offset without
+ *   moving the body.** Its later `setOffset` subtracts the offset it has just
+ *   been given before adding it back, so handing the offset to `setCircle` and
+ *   calling `setOffset` with the same numbers moves nothing either. What works
+ *   is a zero offset to `setCircle` and the real one to `setOffset`, which
+ *   relies on the offset being zero before — as it is immediately after
+ *   `add.existing(object, true)`, which is the only place this is called.
+ *   `reset()` and `updateFromGameObject()` are refused: both place the body from
+ *   `getTopLeft`, which *rotates* that corner on a turned object, and the second
+ *   also puts the object's box back over the circle's width.
+ *
+ * A circle on an object whose transform scale is uneven collides with radius
+ * `halfWidth`, and meets the world bounds with a box whose height follows the
+ * other axis's scale. That is Arcade's body model rather than this helper's,
+ * and the inspector says so where it happens.
+ */
+function buildCircleHelper(fn: string, language: SceneLanguage, indent: string): string {
+  const typed = language === 'ts';
+  // `buildFitHelper`'s union, for its reason: `displayWidth`, `scaleX` and
+  // `displayOriginX` are on the components rather than on `GameObject`.
+  const signature = typed
+    ? `function ${fn}(\n` +
+      '  object:\n' +
+      '    | Phaser.GameObjects.Shape\n' +
+      '    | Phaser.GameObjects.Sprite\n' +
+      '    | Phaser.GameObjects.Text\n' +
+      '    | Phaser.GameObjects.NineSlice\n' +
+      '    | Phaser.GameObjects.TileSprite,\n' +
+      '): void {'
+    : `function ${fn}(object) {`;
+  const lines = [
+    signature,
+    '  const width = Math.abs(object.displayWidth);',
+    '  const height = Math.abs(object.displayHeight);',
+    '  const radius = Math.min(width, height) / 2;',
+    '  const body = object.body;',
+    '  if (body instanceof Phaser.Physics.Arcade.StaticBody) {',
+    '    body.setCircle(radius, 0, 0).setOffset(width / 2 - radius, height / 2 - radius);',
+    '  } else if (body instanceof Phaser.Physics.Arcade.Body) {',
+    '    const scaleX = object.scaleX || 1;',
+    '    const scaleY = object.scaleY || 1;',
+    '    const source = radius / Math.abs(scaleX);',
+    '    body.setCircle(',
+    '      source,',
+    '      object.displayOriginX - source * Math.sign(scaleX),',
+    '      object.displayOriginY - source * Math.sign(scaleY),',
+    '    );',
+    '  }',
+    '}',
+  ];
+  return lines.join('\n').replace(/^(?!$)/gm, indent);
+}
+
+/**
  * The helper that gives one object a Matter body the shape of what it draws.
  *
  * This is the whole of what choosing Matter buys, and it is three facts about
@@ -2005,6 +2093,7 @@ function buildMatterHelper(
   accessor: string,
   language: SceneLanguage,
   indent: string,
+  circles: boolean,
 ): string {
   const typed = language === 'ts';
   // The same union `fitBodyToAngle` takes, and for its reason: `angle` and
@@ -2026,7 +2115,12 @@ function buildMatterHelper(
     '  const radians = Phaser.Math.DegToRad(object.angle);',
     '  scene.matter.add.gameObject(object, {',
     '    ...config,',
-    '    shape: {',
+    // Only a module holding a round Matter body gets the fallback form, so a
+    // Matter project without one emits this helper byte for byte as before.
+    // After the spread and not before it, or the rectangle would be what won:
+    // the round body's config carries its own `shape`, and this line is what
+    // lets it through.
+    circles ? '    shape: config.shape ?? {' : '    shape: {',
     "      type: 'rectangle',",
     '      width: Math.abs(object.displayWidth),',
     '      height: Math.abs(object.displayHeight),',
@@ -2269,8 +2363,20 @@ function bodyLines(
     // nowhere to put a cast. **Only `export-toolchain.spec.ts` could have found
     // it.** So the declared keys ride in the literal and the rest are
     // statements on the body the helper answers with.
+    // A round body carries its own `shape`, which is a key `MatterBodyConfig`
+    // declares, so it rides in the literal under `--strict`. The radius is read
+    // off the object here rather than printed, for `fitBodyToCircle`'s reason:
+    // a text node's size is only known once the font has measured it.
+    const round =
+      body.shape === 'circle'
+        ? [
+            `  shape: { type: 'circle', radius: Math.min(Math.abs(${id}.displayWidth), ` +
+              `Math.abs(${id}.displayHeight)) / 2 },`,
+          ]
+        : [];
     const lines = [
       `const ${binding} = ${ctx.matterFn}(${ctx.receiver}, ${id}, {`,
+      ...round,
       `  isStatic: ${body.kind === 'static'},`,
       `  restitution: ${num(body.restitution)},`,
       `  friction: ${num(body.friction)},`,
@@ -2306,7 +2412,14 @@ function bodyLines(
   // it. Nothing at all for an upright object — or one turned a half turn, whose
   // box is its box — so a project that predates this exports byte for byte what
   // it always did.
-  const fit = bodyIsTurned(node.transform.rotation) ? [`${ctx.fitFn}(${id});`] : [];
+  // A round body is fitted by its own helper and never by the angle one: a
+  // circle is the same at every angle, so it has no box to grow.
+  const fit =
+    body.shape === 'circle'
+      ? [`${ctx.circleFn}(${id});`]
+      : bodyIsTurned(node.transform.rotation)
+        ? [`${ctx.fitFn}(${id});`]
+        : [];
   if (body.kind === 'static') {
     // Nothing to chain: a StaticBody has no velocity, bounce, drag, mass or
     // gravity, and an immovable flag on a body that never moves would be a line
@@ -2395,6 +2508,8 @@ interface EmitContext {
    * `tilemapFn` and drawn **last of all** — see `prepare`.
    */
   effectsFn: string;
+  /** The round-body helper, `fitFn`'s sibling for a body that is a circle. */
+  circleFn: string;
   /**
    * What each scene's `super(...)` registers it as, by scene id.
    *
@@ -3213,6 +3328,7 @@ function buildFactories(
       ctx.bodyFn,
       ctx.touchFn,
       ctx.fitFn,
+      ctx.circleFn,
       ctx.matterFn,
       ctx.matterBodyFn,
       ctx.groundFn,
@@ -3471,6 +3587,7 @@ function buildUpdateBody(
     ctx.bodyFn,
     ctx.touchFn,
     ctx.fitFn,
+    ctx.circleFn,
     ctx.matterFn,
     ctx.matterBodyFn,
     ctx.groundFn,
@@ -4179,6 +4296,7 @@ function buildCreateBody(
     ctx.bodyFn,
     ctx.touchFn,
     ctx.fitFn,
+    ctx.circleFn,
     ctx.matterFn,
     ctx.matterBodyFn,
     ctx.groundFn,
@@ -4743,6 +4861,9 @@ function prepare(project: Project): Emission {
   // earlier moves the suffix some *earlier* helper was given — and four of
   // those are asserted by name in the suite. A new helper goes last.
   const effectsFn = toIdentifier('attach effects', moduleNames);
+  // And a seventeenth, last of all, by the rule the sixteenth states: drawn
+  // any earlier it could move the suffix of a helper the suite asserts by name.
+  const circleFn = toIdentifier('fit body to circle', moduleNames);
   const assets = collectAssets(project, project.scenes, prefabs);
   // Position among the tables is only about reading order: this draws from no
   // shared identifier set, so nothing downstream depends on when it runs.
@@ -4794,6 +4915,7 @@ function prepare(project: Project): Emission {
       bindLabelFn,
       onVarFn,
       effectsFn,
+      circleFn,
       variables,
       sceneKeys: new Map(scenes.map((entry) => [entry.scene.id, entry.key])),
       // Placeholders the per-scene context overwrites, exactly as `engine` is:
@@ -4816,6 +4938,8 @@ function prepare(project: Project): Emission {
       matter: worlds.some((world) => world.matter),
       dynamic: worlds.some((world) => world.dynamic),
       turned: worlds.some((world) => world.turned),
+      circle: worlds.some((world) => world.circle),
+      matterCircle: worlds.some((world) => world.matterCircle),
       grounded: worlds.some((world) => world.grounded),
     },
     touch: project.scenes.some((scene) => touchZonesOf(scene).length > 0),
@@ -4996,10 +5120,14 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   const fitted = physics.turned
     ? `\n${buildFitHelper(ctx.fitFn, language, '')}\n`
     : '';
+  // Same rule again: no round Arcade body, no helper.
+  const circled = physics.circle
+    ? `\n${buildCircleHelper(ctx.circleFn, language, '')}\n`
+    : '';
   // Same rule again: no Matter scene, no helper.
   const matter = physics.matter
     ? `\n${buildMatterAccessor(ctx.matterBodyFn, language, '')}\n` +
-      `\n${buildMatterHelper(ctx.matterFn, ctx.matterBodyFn, language, '')}\n`
+      `\n${buildMatterHelper(ctx.matterFn, ctx.matterBodyFn, language, '', physics.matterCircle)}\n`
     : '';
   // Only a Matter scene with something that jumps, so a top-down project and
   // every Arcade one emit no tracker at all.
@@ -5032,7 +5160,7 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
 
   return `${header(project)}${physicsNote(physics.arcade)}
 import Phaser from 'phaser';
-${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${effectsFn}${factories}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${circled}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${effectsFn}${factories}
 ${classes}
 
 export default ${boot.className};
@@ -5096,9 +5224,12 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
   const fitted = physics.turned
     ? `${buildFitHelper(ctx.fitFn, 'js', '      ')}\n\n`
     : '';
+  const circled = physics.circle
+    ? `${buildCircleHelper(ctx.circleFn, 'js', '      ')}\n\n`
+    : '';
   const matter = physics.matter
     ? `${buildMatterAccessor(ctx.matterBodyFn, 'js', '      ')}\n\n` +
-      `${buildMatterHelper(ctx.matterFn, ctx.matterBodyFn, 'js', '      ')}\n\n`
+      `${buildMatterHelper(ctx.matterFn, ctx.matterBodyFn, 'js', '      ', physics.matterCircle)}\n\n`
     : '';
   const ground = physics.grounded
     ? `${buildGroundHelper(ctx.groundFn, 'js', '      ')}\n\n`
@@ -5152,7 +5283,7 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
    */
   const script = `${header(project).replace(/\n/g, '\n      ')}
 
-${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${effectsFn}${factories}      ${classes}
+${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${circled}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${effectsFn}${factories}      ${classes}
 
       new Phaser.Game({
         type: Phaser.AUTO,

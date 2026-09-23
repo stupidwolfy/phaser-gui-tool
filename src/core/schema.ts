@@ -171,8 +171,21 @@
  * empty; this one leaves the declarations on screen *looking right* while the
  * rules that were the point of the file quietly go. `rules.spec.ts` asserts the
  * 14 in the saved artefact, as seventeen other specs now assert their own.
+ *
+ * **v15 is a round physics body, and it is the first bump taken because this
+ * file said to rather than because a table is dropped.** No new `NodeType` and
+ * no project table: `PhysicsBody.shape` rides in on `scenes`, which is passed
+ * through verbatim, so on the guides reasoning alone it would not bump. What
+ * settles it is the edge iteration 41 recorded and told the next reader not to
+ * record a third time. A v14 `physicsOf` rebuilds a body field by field and has
+ * no `shape` to copy, so it draws and exports a box where the file says a
+ * circle; and its `setNodePhysics` merges a patch over that rebuilt body, so
+ * nudging *any* dial on a round body in a v14 build writes the circle away for
+ * good. That is a wrong picture that becomes a lost field — the spawn anchor's
+ * edge (41), the `setPosition` anchor's (42), and now this one. The bump turns
+ * it into `parseProject`'s "made with a newer version of the editor" message.
  */
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -1601,6 +1614,31 @@ export interface PhysicsBody {
    * emitted code. The inspector hides them for the same reason.
    */
   kind: 'dynamic' | 'static';
+  /**
+   * What shape the body collides as. `'box'` is the object's own box, which is
+   * every body before iteration 44 and what absence means. `'circle'` is the
+   * circle inscribed in that box — `bodyRadiusOf`, centred on the object — so
+   * a ball rolls off a ledge's corner where a box would rest on it.
+   *
+   * There is **no radius and no offset field**, and that is the whole design.
+   * The radius is a second answer to the object's own size, which is the
+   * argument that gives a sprite no width and a tilemap no tile size: stored,
+   * it is two numbers free to disagree the moment the object is resized, and a
+   * `text` node's size is not even known until the font measures it. So the
+   * editor draws `min(w, h) / 2` of what it measured and the exported helper
+   * reads the same off the object at runtime.
+   *
+   * A circle is the first Arcade body that genuinely matches a turned object —
+   * it looks the same at every angle — so a round body skips `fitBodyToAngle`
+   * entirely. Its one Arcade limit is Phaser's: a circle collides with radius
+   * `halfWidth`, while its world-bounds box follows each axis's scale, so on an
+   * object whose *transform* scale is uneven the circle is right and the box it
+   * meets the world edge with is squashed. The panel says so.
+   *
+   * A fact about the body rather than the engine, like `kind`, so it is never
+   * hidden when the scene switches between Arcade and Matter.
+   */
+  shape: 'box' | 'circle';
   velocityX: number;
   velocityY: number;
   bounceX: number;
@@ -1679,6 +1717,9 @@ export function physicsOf(
     Math.min(1, Math.max(0, numberOr(value, fallback)));
   return {
     kind: raw.kind === 'static' ? 'static' : 'dynamic',
+    // Anything but a circle reads as the box every body was before shapes
+    // existed, so a file written earlier draws and exports exactly as it did.
+    shape: raw.shape === 'circle' ? 'circle' : 'box',
     velocityX: numberOr(raw.velocityX, 0),
     velocityY: numberOr(raw.velocityY, 0),
     bounceX: numberOr(raw.bounceX, 0),
@@ -1773,20 +1814,52 @@ export function bodyIsTurned(rotation: number): boolean {
  * two-consumer rule, on the one thing here nobody can see until the game is in
  * their hand.
  *
+ * A round body is the one answer both engines give identically — the circle
+ * inscribed in the object's box, which is the same at every angle — so it is
+ * a second member of the union rather than a branch per engine. The union is
+ * also the point of the change: `drawBodies` stopped compiling the moment this
+ * could answer with something that has no width, which is the `clampFrame` →
+ * `resolveFrame` rename trick applied to a return type.
+ *
  * A fresh object per call, so `useEditorStore((s) => bodyShapeOf(...))` is
  * React error #185 — the `tileMapOf` trap. Derive it outside the selector.
  */
 export function bodyShapeOf(
   engine: PhysicsEngine,
+  shape: PhysicsBody['shape'],
   width: number,
   height: number,
   rotation: number,
-): { width: number; height: number; rotation: number } {
+): BodyOutline {
+  if (shape === 'circle') {
+    return { kind: 'circle', radius: bodyRadiusOf(width, height) };
+  }
   if (engine === 'matter') {
     const turn = Number.isFinite(rotation) ? rotation : 0;
-    return { width: Math.abs(width), height: Math.abs(height), rotation: turn };
+    return {
+      kind: 'box',
+      width: Math.abs(width),
+      height: Math.abs(height),
+      rotation: turn,
+    };
   }
-  return { ...bodyBoxOf(width, height, rotation), rotation: 0 };
+  return { kind: 'box', ...bodyBoxOf(width, height, rotation), rotation: 0 };
+}
+
+/** What `bodyShapeOf` answers: a box at an angle, or a circle. */
+export type BodyOutline =
+  | { kind: 'box'; width: number; height: number; rotation: number }
+  | { kind: 'circle'; radius: number };
+
+/**
+ * The radius of a round body on an object drawn `width` by `height`: the circle
+ * inscribed in its box. The exported `fitBodyToCircle` and the Matter config's
+ * `radius` compute exactly this off the object at runtime, which is the only
+ * copy — and it is two calls, `Math.min` and `Math.abs`, so there is no
+ * arithmetic of our own for the two to disagree about.
+ */
+export function bodyRadiusOf(width: number, height: number): number {
+  return Math.min(Math.abs(width), Math.abs(height)) / 2;
 }
 
 /**

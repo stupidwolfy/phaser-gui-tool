@@ -293,6 +293,15 @@ turned — which is the one thing about physics the canvas can tell you and the 
 Nothing moves while you are placing it: the document is what you are editing, so the
 simulation belongs to the game you export. Press **Play** to watch it go.
 
+**Body shape** makes a body **round** instead of a box: the circle that fits inside the
+object, drawn as a green ring. A round ball rolls off another round body rather than
+resting on its flat top. There is no radius to set — resize the object and the circle
+follows. It is the same shape at every angle and under either engine, and it exports as
+`setCircle(...)` under Arcade and a `{ type: 'circle' }` body under Matter. One Arcade
+quirk: a round body that lands on the corner of a *box* tends to stay there rather than
+rolling off, because Arcade separates that case as boxes. Round against round, or Matter,
+rolls properly.
+
 The export is the real thing — `this.physics.add.existing(...)` with every setter written
 out, `this.physics.world.gravity.set(...)` and `setBounds(...)` per scene. The runnable
 page enables Arcade in its own game config; a `.ts` or `.js` module cannot, so it says at

@@ -153,7 +153,7 @@ test('a font survives a save and an open', async ({ editor }, testInfo) => {
   // Asserted in the artefact so a future bump is a deliberate act, the way
   // `audio.spec`, `guides.spec` and the rest each assert their own. This is the
   // bump fonts caused: a project-level table a v9 build would silently drop.
-  expect(parsed.schemaVersion).toBe(14);
+  expect(parsed.schemaVersion).toBe(15);
   expect(parsed.fonts).toHaveLength(1);
   expect(parsed.fonts[0]).toMatchObject({ name: 'Chunky Block.ttf', family: 'ChunkyBlock' });
   // Nothing but the four allowed mime types is ever written or read back — and

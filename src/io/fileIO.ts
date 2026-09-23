@@ -591,7 +591,14 @@ export function parseProject(contents: string): Project {
       : scenes[0].id;
 
   return {
-    schemaVersion: candidate.schemaVersion,
+    // Stamped with this build's version, not the file's. What this function
+    // returns is already in this build's shape — every table below is rebuilt
+    // by this build's rules — and the version is a claim about the shape. Kept
+    // as the file's, a v14 project opened here, given a round body and saved
+    // would still say v14, and a v14 build would open it and silently draw the
+    // box `SCHEMA_VERSION`'s v15 note describes: the bump would only ever
+    // protect files that were *made* in a current build.
+    schemaVersion: SCHEMA_VERSION,
     name: typeof candidate.name === 'string' ? candidate.name : 'Untitled Project',
     phaserVersion:
       typeof candidate.phaserVersion === 'string' ? candidate.phaserVersion : 'unknown',
