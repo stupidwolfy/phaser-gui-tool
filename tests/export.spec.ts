@@ -178,6 +178,29 @@ test('an export of a hostile project runs, and injects nothing', async ({
   await run.close();
 });
 
+test('a hostile project moves only the objects a rule may move', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+  const exported = (await editor.exportCode('ts')).contents;
+
+  // The dynamic body goes through `Body.reset`, reached through the helper the
+  // body already needed; the body-less one anchored on it is a plain
+  // `setPosition` reading the anchor's binding, negative offset and all.
+  expect(exported).toMatch(/arcadeBody\((\w+)\)\.reset\(53, 61\);/);
+  expect(exported).toMatch(/\w+\.setPosition\((\w+)\.x - 7, \1\.y \+ 11\);/);
+  // The static wall and the dangling anchor each cost the action, and the
+  // rule survives on its `addVar`.
+  expect(exported).not.toContain('.setPosition(1, 2);');
+  expect(exported).not.toContain('.reset(1, 2);');
+  expect(exported).not.toContain('.x + 3, ');
+  expect(exported).toContain('this.registry.inc(');
+  // Under Matter a static body moves with its object, so the ramp is kept.
+  expect(exported).toMatch(/\w+\.setPosition\((\w+)\.x, \1\.y \+ 40\);/);
+});
+
 test('a prefab exports as one factory function, called once per instance', async ({
   editor,
 }, testInfo) => {
@@ -2087,6 +2110,66 @@ test('the exported page pushes the body a rule names', async ({
   // Which is also the assertion that `arcadeBody` did not throw: it does so by
   // design when handed a `StaticBody` or none, inside `create()`, before a
   // single object is drawn.
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('the exported page moves the body a rule names to an object', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The positive claim for `setPosition`**, which only the running game can
+  // make: the editor draws a ring and moves nothing. The ball carries a
+  // *dynamic* body, so the emit is `arcadeBody(ball).reset(...)`, and this is
+  // the one place that call runs rather than only compiles. Gravity is zero so
+  // nothing else in the world can move it.
+  await editor.clearScene();
+  await editor.setSnapping(false);
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Ball');
+  await editor.setField('Width', 60);
+  await editor.setField('Height', 60);
+  await editor.setField('X', 150);
+  await editor.setField('Y', 400);
+  await editor.setPhysics(true);
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Goal');
+  await editor.setField('Fill', ELLIPSE_FILL);
+  await editor.setField('Width', 60);
+  await editor.setField('Height', 60);
+  await editor.setField('X', 780);
+  await editor.setField('Y', 400);
+  await editor.setGravity(0, 0);
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'the scene starts');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Move an object to');
+  await editor.setChoice('Rule 1 do 1 object', 'Ball');
+  await editor.setChoice('Rule 1 do 1 at', 'Goal');
+  await editor.setField('Rule 1 do 1 offset y', -200);
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('teleport'),
+    exported.contents,
+  );
+
+  const read = async (color: string) =>
+    findColor(run.page, await run.page.locator('canvas').screenshot(), color);
+  const goal = await read(ELLIPSE_FILL);
+  expect(goal.count).toBeGreaterThan(100);
+  // Straight above the goal, read off the goal's own binding: the ball lands
+  // on its column rather than at the scene point (0, -200), which is what a
+  // reader that forgot the anchor would emit. Polled, `reaches`' reason.
+  const ball = await reaches(
+    () => read(RECT_FILL),
+    (blob) => blob.count > 100 && Math.abs(blob.x - goal.x) < 6,
+  );
+  expect(Math.abs(ball.x - goal.x)).toBeLessThan(6);
+  expect(ball.y).toBeLessThan(goal.y - 20);
   expect(run.errors).toEqual([]);
 
   await run.close();

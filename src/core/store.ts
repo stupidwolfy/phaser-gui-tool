@@ -1797,6 +1797,13 @@ function remapActionRefs(
 ): RuleAction {
   // `!== undefined` because a spawn's anchor is optional: an unanchored spawn
   // names nothing scene-local and must not gain a key holding `undefined`.
+  // `setPosition`'s anchor is the one second node reference, so it is the one
+  // the field-name rule below cannot reach — and a copied teleport pointing into
+  // the scene it was copied from is a rule `rulesOf` would drop.
+  if (action.kind === 'setPosition') {
+    const moved = { ...action, nodeId: node(action.nodeId) };
+    return action.atId === undefined ? moved : { ...moved, atId: node(action.atId) };
+  }
   if ('nodeId' in action && action.nodeId !== undefined) {
     return { ...action, nodeId: node(action.nodeId) };
   }
@@ -3929,7 +3936,7 @@ export function countFontUses(project: Project, family: string): number {
  * hardest for an addition in, because it is the first thing the document can
  * say that **makes an object** — and because, alone among the refusals above,
  * it now puts a mark on this canvas. But the mark is a place, not a thing:
- * `spawnPointsOf` draws a ring where a prefab *will* be built and the canvas
+ * `rulePointsOf` draws a ring where a prefab *will* be built and the canvas
  * builds nothing, so there is no second state for a ▶ to toggle between and
  * nothing moving by itself for it to stop. A spawn is "drawn, never run", the
  * body outline's and the camera frame's rule for the fourth time.
@@ -3946,6 +3953,11 @@ export function countFontUses(project: Project, family: string): number {
  * that is the one place this parts company with the spawn above: a spawn has a
  * *where*, which is the thing this canvas has always drawn, and a velocity is
  * a **rate** — the only honest picture of which is a body in motion.
+ *
+ * And blind to a `setPosition`, which is the spawn's case exactly: it has a
+ * *where*, so `rulePointsOf` rings the destination and tethers it to the object,
+ * and the canvas moves nothing — the object stays where the document puts it.
+ * A mark is not a thing that moves by itself, so there is nothing for ▶ to stop.
  */
 export function hasMotionIn(project: Project): boolean {
   if (project.animations.length > 0) return true;

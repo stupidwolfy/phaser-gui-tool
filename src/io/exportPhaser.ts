@@ -3665,9 +3665,20 @@ function prefabsNamedByRules(project: Project, scene: SceneDoc): Set<string> {
   return named;
 }
 
+/**
+ * One coordinate read off an object at the moment a rule fires, plus an offset.
+ * A zero offset prints no term and a negative one prints a `-`, so the
+ * commonest case reads as it means and nothing reads `+ -10`. Shared by a
+ * spawn's anchor and a teleport's.
+ */
+function anchoredCoord(at: string, axis: 'x' | 'y', by: number): string {
+  return by === 0 ? `${at}.${axis}` : `${at}.${axis} ${by < 0 ? '-' : '+'} ${num(Math.abs(by))}`;
+}
+
 /** One action, as the statements it emits. */
 function ruleActionLines(
   action: RuleAction,
+  scene: SceneDoc,
   ctx: EmitContext,
   bindings: Map<string, string[]>,
   soundHandles: Map<string, string>,
@@ -3721,11 +3732,47 @@ function ruleActionLines(
       if (at === undefined) {
         return [`// ${entry.fn} would be built at an object that could not be added.`];
       }
-      const offset = (axis: string, by: number) =>
-        by === 0
-          ? `${at}.${axis}`
-          : `${at}.${axis} ${by < 0 ? '-' : '+'} ${num(Math.abs(by))}`;
-      return [`${entry.fn}(this, ${offset('x', action.x)}, ${offset('y', action.y)});`];
+      return [
+        `${entry.fn}(this, ${anchoredCoord(at, 'x', action.x)}, ` +
+          `${anchoredCoord(at, 'y', action.y)});`,
+      ];
+    }
+
+    case 'setPosition': {
+      const ids = bindings.get(action.nodeId) ?? [];
+      // Undefined is a node that emitted nothing — nothing to move, and nobody
+      // would see the move that did not happen. `setVelocity`'s silent `[]`.
+      if (ids.length === 0) return [];
+      let where = `${num(action.x)}, ${num(action.y)}`;
+      if (action.atId !== undefined) {
+        // Read off the anchor's binding when the rule fires, spawn's read. An
+        // anchor that emitted no object says so: a teleport that silently does
+        // nothing reads as a broken rule.
+        const at = bindings.get(action.atId)?.[0];
+        if (at === undefined) {
+          return [`// ${ids[0]} would be moved to an object that could not be added.`];
+        }
+        where = `${anchoredCoord(at, 'x', action.x)}, ${anchoredCoord(at, 'y', action.y)}`;
+      }
+      // A dynamic Arcade body goes through `Body.reset`. A bare `setPosition`
+      // would arrive too — `preUpdate` re-reads the object every step — but it
+      // would leave `prev` at the old spot, so the first step sweeps the body
+      // across the whole gap, and it would keep its momentum. `reset` moves the
+      // object and the body, re-seats `prev` and zeroes the velocity; a push
+      // after it is one more action in the same list. `ruleActionsOf` refuses a static
+      // one; a Matter body *is* its object's position (Matter's own Transform
+      // setter moves the body), so `setPosition` is already right there. No gate
+      // widened: `physicsUsedIn` declares `bodyFn` for any scene holding a
+      // dynamic Arcade body, the very same `physicsOf(node, true)` call.
+      const node = scene.children.find((child) => child.id === action.nodeId);
+      const body = node === undefined ? null : physicsOf(node, true);
+      if (ctx.engine !== 'matter' && body?.kind === 'dynamic') {
+        return [`${ctx.bodyFn}(${ids[0]}).reset(${where});`];
+      }
+      // Every binding, `destroy`'s `.map`: a tilemap of several layers moves as
+      // one piece rather than leaving its walls behind its floor. The anchor is
+      // a different object, so reading it once per layer reads one value.
+      return ids.map((id) => `${id}.setPosition(${where});`);
     }
 
     case 'setVisible':
@@ -3942,13 +3989,14 @@ function ruleActionLines(
  */
 function ruleBodyLines(
   rule: SceneRule,
+  scene: SceneDoc,
   ctx: EmitContext,
   bindings: Map<string, string[]>,
   soundHandles: Map<string, string>,
   animations: Map<string, UsedAnimation>,
 ): string[] {
   const body = rule.do.flatMap((action) =>
-    ruleActionLines(action, ctx, bindings, soundHandles, animations),
+    ruleActionLines(action, scene, ctx, bindings, soundHandles, animations),
   );
   if (body.length === 0) return [];
   if (rule.conditions.length === 0) return body;
@@ -3998,7 +4046,7 @@ function buildRuleLines(
     // written here because Matter has no row to hang it on.
     if (when.kind === 'collide' && ctx.engine !== 'matter') continue;
 
-    const body = ruleBodyLines(rule, ctx, bindings, soundHandles, ctx.animations);
+    const body = ruleBodyLines(rule, scene, ctx, bindings, soundHandles, ctx.animations);
     // A rule whose every action named something that did not reach the output
     // emits a comment rather than an empty listener — `missingReason`'s
     // treatment, and the camera follow's.
@@ -4395,7 +4443,7 @@ function buildCreateBody(
           (when.aId === collider.aId && when.bId === collider.bId) ||
           (when.aId === collider.bId && when.bId === collider.aId);
         if (!names) return [];
-        const body = ruleBodyLines(rule, ctx, bindings, soundHandles, animations);
+        const body = ruleBodyLines(rule, scene, ctx, bindings, soundHandles, animations);
         return body.length === 0 ? [] : [`// ${commentText(rule.name)}`, ...body];
       });
       for (const left of a) {

@@ -3669,6 +3669,29 @@ export type RuleAction =
    */
   | { kind: 'setVelocity'; nodeId: string; x: number; y: number }
   /**
+   * Put an object somewhere: a checkpoint respawn, a ball back on the centre
+   * spot, a portal. `setVelocity`'s sibling, and the loosening iteration 37
+   * named as the one a reader would ask for next — a teleport is not a push,
+   * and it works on a node with no body at all.
+   *
+   * `nodeId` is the object **moved**, and the name is structural for iteration
+   * 37's reason: `ruleNames` and `remapActionRefs` key off `'nodeId' in
+   * action`, so the rule appears on that object's panel and a duplicated scene
+   * remaps it with no edit.
+   *
+   * `atId` is optional, and it is spawn's anchor one action over. Absent, `x`/`y`
+   * are a scene point; present, they are an offset from where that object is
+   * *when the rule fires*. It is the one second node reference a `RuleAction`
+   * carries, so unlike `nodeId` it is **not** inherited: `ruleNames` and
+   * `remapActionRefs` each name it explicitly. Absent is the only spelling of
+   * "no anchor". `atId === nodeId` is legal and means "move by the offset".
+   *
+   * An Arcade **static** body is refused — `setPosition` moves the object and
+   * leaves a `StaticBody` where it was, which is a wall that is drawn in one
+   * place and collides in another. See `ruleActionsOf`.
+   */
+  | { kind: 'setPosition'; nodeId: string; x: number; y: number; atId?: string }
+  /**
    * Start a `particles` node emitting; stop one; or throw a single burst.
    *
    * Iteration 15 refused exactly this, thirteen iterations before there was
@@ -3732,7 +3755,7 @@ export type RuleAction =
    * `x`/`y` are absolute scene coordinates, the tween's targets' rule: an
    * absolute value names a *place*, which is what lets the canvas draw it —
    * and drawing it is half of what makes this editable by eye. See
-   * `spawnPointsOf`.
+   * `rulePointsOf`.
    *
    * Like the camera effects it names nothing *scene*-local, so `ruleNames`,
    * `ruleUsesVariable` and the store's `remapActionRefs` inherit the right
@@ -3843,6 +3866,9 @@ export const RULE_ACTION_KINDS: readonly RuleAction['kind'][] = [
   // Beside `startTween`, the other verb that sets an object moving — that one
   // through the tween manager, this one through the physics engine.
   'setVelocity',
+  // Beside the push: the other verb that says where a body ends up, and the one
+  // that works on an object with no body at all.
+  'setPosition',
   // The three particles verbs together, since only the first two are a pair and
   // the third is what either of them is usually reached for.
   'startParticles',
@@ -4019,7 +4045,7 @@ export function rulesOf(project: Project, scene: SceneDoc): SceneRule[] {
     const conditions = ruleConditionsOf(row.conditions, project);
     if (conditions === null) continue;
 
-    const actions = ruleActionsOf(row.do, byId, sounds, scenes, project);
+    const actions = ruleActionsOf(row.do, byId, sounds, scenes, project, matter);
     // A rule with nothing left to do is a real listener running an empty
     // callback, which is indistinguishable from the feature being broken —
     // `tweenOf`'s empty-`to` refusal, one level up.
@@ -4188,6 +4214,7 @@ function ruleActionsOf(
   sounds: Set<string>,
   scenes: Set<string>,
   project: Project,
+  matter: boolean,
 ): RuleAction[] {
   if (!Array.isArray(raw)) return [];
 
@@ -4376,6 +4403,37 @@ function ruleActionsOf(
         break;
       }
 
+      case 'setPosition': {
+        // Every refusal costs the **action**, never the rule — `destroy`'s and
+        // `setVelocity`'s split: a node reaches nothing outside the action that
+        // names it. No top-level guard of its own: `byId` is `scene.children`.
+        const moved = byId.get(nodeId);
+        if (moved === undefined) break;
+        // A static Arcade body is refused because `setPosition` moves the
+        // object and not a `StaticBody`, which Phaser re-syncs only on
+        // `refreshBody` — a call the shared plain-JavaScript body cannot reach
+        // through `GameObject.body`'s four-way union. A dynamic body re-reads
+        // its object every `preUpdate`, and a Matter body *is* its object's
+        // position, so both are fine. The exporter calls `Body.reset` for a
+        // dynamic Arcade body regardless, so the teleport also stops it.
+        const body = physicsOf(moved, true);
+        if (body?.kind === 'static' && !matter) break;
+        // The anchor: a dangling one costs the action and is **not** repaired
+        // to "a fixed point", spawn's reason — an offset of (10, 0) read as the
+        // scene point (10, 0) widens what the action says.
+        const atId = typeof row.atId === 'string' && row.atId !== '' ? row.atId : '';
+        if (atId !== '' && !byId.has(atId)) break;
+        const move: RuleAction = {
+          kind: 'setPosition',
+          nodeId,
+          x: finiteOr(row.x, 0),
+          y: finiteOr(row.y, 0),
+        };
+        // Attached only when present, so the inspector never writes an empty key.
+        actions.push(atId === '' ? move : { ...move, atId });
+        break;
+      }
+
       case 'startParticles':
       case 'stopParticles':
       case 'burstParticles': {
@@ -4560,7 +4618,14 @@ export interface SpawnPoint {
 }
 
 /**
- * Every place a rule in this scene will build something.
+ * Every place a rule in this scene will build something, or put something.
+ *
+ * Renamed from `spawnPointsOf` when `setPosition` joined it, and renamed rather
+ * than widened so each caller had to say it wanted both — the `clampFrame` →
+ * `resolveFrame` trick. A teleport's destination is a *where* exactly as a
+ * spawn's is, so it takes the same mark: one kind of chrome for "a rule puts
+ * something here", with the tether running from the object that will be moved
+ * to where it lands, and the label naming the object with a leading arrow.
  *
  * `rulesOf` filtered, never `scene.rules` read a second time — `rulesNaming`'s
  * rule and `touchZonesOf`-on-`controlsOf`'s reason: a spawn the rules reader
@@ -4579,10 +4644,28 @@ export interface SpawnPoint {
  * A fresh array every call ⇒ React error #185 in a selector, the `tileMapOf`
  * trap for the twelfth time.
  */
-export function spawnPointsOf(project: Project, scene: SceneDoc): SpawnPoint[] {
+export function rulePointsOf(project: Project, scene: SceneDoc): SpawnPoint[] {
   const points: SpawnPoint[] = [];
   for (const rule of rulesOf(project, scene)) {
     for (const action of rule.do) {
+      if (action.kind === 'setPosition') {
+        // Drawn at the document positions — the frame the game opens on, the
+        // only moment the canvas can speak for. `rulesOf` has already refused a
+        // dangling object or anchor, so the `continue`s are belt to its braces.
+        const moved = scene.children.find((child) => child.id === action.nodeId);
+        if (moved === undefined) continue;
+        const from = { x: moved.transform.x, y: moved.transform.y };
+        let x = action.x;
+        let y = action.y;
+        if (action.atId !== undefined) {
+          const at = scene.children.find((child) => child.id === action.atId);
+          if (at === undefined) continue;
+          x += at.transform.x;
+          y += at.transform.y;
+        }
+        points.push({ x, y, name: `→ ${moved.name}`, anchor: from });
+        continue;
+      }
       if (action.kind !== 'spawn') continue;
       // `rulesOf` has already refused a spawn whose prefab is gone, so this
       // cannot answer undefined — the `?? ` is the belt to that reader's
@@ -4630,7 +4713,12 @@ export function ruleNames(rule: SceneRule, nodeId: string): boolean {
   if (when.kind === 'tap' && when.nodeId === nodeId) return true;
   if (when.kind === 'collide' && (when.aId === nodeId || when.bId === nodeId)) return true;
   return rule.do.some(
-    (action) => 'nodeId' in action && action.nodeId === nodeId,
+    (action) =>
+      ('nodeId' in action && action.nodeId === nodeId) ||
+      // The one second node reference an action carries, so the one this
+      // cannot inherit from the field name. A rule that moves the player to a
+      // checkpoint is about the checkpoint too.
+      (action.kind === 'setPosition' && action.atId === nodeId),
   );
 }
 

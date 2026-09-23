@@ -580,6 +580,14 @@ export function hostileProject(): Project {
               // every colour assertion in `export.spec.ts` — correct behaviour,
               // and not what those assertions are about.
               { kind: 'setVelocity' as const, nodeId: 'a', x: 240, y: -180 },
+              // A teleport of the same dynamic body, so `Body.reset` is reached
+              // through `arcadeBody` under `tsc --strict` — and one of `c`, which
+              // has no body, anchored on `a` with a negative offset, so
+              // `<binding>.setPosition(<a>.x - 7, <a>.y + 11)` meets the plain
+              // `setPosition` on a Rectangle. Both ride this untriggered rule
+              // for `setVelocity`'s `NO_MOTION` reason.
+              { kind: 'setPosition' as const, nodeId: 'a', x: 53, y: 61 },
+              { kind: 'setPosition' as const, nodeId: 'c', x: -7, y: 11, atId: 'a' },
               // The three particles verbs, and the split between them is the
               // whole of what they are here for. `atlas-emitter` is *started*,
               // so it is the only place `emitting: false` reaches the emitted
@@ -911,6 +919,21 @@ export function hostileProject(): Project {
             when: { kind: 'keyDown' as const, key: 'Z' },
             conditions: [],
             do: [{ kind: 'setVelocity' as const, nodeId: 'b', x: 50, y: 50 }],
+          },
+          // A teleport of the **static** body `g`, which would move the object
+          // and leave its collider behind, and one anchored at a node that is
+          // not there, which is *not* repaired to a fixed point. Both cost the
+          // action, so the rule survives on its `addVar` — `rule-x15`'s shape.
+          {
+            id: 'rule-x19',
+            name: 'Moves a wall',
+            when: { kind: 'keyDown' as const, key: 'K' },
+            conditions: [],
+            do: [
+              { kind: 'setPosition' as const, nodeId: 'g', x: 1, y: 2 },
+              { kind: 'setPosition' as const, nodeId: 'c', x: 3, y: 4, atId: 'gone' },
+              { kind: 'addVar' as const, variableId: 'var-2', by: 11 },
+            ],
           },
         ],
         children: [
@@ -1907,6 +1930,19 @@ export function hostileProject(): Project {
             when: { kind: 'keyDown' as const, key: 'Y' },
             conditions: [],
             do: [{ kind: 'setVelocity' as const, nodeId: 'm-floor', x: 10, y: 0 }],
+          },
+          // A teleport under Matter, of the static ramp — which Matter *does*
+          // move, since its Transform setter moves the body — anchored on the
+          // faller. The one place `setPosition` meets an object that
+          // `matter.add.gameObject` has mixed Matter's own Transform into.
+          {
+            id: 'rule-m3',
+            name: 'Moves the ramp',
+            when: { kind: 'keyDown' as const, key: 'L' },
+            conditions: [],
+            do: [
+              { kind: 'setPosition' as const, nodeId: 'm-floor', x: 0, y: 40, atId: 'm-faller' },
+            ],
           },
         ],
         children: [
