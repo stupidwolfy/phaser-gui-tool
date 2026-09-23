@@ -130,9 +130,10 @@ test('the engine, the Matter dials and the rows they hide survive a save', async
 
   // The engine is a field on `scene.physics`, which rides in on `scenes` — the
   // one part of a file `parseProject` passes through verbatim — so this is the
-  // guides case and the version does not move. Asserted so a future bump is a
+  // guides case and the engine did not move the version. It reads 15 because a
+  // round body did (see `SCHEMA_VERSION`). Asserted so a future bump is a
   // deliberate act rather than a surprise.
-  expect(saved.schemaVersion).toBe(14);
+  expect(saved.schemaVersion).toBe(15);
 
   const path = testInfo.outputPath('matter.phaser.json');
   await fs.writeFile(path, file.contents, 'utf8');
@@ -224,4 +225,36 @@ test('a driven object keeps its arrows and its buttons under Matter', async ({
   await editor.selectInTree('Rectangle');
   await expect(editor.checkbox('Player controls')).toBeChecked();
   await expect(editor.checkbox('On-screen buttons')).toBeChecked();
+});
+
+test('a round body is the same circle under both engines, and survives the switch', async ({
+  editor,
+}) => {
+  await setup(editor);
+  await editor.setField('Rotation°', 45);
+  await editor.setChoice('Body shape', 'Circle');
+  await editor.deselect();
+  await editor.closePanels();
+
+  // A circle inscribed in the 300x60 bar: 60 across, however it is turned.
+  const arcade = await editor.findDrawnBox(BODY);
+  expect(arcade.count).toBeGreaterThan(0);
+  expect(Math.abs(arcade.width - arcade.height)).toBeLessThan(arcade.height * 0.15);
+
+  await editor.setSceneEngine('matter');
+  await editor.deselect();
+  await editor.closePanels();
+
+  // The one body both engines agree on at every angle, which is why the shape
+  // is a fact about the body rather than about the engine and is never hidden
+  // when the engine changes.
+  const matter = await editor.findDrawnBox(BODY);
+  expect(Math.abs(matter.width - arcade.width)).toBeLessThan(arcade.width * 0.1);
+  expect(Math.abs(matter.height - arcade.height)).toBeLessThan(arcade.height * 0.1);
+
+  await editor.selectInTree('Rectangle');
+  expect(await editor.selectValue('Body shape')).toBe('circle');
+  await editor.setSceneEngine('arcade');
+  await editor.selectInTree('Rectangle');
+  expect(await editor.selectValue('Body shape')).toBe('circle');
 });

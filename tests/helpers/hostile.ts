@@ -18,6 +18,7 @@ import { silentWav } from './wav';
  * the top-level rectangle.
  */
 const NO_MOTION = {
+  shape: 'box' as const,
   velocityX: 0,
   velocityY: 0,
   bounceX: 0,
@@ -986,6 +987,7 @@ export function hostileProject(): Project {
             // eighteen fields are here for exactly the same reason.
             physics: {
               kind: 'dynamic' as const,
+              shape: 'box' as const,
               velocityX: 120,
               velocityY: -45,
               bounceX: 0.4,
@@ -1876,6 +1878,55 @@ export function hostileProject(): Project {
             ],
             children: [],
           },
+          {
+            id: 'ball',
+            // A round Arcade body with a non-default value in every dial, on an
+            // object that is turned *and* unevenly scaled. The turn is what
+            // proves a round body skips `fitBodyToAngle` — this scene has no
+            // other turned body, so the helper must not be emitted for it —
+            // and the uneven scale is the case `fitBodyToCircle`'s dynamic
+            // branch divides by. It carries no hostile string beyond its name:
+            // it is here because this is the only place `Body.setCircle` is
+            // reached under `tsc --strict`, in a scene that is registered and
+            // never started so no frame pays for it.
+            name: `${breakout} ball`,
+            type: 'ellipse',
+            visible: true,
+            transform: { x: 700, y: 120, rotation: 30, scaleX: 1.5, scaleY: 1 },
+            props: { width: 40, height: 40, fill: '#8f5bd6', alpha: 1 },
+            physics: {
+              ...NO_MOTION,
+              kind: 'dynamic' as const,
+              shape: 'circle' as const,
+              velocityX: -60,
+              velocityY: 25,
+              bounceX: 0.7,
+              bounceY: 0.9,
+              dragX: 12,
+              dragY: 4,
+              angularVelocity: 30,
+              mass: 1.5,
+              immovable: false,
+              allowGravity: false,
+              collideWorldBounds: true,
+            },
+            children: [],
+          },
+          {
+            id: 'bumper',
+            // And a round *static* body, which is the other branch of the
+            // helper and the one with the trap: `StaticBody.setCircle` sets
+            // its offset without moving the body, so the helper chains a
+            // `setOffset` — a call whose return type the compiler has to agree
+            // with.
+            name: `${breakout} bumper`,
+            type: 'ellipse',
+            visible: true,
+            transform: { x: 820, y: 400, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { width: 60, height: 40, fill: '#3b5bdb', alpha: 1 },
+            physics: { ...NO_MOTION, kind: 'static' as const, shape: 'circle' as const },
+            children: [],
+          },
         ],
       },
       {
@@ -1999,6 +2050,25 @@ export function hostileProject(): Project {
               speed: 200,
               jump: 400,
               touch: true,
+            },
+            children: [],
+          },
+          {
+            id: 'm-ball',
+            // A round Matter body, which is the only place the config
+            // literal's `shape: { type: 'circle', radius }` meets
+            // `MatterBodyConfig` under `tsc --strict` — and the only thing
+            // that switches the Matter helper to its `config.shape ??` form.
+            name: `${breakout} matter ball`,
+            type: 'ellipse',
+            visible: true,
+            transform: { x: 300, y: 80, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { width: 36, height: 36, fill: '#e8590c', alpha: 1 },
+            physics: {
+              ...NO_MOTION,
+              kind: 'dynamic' as const,
+              shape: 'circle' as const,
+              restitution: 0.6,
             },
             children: [],
           },

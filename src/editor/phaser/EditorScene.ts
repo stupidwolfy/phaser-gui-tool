@@ -3043,6 +3043,12 @@ export class EditorScene extends Phaser.Scene {
    * that can carry a body has a centred origin, which is also how Phaser places
    * the body from `displayOrigin`.
    *
+   * A round body is a circle inscribed in the object's measured box, and it is
+   * the one outline that is the same under both engines and at every angle —
+   * so it is also the first Arcade outline that turns *with* its object rather
+   * than growing to hold it. `bodyShapeOf` answers it as its own union member,
+   * which is what made this method a compile error until it drew one.
+   *
    * A static body gets a cross through it as well as an outline. That is one
    * colour and two extra lines rather than a second palette entry, and it says
    * the one thing about a body that is visible on a canvas nobody is
@@ -3091,22 +3097,11 @@ export class EditorScene extends Phaser.Scene {
       // thing here nobody can see until the game is in their hand.
       const box = bodyShapeOf(
         engine,
+        body.shape,
         object.displayWidth,
         object.displayHeight,
         node.transform.rotation,
       );
-      const w = box.width;
-      const h = box.height;
-      if (!(w > 0) || !(h > 0)) continue;
-
-      // Four corners rather than a `strokeRect`, because a Matter body's answer
-      // is a turned rectangle and `strokeRect` can only draw an upright one.
-      // The Arcade branch answers `rotation: 0`, where the sin is 0 and the cos
-      // is 1 and this reduces to exactly the box `strokeRect` drew before —
-      // which is what lets one path serve both rather than a branch per mark.
-      const radians = (box.rotation * Math.PI) / 180;
-      const cos = Math.cos(radians);
-      const sin = Math.sin(radians);
       // The same offset `applyNode` drew the object with, read back rather than
       // recomputed, so the outline cannot separate from the box it is around.
       // Added to the *document's* position rather than read off `object.x`,
@@ -3115,24 +3110,60 @@ export class EditorScene extends Phaser.Scene {
       const offset = this.scrollOffsets.get(node.id) ?? ZERO_OFFSET;
       const cx = node.transform.x + offset.x;
       const cy = node.transform.y + offset.y;
-      // `Vector2` rather than a plain pair because that is what `strokePoints`
-      // is typed to take, and the exported `.ts` is not the only thing here
-      // compiled under `strict`.
-      const at = (dx: number, dy: number) =>
-        new Phaser.Math.Vector2(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos);
-      const tl = at(-w / 2, -h / 2);
-      const tr = at(w / 2, -h / 2);
-      const br = at(w / 2, h / 2);
-      const bl = at(-w / 2, h / 2);
 
       if (!styled) {
         this.bodyGraphics.lineStyle(width, BODY_COLOR, 1);
         styled = true;
       }
-      this.bodyGraphics.strokePoints([tl, tr, br, bl], true, true);
-      if (body.kind === 'static') {
-        this.bodyGraphics.lineBetween(tl.x, tl.y, br.x, br.y);
-        this.bodyGraphics.lineBetween(tr.x, tr.y, bl.x, bl.y);
+
+      // How big the driven arrows are drawn, which is the only thing below
+      // that needs a size and not a shape.
+      let span: number;
+      if (box.kind === 'circle') {
+        // A round body: the circle inscribed in the object's box, the same at
+        // every angle and under either engine — which is why there is no
+        // rotation to apply and no engine branch here at all.
+        const r = box.radius;
+        if (!(r > 0)) continue;
+        this.bodyGraphics.strokeCircle(cx, cy, r);
+        if (body.kind === 'static') {
+          // The box's cross, as two diameters at 45 degrees: one colour and two
+          // more lines, the same mark for the same fact on a different shape.
+          const d = r * Math.SQRT1_2;
+          this.bodyGraphics.lineBetween(cx - d, cy - d, cx + d, cy + d);
+          this.bodyGraphics.lineBetween(cx + d, cy - d, cx - d, cy + d);
+        }
+        span = r * 2;
+      } else {
+        const w = box.width;
+        const h = box.height;
+        if (!(w > 0) || !(h > 0)) continue;
+
+        // Four corners rather than a `strokeRect`, because a Matter body's
+        // answer is a turned rectangle and `strokeRect` can only draw an
+        // upright one. The Arcade branch answers `rotation: 0`, where the sin
+        // is 0 and the cos is 1 and this reduces to exactly the box
+        // `strokeRect` drew before — which is what lets one path serve both
+        // rather than a branch per mark.
+        const radians = (box.rotation * Math.PI) / 180;
+        const cos = Math.cos(radians);
+        const sin = Math.sin(radians);
+        // `Vector2` rather than a plain pair because that is what
+        // `strokePoints` is typed to take, and the exported `.ts` is not the
+        // only thing here compiled under `strict`.
+        const at = (dx: number, dy: number) =>
+          new Phaser.Math.Vector2(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos);
+        const tl = at(-w / 2, -h / 2);
+        const tr = at(w / 2, -h / 2);
+        const br = at(w / 2, h / 2);
+        const bl = at(-w / 2, h / 2);
+
+        this.bodyGraphics.strokePoints([tl, tr, br, bl], true, true);
+        if (body.kind === 'static') {
+          this.bodyGraphics.lineBetween(tl.x, tl.y, br.x, br.y);
+          this.bodyGraphics.lineBetween(tr.x, tr.y, bl.x, bl.y);
+        }
+        span = Math.min(w, h);
       }
       // A driven object gets a pair of arrows pointing the way its keys push
       // it: one colour and more marks, exactly as a static body is told apart
@@ -3150,7 +3181,7 @@ export class EditorScene extends Phaser.Scene {
       // simulating it, so arrows that followed the object's own angle would say
       // something the exported `update()` does not do.
       if (driven.has(node.id)) {
-        const arm = Math.min(w, h) / 5;
+        const arm = span / 5;
         this.bodyGraphics.fillStyle(BODY_COLOR, 1);
         this.bodyGraphics.fillTriangle(cx - arm * 2, cy, cx - arm, cy - arm, cx - arm, cy + arm);
         this.bodyGraphics.fillTriangle(cx + arm * 2, cy, cx + arm, cy - arm, cx + arm, cy + arm);

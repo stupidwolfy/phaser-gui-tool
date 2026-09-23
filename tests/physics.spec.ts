@@ -223,10 +223,10 @@ test('a body and the scene gravity survive a save and an open, at schema 12', as
   // Asserted so that a future bump is a deliberate act rather than something
   // that happens to a file — the guides and scenes precedent. A body rides in
   // on `scenes`, which the parser passes through verbatim, so a build that
-  // predates it opens this file and draws it identically. It reads 10 because
-  // audio, then the two stretchable types, then fonts bumped it; physics still
-  // did not.
-  expect(project.schemaVersion).toBe(14);
+  // predates it opens this file and draws it identically. It reads 15 because
+  // other features bumped it and then a round body did — the first physics
+  // field to, because an old build's field-by-field `physicsOf` loses it.
+  expect(project.schemaVersion).toBe(15);
   // The engine rides here beside the gravity, and an Arcade scene says so
   // explicitly once anything has written the field — which is what makes
   // "absent means Arcade" a rule about *older files* rather than about this one.
@@ -269,4 +269,101 @@ test('gravity appears only once something in the scene has a body', async ({
   await editor.deselect();
   await editor.openPanel('inspect');
   await expect(editor.field('Gravity Y')).toHaveCount(1);
+});
+
+/**
+ * Round bodies (iteration 44). Every claim is an extent or a count rather than a
+ * centroid, for the reason the turned-box test above gives: what is asserted is
+ * how big, and what shape, the outline is drawn.
+ */
+
+/** A round body on the 240x160 fixture: the circle inscribed in its box. */
+async function roundSetup(editor: EditorPage): Promise<void> {
+  await setup(editor);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body shape', 'Circle');
+  await editor.deselect();
+  await editor.closePanels();
+}
+
+test('a round body draws the circle inscribed in its object', async ({ editor }) => {
+  await setup(editor);
+  await editor.setPhysics(true);
+  await editor.deselect();
+  await editor.closePanels();
+  const box = await editor.findDrawnBox(BODY);
+  expect(box.count).toBeGreaterThan(0);
+
+  await editor.selectInTree('Rectangle');
+  await editor.setChoice('Body shape', 'Circle');
+  await editor.deselect();
+  await editor.closePanels();
+  const round = await editor.findDrawnBox(BODY);
+
+  // Square, because it is a circle; as tall as the box, because the radius is
+  // half the *shorter* side; and narrower than the box by about the 240:160
+  // ratio, which is what says it is inscribed rather than merely round.
+  expect(Math.abs(round.width - round.height)).toBeLessThan(round.height * 0.1);
+  expect(Math.abs(round.height - box.height)).toBeLessThan(box.height * 0.1);
+  expect(round.width).toBeLessThan(box.width * 0.8);
+});
+
+test('a round body does not grow when its object turns, where a box does', async ({
+  editor,
+}) => {
+  await roundSetup(editor);
+  const upright = await editor.findDrawnBox(BODY);
+  expect(upright.count).toBeGreaterThan(0);
+
+  await editor.selectInTree('Rectangle');
+  await editor.setField('Rotation°', 45);
+  await editor.deselect();
+  await editor.closePanels();
+  const turned = await editor.findDrawnBox(BODY);
+
+  // The box test above grows the height by three quarters at this angle. A
+  // circle is the same at every angle, so it is the first Arcade body that
+  // turns *with* its object rather than growing to hold it — which is also why
+  // the export gives it no `fitBodyToAngle`.
+  expect(Math.abs(turned.width - upright.width)).toBeLessThan(upright.width * 0.08);
+  expect(Math.abs(turned.height - upright.height)).toBeLessThan(upright.height * 0.08);
+});
+
+test('a static round body is marked with a cross like a static box', async ({ editor }) => {
+  await roundSetup(editor);
+  const dynamic = (await editor.findDrawn(BODY)).count;
+
+  await editor.selectInTree('Rectangle');
+  await editor.setChoice('Body', 'Static — never moves');
+  await editor.closePanels();
+  const staticCount = (await editor.findDrawn(BODY)).count;
+
+  // Two diameters are 2·d against a circumference of π·d, so about two thirds
+  // of the circle again.
+  expect(staticCount).toBeGreaterThan(dynamic * 1.3);
+});
+
+test('a round body survives a save and an open', async ({ editor }, testInfo) => {
+  await roundSetup(editor);
+
+  const saved = await editor.saveToFile();
+  const project = JSON.parse(saved.contents);
+  // 15 because of this field: an older build rebuilds a body field by field and
+  // would draw, export and — on the next edit — save this circle as a box.
+  expect(project.schemaVersion).toBe(15);
+  expect(project.scenes[0].children[0].physics.shape).toBe('circle');
+
+  const path = testInfo.outputPath('round.phaser.json');
+  await fs.writeFile(path, saved.contents, 'utf8');
+  await editor.newProject();
+  await editor.openFile(path);
+
+  await editor.selectInTree('Rectangle');
+  expect(await editor.selectValue('Body shape')).toBe('circle');
+
+  // And it is still drawn as a circle, not the box an ignored field would give.
+  await editor.deselect();
+  await editor.closePanels();
+  const round = await editor.findDrawnBox(BODY);
+  expect(Math.abs(round.width - round.height)).toBeLessThan(round.height * 0.1);
 });

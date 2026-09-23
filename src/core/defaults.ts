@@ -255,6 +255,10 @@ export function createNode(
 export function defaultPhysicsBody(kind: PhysicsBody['kind'] = 'dynamic'): PhysicsBody {
   return {
     kind,
+    // A body is a box until somebody picks otherwise — including on an
+    // ellipse, where it has been a box since iteration 16. A shape is chosen,
+    // not added, which is the call `blendMode` made about a mode.
+    shape: 'box',
     velocityX: 0,
     velocityY: 0,
     bounceX: 0,

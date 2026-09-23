@@ -379,7 +379,7 @@ test('solid tiles, a collision and controls survive a save and an open, at schem
   // in on `scenes`, which `parseProject` passes through verbatim — so a build
   // that predates them opens this file, draws it identically and carries them
   // back out on a re-save. The guides, physics and camera case exactly. It
-  expect(project.schemaVersion).toBe(14);
+  expect(project.schemaVersion).toBe(15);
   expect(project.scenes[0].children[0].controls).toEqual({
     mode: 'platformer',
     scheme: 'wasd',

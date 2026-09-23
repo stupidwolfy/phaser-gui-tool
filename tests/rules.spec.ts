@@ -39,7 +39,7 @@ const FILL = '#4f8cff';
  * The version a saved file must carry now that `project.variables` exists and a
  * variable may hold text — v13 for the table, v14 for the kind.
  */
-const SCHEMA = 14;
+const SCHEMA = 15;
 
 /** One rectangle, alone, so a colour reading has exactly one source. */
 async function oneBox(editor: EditorPage): Promise<void> {

@@ -161,7 +161,10 @@ hole iteration 34 recorded as having *made* rather than inherited: a prefab plac
 no controls anywhere, so one built only by a rule could be neither renamed nor deleted without
 placing it first. The library in the scene panel now carries each definition's name, where it
 is used and a delete, behind one toggle — and like iteration 32 it changes the document not at
-all.
+all. Iteration 44 (shipped) let a body be round: a `shape` on the physics body, whose radius
+is the circle inscribed in the object and is never stored — the "no circular bodies" hole
+iteration 16 left, and the first bump taken because iteration 41 said the next edge of its
+kind should bump rather than be recorded.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -3091,6 +3094,112 @@ closes iteration 16's fourth deliberate hole, and it closed for one reason: the 
   it — and it asserts a *pass* rather than a catch, dropping the faller over the empty air
   inside the ramp's bounding box, because a catch is what a wrong box gives you too.
 
+### Round bodies
+
+`PhysicsBody.shape` is `'box' | 'circle'`, and a round body is the circle **inscribed in the
+object's drawn box**, centred on it. It closes the "no circular bodies" hole iteration 16
+left, and the prediction there — "one prop and three emitted arguments" — was right about
+the prop and wrong about the arguments, because both of Phaser's Arcade calls have a trap.
+
+- **There is no radius and no offset field.** The radius is `bodyRadiusOf` =
+  `min(|w|, |h|) / 2` of what is drawn, which is the argument that gives a sprite no width:
+  stored, it is a second answer to the object's size, and a `text` node's size is not known
+  until the font measures it. Iteration 16's refusal named exactly that — "the radius is a
+  second answer to the object's own size" — and this is the shape that answers it rather than
+  arguing with it.
+- **Absent means box, and `createNode` seeds nothing.** `physicsOf` reads anything but
+  `'circle'` as `'box'`, `defaultPhysicsBody` writes `'box'`, and **an ellipse is not seeded
+  round** — a body on an ellipse has been a box for 28 iterations and a shape is chosen, not
+  added: `blendMode`'s argument. The picker is `Body shape`, the row under `Body`, and it is
+  shown under both engines and both kinds, because a shape is a fact about the body, like
+  `kind`.
+- **`bodyShapeOf` answers a union now**, `{ kind: 'box', … } | { kind: 'circle', radius }`,
+  and gained a `shape` parameter. The union is what made `drawBodies` a compile error until
+  it drew one — `clampFrame` → `resolveFrame` applied to a return type. A circle is the one
+  answer both engines give identically, so it is a member of the union rather than a branch
+  per engine.
+- **A round Arcade body skips `fitBodyToAngle`,** and that is the payoff. A circle is the
+  same at every angle, so it is the first Arcade body that matches a turned object rather
+  than growing a box to hold it. `physicsUsedIn.turned` counts only *box* bodies, so a project
+  whose only turned bodies are round emits no fit helper.
+- **Three facts from Phaser 4.2.1's source, each wrong if guessed.**
+  - **`Body.setCircle` (dynamic) takes source pixels.** That holds for the radius *and* the
+    offset: the body sits at `x + scaleX · (offset.x − displayOriginX)` and collides with
+    radius `halfWidth`, which is the source radius times `|scaleX|`. So `fitBodyToCircle`
+    divides the drawn radius by `|scaleX|` and signs the offset by the scale.
+  - **`StaticBody.setCircle` takes canvas pixels, and sets its offset without moving the
+    body.** A later `setOffset` subtracts the offset it has just been given before adding it
+    back, so passing the same numbers to both moves nothing.
+    - What works is `setCircle(r, 0, 0).setOffset(real)`. It relies on the offset being zero
+      straight after `add.existing(obj, true)`.
+    - `reset()` and `updateFromGameObject()` are refused. Both place the body from
+      `getTopLeft`, which rotates that corner on a turned object. The second also writes the
+      object's box back over the circle's width.
+    - `export.spec.ts` confirms the trap by breaking it. It uses a **non-square** bumper,
+      because a square one has a zero offset and passes whichever call is made. The first
+      version of that test did exactly that.
+  - **Matter's `SetBody` defaults a circle's radius to `max(w, h) / 2`,** the circumscribed
+    circle. So the config passes `radius` explicitly.
+- **The Arcade limit is on a box's corner, and it is Arcade's.** `World.separateCircle` pushes
+  a circle meeting a rectangle's *corner* along the corner's normal, and then hands it to the
+  axis-aligned `SeparateY` as well, which stops its fall. A round ball dropped onto a ledge's
+  edge therefore hovers on it instead of rolling off.
+  - This was found by running the export, not by reading. The planned test was "rolls off a
+    corner a box would rest on", and it failed with the circle body demonstrably correct.
+  - Two circles are separated along their normal alone, so the runtime test is round against
+    round.
+  - It carries a bounce of 0.3. At zero, Arcade zeroes the velocity every step and the ball
+    creeps round the bumper at a few pixels a second.
+  - The README says so, since a user will meet it.
+- **An uneven *transform* scale is Arcade's second limit.** A circle collides with radius
+  `halfWidth`, while its world-bounds box follows each axis's scale, so on an unevenly scaled
+  object the circle is right and the bounds box is squashed. The panel hints this only in
+  that state. Width and Height props are source size and are unaffected.
+- **Under Matter a round body is a `shape` in the config literal.** The literal is
+  `{ type: 'circle', radius: <read off the object> }`, and `MatterBodyConfig` declares `shape`,
+  so it compiles under `--strict`.
+  - The Matter helper always built a rectangle *after* spreading the config. It now reads
+    `shape: config.shape ?? {…}`, but **only in a module that holds a round Matter body**
+    (`PhysicsUse.matterCircle`).
+  - Every Matter project without one emits the helper byte for byte as before.
+- **`fitBodyToCircle` is the seventeenth module helper, allocated last of all, after
+  `effectsFn`.** `toIdentifier` suffixes a clash, so a name drawn earlier moves a suffix the
+  suite asserts. It is in the three seed sets (factories, `update()`, `create()`) beside
+  `fitFn`.
+- **`SCHEMA_VERSION` bumped to 15, and this is the first bump taken because this file said
+  to.** Taken alone, the field is the guides case, since `node.physics` rides in on `scenes`
+  verbatim.
+  - The problem is the edge iteration 41 recorded. A v14 `physicsOf` rebuilds a body field by
+    field without `shape`, so it draws and exports a box. Its `setNodePhysics` merges over that
+    rebuild, so nudging any dial on a round body in a v14 build writes the circle away.
+  - Iteration 41 said a second such edge should bump rather than be recorded. Iteration 42's
+    `atId` was that second one, and this is the third.
+- **The bump exposed a hole in every bump before it: `parseProject` kept the file's own
+  version.** A v14 file opened here, given a round body and saved would still have said v14.
+  - It now stamps `SCHEMA_VERSION`, because what it returns is already in this build's shape.
+  - Without that, a bump only ever protected files that were *made* in a current build.
+    Nothing in the suite asserted the old behaviour.
+- **The suite:**
+  - `physics.spec.ts` checks four things:
+    - the circle is square, as tall as the box and narrower than it;
+    - its extent does not grow at 45° where a box's does;
+    - a static one's cross adds ink;
+    - it survives a save and an open, at 15.
+  - `matter.spec.ts` checks the same circle under both engines, and that the shape survives
+    the switch.
+  - `export.spec.ts` checks the emitted text in both engines, including the byte-for-byte
+    absences, and runs the glance both ways (circles fall past, boxes rest on top).
+  - The hostile project adds a turned, unevenly scaled dynamic round body and a static round
+    body, in the registered-never-started scene, plus a round Matter body. They are the only
+    place `setCircle`/`setOffset` and the Matter `shape` literal meet `tsc --strict`.
+- **What stays refused.**
+  - **No radius or offset field**, above.
+  - **No ellipse-shaped or polygon body.** Arcade has neither. Under Matter, `fromVertices` is
+    a list of points, which is a geometry sub-format and the emit-zone argument.
+  - **No `maxSides`.** Matter's 25-sided circle is Phaser's default, and a dial for it
+    explains more than it gives.
+  - **No round body on a node inside a group.** Physics' top-level rule is unchanged.
+
 ## Behaviour
 
 Three things that only mean anything once the game is running: which tiles are solid, which
@@ -5971,10 +6080,11 @@ tests/
   typography.spec.ts        a stroke, a wrap, an alignment, and a style that round-trips
   fonts.spec.ts             a font imported, drawn, round-tripped, removed and exported
   physics.spec.ts           a body drawn, never simulated, sized to hold what it is
-                            turned with, and refused inside a group
+                            turned with, round when asked, and refused inside a group
   matter.spec.ts            a scene switched to Matter: a body that turns, dials that
-                            replace Arcade's, both sets kept through the switch, and
-                            controls that survive the engine change
+                            replace Arcade's, both sets kept through the switch, a
+                            round body both engines agree on, and controls that
+                            survive the engine change
   behaviour.spec.ts         solid tiles, a collision row, an object the keys drive, and
                             the buttons a thumb will drive it with
   rules.spec.ts             a variable declared, a rule built and refused, a caption
@@ -6762,7 +6872,9 @@ fails to collide. It is a pure loosening later — one prop and three emitted ar
 above, and note that the reason it closed is not that the argument was wrong. It was
 right: Matter *is* a second engine with a second body model. What changed is that the one
 thing it buys turned out to be the one thing Arcade genuinely cannot do at all, which is a
-collision shape that turns with its object. And **no body on a node inside a group or a
+collision shape that turns with its object. **Circular bodies shipped in iteration 44** —
+see "Round bodies" above; the radius stayed derived, which answered the objection here
+rather than overruling it. And **no body on a node inside a group or a
 prefab**, which is *not* deferred work: an axis-aligned body cannot express a rotated
 parent's frame at all, so it is a limit of Arcade's body model rather than of this editor
 — and Matter inherits it here for a different reason, since a Container child's `x`/`y`

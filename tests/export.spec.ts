@@ -761,6 +761,136 @@ test('a floor turned on its side stops what falls on the side it is drawn', asyn
   await run.close();
 });
 
+test('a round body is fitted by its own helper, and never by the angle one', async ({
+  editor,
+}) => {
+  await editor.clearScene();
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Ball');
+  await editor.setField('Rotation°', 30);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body shape', 'Circle');
+
+  const arcade = await editor.exportCode('ts');
+  expect(arcade.contents).toContain('fitBodyToCircle(ball);');
+  // Turned, and still no angle fitting: a circle is the same at every angle,
+  // so it has no box to grow — the one Arcade body that matches a turned object.
+  expect(arcade.contents).not.toContain('fitBodyToAngle');
+  // The static branch's trap, pinned: `StaticBody.setCircle` sets its offset
+  // without moving the body, so the real offset has to go through `setOffset`.
+  expect(arcade.contents).toContain(
+    'body.setCircle(radius, 0, 0).setOffset(width / 2 - radius, height / 2 - radius);',
+  );
+  expect(arcade.contents).toContain('const source = radius / Math.abs(scaleX);');
+
+  // And a box body emits none of it, so every project that predates round
+  // bodies exports byte for byte what it did.
+  await editor.setChoice('Body shape', 'Box');
+  const box = await editor.exportCode('ts');
+  expect(box.contents).not.toContain('fitBodyToCircle');
+  expect(box.contents).toContain('fitBodyToAngle(ball);');
+
+  // Under Matter a round body is a `shape` in the config literal, and only then
+  // does the helper take its shape from the config.
+  await editor.setSceneEngine('matter');
+  await editor.selectInTree('Ball');
+  const matterBox = await editor.exportCode('ts');
+  expect(matterBox.contents).not.toContain('config.shape');
+  expect(matterBox.contents).not.toContain("type: 'circle'");
+
+  await editor.setChoice('Body shape', 'Circle');
+  const matter = await editor.exportCode('ts');
+  expect(matter.contents).toContain(
+    "  shape: { type: 'circle', radius: Math.min(Math.abs(ball.displayWidth), " +
+      'Math.abs(ball.displayHeight)) / 2 },',
+  );
+  expect(matter.contents).toContain('shape: config.shape ?? {');
+  expect(matter.contents).not.toContain('fitBodyToCircle');
+});
+
+test('a round body glances off a round bumper that a box would rest on', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // The one claim that the circle is *real* rather than well-typed, made in
+  // both directions so it cannot pass for a reason that is not the shape. A
+  // ball is dropped 25 units to the left of a bumper's centre. As two boxes the
+  // ball's bottom meets the bumper's flat top and it stays there; as two
+  // circles they meet on a slope, and the ball glances off to the left and
+  // falls on past the bumper to the world's floor.
+  //
+  // Neither object is square, and that is the half of the fixture that tests
+  // the helper rather than Arcade. The bumper is 160x80, so its circle sits 40
+  // units in from its body's corner, and the ball is 60x90, so its circle sits
+  // 15 units down: both offsets are non-zero, which is where the static
+  // branch's `setOffset` trap and the dynamic branch's origin arithmetic live.
+  // A static circle left in its corner would be centred 40 units left of the
+  // bumper, under the ball's *right* side, and would send it the other way.
+  //
+  // Round against round rather than round against a box's corner, and that is
+  // Arcade's doing rather than a choice here: read out of `World.separateCircle`,
+  // a circle meeting a rectangle's corner is pushed along the corner's normal
+  // and then *also* handed to the axis-aligned `SeparateY`, which stops its
+  // fall — so a ball on a ledge's edge hovers there instead of rolling off. Two
+  // circles are separated along their normal alone. The small bounce is what
+  // carries the glance: at zero Arcade zeroes the velocity each step and the
+  // ball creeps round the bumper at a few pixels a second.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Bumper');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 300);
+  await editor.setField('Width', 160);
+  await editor.setField('Height', 80);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body', 'Static — never moves');
+  await editor.setChoice('Body shape', 'Circle');
+  await editor.deselect();
+
+  await editor.setGravity(0, 900);
+
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Ball');
+  await editor.setField('X', 455);
+  await editor.setField('Y', 80);
+  await editor.setField('Width', 60);
+  await editor.setField('Height', 90);
+  await editor.setPhysics(true);
+  await editor.setChoice('Body shape', 'Circle');
+  await editor.setField('Bounce X', 0.3);
+  await editor.setField('Bounce Y', 0.3);
+  await editor.addColliderOnNode('Bumper');
+
+  async function settle(name: string) {
+    const exported = await editor.exportCode('html');
+    const run = await runExportedPage(page.context(), testInfo.outputPath(name), exported.contents);
+    // Where it came to rest rather than whether it has stopped, the rule the
+    // landing tests above follow for their reason.
+    await run.page.waitForTimeout(2000);
+    const shot = await run.page.locator('canvas').screenshot();
+    const ball = await findColor(run.page, shot, ELLIPSE_FILL);
+    const bumper = await findColor(run.page, shot, RECT_FILL);
+    expect(ball.count).toBeGreaterThan(50);
+    expect(run.errors).toEqual([]);
+    await run.close();
+    return { ball, bumper, exported };
+  }
+
+  const round = await settle('glance-circle');
+  expect(round.exported.contents).toContain('fitBodyToCircle(bumper);');
+  expect(round.exported.contents).toContain('fitBodyToCircle(ball);');
+  expect(round.ball.y).toBeGreaterThan(round.bumper.y);
+  expect(round.ball.x).toBeLessThan(round.bumper.x);
+
+  await editor.selectInTree('Ball');
+  await editor.setChoice('Body shape', 'Box');
+  await editor.selectInTree('Bumper');
+  await editor.setChoice('Body shape', 'Box');
+  const boxes = await settle('glance-box');
+  expect(boxes.exported.contents).not.toContain('fitBodyToCircle');
+  expect(boxes.ball.y).toBeLessThan(boxes.bumper.y);
+});
+
 test('a project with one world of each engine emits both, and neither leaks', async ({
   editor,
 }, testInfo) => {
