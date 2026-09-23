@@ -558,6 +558,7 @@ const ACTION_LABEL: Record<RuleAction['kind'], string> = {
   playAnimation: 'Play an animation',
   startTween: 'Start a movement',
   setVelocity: 'Push an object',
+  setPosition: 'Move an object to',
   // "particles" rather than "emitter", because that is the word the rest of the
   // editor uses for this type — the tree's add button, the section heading and
   // `NodeType` itself all say it. None of the three collides with a label
@@ -944,6 +945,9 @@ function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
                       (node) => physicsOf(node, true)?.kind === 'dynamic',
                     );
                   }
+                  if (kind === 'setPosition') {
+                    return scene.children.some((node) => canMove(node, scene));
+                  }
                   if (
                     kind === 'startParticles' ||
                     kind === 'stopParticles' ||
@@ -1049,6 +1053,17 @@ function defaultTrigger(
   }
 }
 
+/**
+ * Whether a rule may teleport this node: the reader's own refusal, so the panel
+ * cannot build what `rulesOf` drops. A static Arcade body is the one thing
+ * `setPosition` would move out from under its own collider.
+ */
+function canMove(node: GameObjectNode, scene: SceneDoc): boolean {
+  return (
+    physicsOf(node, true)?.kind !== 'static' || scenePhysicsOf(scene).engine === 'matter'
+  );
+}
+
 /** An action of the given kind, already naming something that exists. */
 function defaultAction(
   kind: RuleAction['kind'],
@@ -1116,6 +1131,20 @@ function defaultAction(
       // `{ x: 0, y: 0 }` is exactly that action.
       return pushable
         ? { kind: 'setVelocity', nodeId: pushable.id, x: 0, y: -450 }
+        : { kind: 'restartScene' };
+    }
+    case 'setPosition': {
+      // The scene centre, spawn's seed and its reason: the one point certain to
+      // be on screen, and — for any object not already sitting there — a move
+      // somebody can see, drawn as a ring the moment the action arrives.
+      const movable = scene.children.find((node) => canMove(node, scene));
+      return movable
+        ? {
+            kind: 'setPosition',
+            nodeId: movable.id,
+            x: Math.round(scene.width / 2),
+            y: Math.round(scene.height / 2),
+          }
         : { kind: 'restartScene' };
     }
     case 'startParticles':
@@ -1601,6 +1630,68 @@ function ActionFields({
           </p>
         </>
       );
+
+    case 'setPosition': {
+      // Four controls, so three rows — spawn's layout for spawn's reason, the
+      // anchor on a row of its own because an object name is the widest thing
+      // on the card.
+      const anchored = action.atId !== undefined;
+      const pinned = scene.children.some((node) => !canMove(node, scene));
+      return (
+        <>
+          <SelectField
+            label={`${label} object`}
+            value={action.nodeId}
+            options={nodeOptions(scene, (node) => canMove(node, scene))}
+            onChange={(nodeId) => onChange({ ...action, nodeId })}
+          />
+          <SelectField
+            label={`${label} at`}
+            value={action.atId ?? ''}
+            options={[{ value: '', label: 'A fixed point' }, ...nodeOptions(scene)]}
+            onChange={(atId) => {
+              // Spawn's anchor picker to the line: the key destructured away
+              // rather than written `undefined`, and the numbers reset because
+              // an offset and a point are nonsense carried into each other.
+              const { atId: _previous, ...rest } = action;
+              void _previous;
+              if (atId === '') {
+                onChange({
+                  ...rest,
+                  x: Math.round(scene.width / 2),
+                  y: Math.round(scene.height / 2),
+                });
+              } else {
+                onChange(anchored ? { ...rest, atId } : { ...rest, atId, x: 0, y: 0 });
+              }
+            }}
+          />
+          <div className="field-row">
+            <NumberField
+              label={anchored ? `${label} offset x` : `${label} x`}
+              value={action.x}
+              onChange={(x) => onChange({ ...action, x })}
+            />
+            <NumberField
+              label={anchored ? `${label} offset y` : `${label} y`}
+              value={action.y}
+              onChange={(y) => onChange({ ...action, y })}
+            />
+          </div>
+          <p className="hint">
+            {anchored
+              ? 'Moved to where that object is when the rule fires, plus the offset. '
+              : ''}
+            Drawn on the canvas as a ring joined to the object; the editor never
+            moves it. An Arcade body stops dead when it arrives; a Matter one keeps moving.
+            {pinned
+              ? ' Objects with a static body are not listed: moving one would' +
+                ' leave its collider behind.'
+              : ''}
+          </p>
+        </>
+      );
+    }
 
     case 'startParticles':
     case 'stopParticles':

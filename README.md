@@ -161,6 +161,13 @@ on a desktop.
   there gravity, drag and anything it collides with take over. The editor never runs it —
   nothing here simulates a body, and nothing is drawn for a speed the way a ring is drawn for
   a spawn, because a speed has no place on the canvas to be — so press **Play** to watch it go
+- **Move something**: pick *Move an object to* as a rule's action to put an object at a
+  point, or pick an object under *at* to put it where that object is when the rule fires, plus
+  an offset. That is a checkpoint respawn, a ball back on the centre spot, a portal. Any object
+  can be moved, with or without physics, except one whose body is *Static*: that would move the
+  picture and leave the wall behind. A dynamic body stops when it arrives, and a push after it
+  in the same rule sends it on. The canvas draws a ring where the object will land, joined to
+  the object, and moves nothing. Press **Play** to watch it happen.
 - **Throw something at a moment**: a rule can *Start particles*, *Stop particles* or *Burst
   particles* — so smoke puffs when something is hit, a thruster runs only while it should,
   and a shower of sparks is one row of settings. A burst throws a count you set, all at once,

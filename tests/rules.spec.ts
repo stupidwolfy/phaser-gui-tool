@@ -1723,6 +1723,247 @@ test.describe('pushing one', () => {
   });
 });
 
+test.describe('moving one', () => {
+  /** The rule marker's teal, `SPAWN_COLOR` in `EditorScene` — shared with spawn. */
+  const MARKER = '#00c2a0';
+
+  /**
+   * Two plain rectangles, neither with a body: a teleport is the one verb
+   * about a place that needs no physics at all. Ball is added first, so it is
+   * what `defaultAction` seeds.
+   */
+  async function ballAndGoal(editor: EditorPage): Promise<void> {
+    await editor.clearScene();
+    await editor.setSnapping(false);
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', 'Ball');
+    await editor.setField('Width', 40);
+    await editor.setField('Height', 40);
+    await editor.setField('X', 200);
+    await editor.setField('Y', 200);
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', 'Goal');
+    await editor.setField('Width', 40);
+    await editor.setField('Height', 40);
+    await editor.setField('X', 700);
+    await editor.setField('Y', 200);
+    await editor.deselect();
+    await editor.closePanels();
+  }
+
+  /** A rule that moves the ball to a point. */
+  async function moveRule(editor: EditorPage, x: number, y: number): Promise<string> {
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Move an object to');
+    await editor.setChoice('Rule 1 do 1 object', 'Ball');
+    await editor.setField('Rule 1 do 1 x', x);
+    await editor.setField('Rule 1 do 1 y', y);
+    return name;
+  }
+
+  test('a move round-trips, and names the object it moves', async ({
+    editor,
+  }, testInfo) => {
+    await ballAndGoal(editor);
+    const name = await moveRule(editor, 640, 320);
+
+    const document = await saved(editor);
+    // Still 14 — no new `NodeType`, and the action rides in on `scenes`.
+    expect(document.schemaVersion).toBe(SCHEMA);
+    const scene = (document.scenes as {
+      children: { id: string; name: string }[];
+      rules?: { do: unknown[] }[];
+    }[])[0];
+    const ball = scene.children.find((node) => node.name === 'Ball');
+    expect(scene.rules?.[0].do).toEqual([
+      { kind: 'setPosition', nodeId: ball?.id, x: 640, y: 320 },
+    ]);
+
+    const path = testInfo.outputPath('mover.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    await editor.deselect();
+    await editor.openRule(name);
+    expect(await editor.numberValue('Rule 1 do 1 x')).toBe(640);
+    expect(await editor.numberValue('Rule 1 do 1 y')).toBe(320);
+
+    // On the moved object's own panel, because the field is `nodeId` — and on
+    // nobody else's while there is no anchor.
+    await editor.selectInTree('Ball');
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.selectInTree('Goal');
+    expect(await editor.ruleCount()).toBe(0);
+  });
+
+  test('a move to an object is on both panels, and clearing it takes the key out', async ({
+    editor,
+  }) => {
+    await ballAndGoal(editor);
+    await moveRule(editor, 0, 0);
+    await editor.setChoice('Rule 1 do 1 at', 'Goal');
+    await editor.setField('Rule 1 do 1 offset y', -60);
+
+    const document = await saved(editor);
+    const scene = (document.scenes as {
+      children: { id: string; name: string }[];
+      rules?: { do: Record<string, unknown>[] }[];
+    }[])[0];
+    const goal = scene.children.find((node) => node.name === 'Goal');
+    expect(scene.rules?.[0].do[0]).toEqual({
+      kind: 'setPosition',
+      nodeId: expect.any(String),
+      x: 0,
+      y: -60,
+      atId: goal?.id,
+    });
+
+    // `atId` is the one second node reference an action carries, so this is the
+    // one place `ruleNames` could not inherit the answer from a field name.
+    await editor.selectInTree('Goal');
+    expect(await editor.ruleCount()).toBe(1);
+
+    await editor.deselect();
+    await editor.openRule('Rule 1');
+    await editor.setChoice('Rule 1 do 1 at', 'A fixed point');
+    const cleared = await saved(editor);
+    const action =
+      (cleared.scenes as { rules?: { do: Record<string, unknown>[] }[] }[])[0].rules?.[0]
+        .do[0] ?? {};
+    expect(Object.keys(action)).not.toContain('atId');
+    expect(action).toMatchObject({ x: 480, y: 270 });
+  });
+
+  test('the canvas marks the destination and moves nothing', async ({ editor }) => {
+    await editor.clearScene();
+    await editor.setSnapping(false);
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', 'Ball');
+    await editor.setField('Width', 40);
+    await editor.setField('Height', 40);
+    await editor.setField('X', 200);
+    await editor.setField('Y', 200);
+    await editor.deselect();
+    await editor.closePanels();
+    await editor.settle();
+    const before = await editor.findDrawnBox(FILL);
+
+    await moveRule(editor, 600, 200);
+    await editor.deselect();
+    await editor.closePanels();
+    await editor.settle();
+
+    // The tether runs from the object to the ring, so the mark's left end is
+    // the ball and its right end is past the destination.
+    const mark = await editor.findDrawnBox(MARKER);
+    expect(mark.count).toBeGreaterThan(20);
+    const from = await editor.sceneToScreen({ x: 200, y: 200 });
+    const to = await editor.sceneToScreen({ x: 600, y: 200 });
+    expect(Math.abs(mark.x - from.x)).toBeLessThan(4);
+    expect(mark.x + mark.width).toBeGreaterThan(to.x);
+
+    // And the ball has not gone anywhere: the assertion that fails the day
+    // anybody wires a rule into `EditorScene`.
+    const after = await editor.findDrawnBox(FILL);
+    expect(after.x).toBe(before.x);
+    expect(after.y).toBe(before.y);
+    await expect(
+      editor.page.getByRole('button', { name: 'Preview motion' }),
+    ).toHaveCount(0);
+  });
+
+  test('a static Arcade body is not offered, and a hand-edited one costs the action', async ({
+    editor,
+  }, testInfo) => {
+    await editor.clearScene();
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', 'Wall');
+    await editor.setPhysics(true);
+    await editor.setChoice('Body', 'Static — never moves');
+    await editor.deselect();
+
+    // The only object is a static body, so the verb is withheld —
+    // `setVelocity`'s mechanism, for its reason.
+    const name = await editor.addRule();
+    await editor.openRule(name);
+    await expect(
+      editor.choice('Rule 1 do 1').getByRole('option', { name: 'Move an object to' }),
+    ).toHaveCount(0);
+
+    // Under Matter a static body *is* movable — its Transform setter moves it.
+    await editor.setSceneEngine('matter');
+    await editor.deselect();
+    await editor.openRule(name);
+    await expect(
+      editor.choice('Rule 1 do 1').getByRole('option', { name: 'Move an object to' }),
+    ).toHaveCount(1);
+    await editor.setSceneEngine('arcade');
+
+    // A hand-edited file: a static target and a dangling anchor, beside a third
+    // action that keeps the rule alive. Both cost the action, never the rule.
+    await editor.deselect();
+    await editor.openRule(name);
+    await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+    const document = await saved(editor);
+    const scene = (document.scenes as {
+      children: { id: string }[];
+      rules?: { do: unknown[] }[];
+    }[])[0];
+    const wall = scene.children[0].id;
+    scene.rules![0].do = [
+      { kind: 'setPosition', nodeId: wall, x: 1, y: 2 },
+      { kind: 'setPosition', nodeId: wall, x: 1, y: 2, atId: 'gone' },
+      { kind: 'restartScene' },
+    ];
+    const path = testInfo.outputPath('static-move.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    await editor.deselect();
+
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    expect(await editor.selectValue('Rule 1 do 1')).toBe('restartScene');
+    await expect(
+      editor.panel('inspect').getByTitle('Remove action 2 of rule 1'),
+    ).toHaveCount(0);
+  });
+
+  test('it emits setPosition, a read of the anchor, and Body.reset for a body', async ({
+    editor,
+  }) => {
+    await ballAndGoal(editor);
+    await moveRule(editor, 640, 320);
+
+    let exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('ball.setPosition(640, 320);');
+    expect(exported).not.toContain('update(): void');
+
+    await editor.setChoice('Rule 1 do 1 at', 'Goal');
+    await editor.setField('Rule 1 do 1 offset x', 10);
+    await editor.setField('Rule 1 do 1 offset y', -20);
+    await editor.settle();
+    exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('ball.setPosition(goal.x + 10, goal.y - 20);');
+
+    // A dynamic Arcade body goes through `Body.reset`, which moves the body with
+    // the object and stops it — through the helper the body already needed.
+    await editor.selectInTree('Ball');
+    await editor.setPhysics(true);
+    exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('arcadeBody(ball).reset(goal.x + 10, goal.y - 20);');
+    expect(exported.match(/function arcadeBody\(/g)).toHaveLength(1);
+
+    // Matter's own Transform moves the body, so a plain `setPosition` is right.
+    await editor.setSceneEngine('matter');
+    exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('ball.setPosition(goal.x + 10, goal.y - 20);');
+    expect(exported).not.toContain('.reset(');
+  });
+});
+
 test.describe('making one throw', () => {
   /**
    * The particle texture, in a colour nothing else on the canvas draws.

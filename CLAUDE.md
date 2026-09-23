@@ -151,7 +151,12 @@ argument is hardest to see. Iteration 41 (shipped) let a rule build a prefab **w
 stands** rather than only at a fixed point: an optional `nodeId` on the `spawn` action, with
 `x`/`y` read as an offset from it — the loosening iteration 34 named as "the obvious next ask",
 and cheaper than it predicted, because naming the field `nodeId` rather than `at` made
-`ruleNames` and the scene duplicator's remap inherit it with no edit.
+`ruleNames` and the scene duplicator's remap inherit it with no edit. Iteration 42 (shipped)
+let a rule **move** an object: a `setPosition` action, to a point or to another object plus an
+offset. That is the loosening iteration 37 named as "the thing a reader will ask for next", and
+it works on a node with no body at all. It is the first action to carry a *second* node
+reference (`atId`), so it is the first that `ruleNames` and `remapActionRefs` could not inherit
+from a field name, and each gained one explicit line.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -4504,7 +4509,7 @@ placement and never again. This calls it a second time.
   a mark the two coordinates are two numbers authored blind, which is the failure this file
   warns about more than any other. It is *drawn, never run*: the camera's "drawn, never
   applied" and the body outline's "drawn, never run" for the fourth time.
-- **`spawnPointsOf` is a filter over `rulesOf`, never a second read of `scene.rules`** —
+- **`rulePointsOf` is a filter over `rulesOf`, never a second read of `scene.rules`** —
   `rulesNaming`'s rule and `touchZonesOf`-on-`controlsOf`'s reason, so a spawn the reader
   dropped cannot come back to life on the canvas. A fresh array per call, so
   `useEditorStore((s) => spawnPointsOf(...))` is React error #185 — the `tileMapOf` trap,
@@ -4512,7 +4517,7 @@ placement and never again. This calls it a second time.
   `project.prefabs`.
 - **The data comes from the sync and the drawing from `update()`, which is the `tweenGhosts`
   pattern and deliberately not `drawTouchZones`'.** That one calls its reader every frame;
-  `spawnPointsOf` goes through `rulesOf`, which builds a child map and calls `collidersOf`,
+  `rulePointsOf` goes through `rulesOf`, which builds a child map and calls `collidersOf`,
   `soundsOf` and `scenePhysicsOf`. A spawn point changes only when the document does, so
   `syncFromStore` fills the array and `update()` has only the zoom to react to —
   signature-gated like every drawer beside it, because the stroke and the radius are *screen*
@@ -4666,7 +4671,7 @@ stood" are the two things a fixed point could never say.
   - There is no gate, helper, table or `EmitContext` field, so nothing above it moved.
 - **The canvas draws the ring at the anchor's document position plus the offset, tethered to
   the object by a line.**
-  - `spawnPointsOf` resolves the anchor itself, so the renderer still never reads a table.
+  - `rulePointsOf` resolves the anchor itself, so the renderer still never reads a table.
   - Without the tether, an offset ring reads as a fixed point, which is the one thing it is
     not.
   - The ring is drawn from the document position, not from `scrollOffsets`: it is a mark about
@@ -4707,6 +4712,82 @@ stood" are the two things a fixed point could never say.
   all.
 - **No anchor on another rule's trigger object implicitly** ("spawn at whatever was tapped"):
   that is a callback parameter, which iteration 28 refuses by name.
+
+### Moving one: the `setPosition` action
+
+Iteration 42. `{ kind: 'setPosition'; nodeId; x; y; atId? }` puts an existing object somewhere
+when a rule fires: a checkpoint respawn, a ball back on the centre spot, a portal. It is the
+loosening "Pushing one" below named last, and it is `spawn`'s anchor applied to an object that
+already exists.
+
+- **Iteration 28's line does not move.** One more verb in a list, run at a moment Phaser already
+  delivers. `update()` gains nothing. There is no new trigger, table, helper, `EmitContext`
+  field or schema bump; the edge for an old build is the one iterations 31–38 record.
+- **`nodeId` is the object moved; `atId` is the anchor.** The first name makes the rule appear
+  on the moved object's panel and makes a duplicated scene remap it, for free — iteration 37's
+  note. The second is the **first second node reference any `RuleAction` carries**, so it is the
+  first one the field-name trick cannot reach. `ruleNames` and `remapActionRefs` each gained one
+  explicit line. Without the first, a rule that moves the player to a checkpoint would not show
+  on the checkpoint. Without the second, a duplicated scene's teleport would point into the scene
+  it was copied from, and `rulesOf` would drop it. `atId === nodeId` is legal: "move by the
+  offset", read off a live value exactly as a spawn's anchor is.
+- **Absent is the only spelling of "no anchor"**, and a dangling anchor costs the action and is
+  **not** repaired to a fixed point. Both are spawn's rules, copied rather than re-argued.
+- **An Arcade *static* body is refused, and a Matter one is not.** Both halves were read from
+  `node_modules/phaser/src`, not guessed:
+  - A `StaticBody` is re-synced only by `refreshBody`/`updateFromGameObject`. The shared
+    plain-JavaScript `create()` body cannot reach either through `GameObject.body`'s four-way
+    union, and `arcadeBody` throws on a static body by design. So `setPosition` would move the
+    picture and leave the wall where it was.
+  - A Matter object's `x`/`y` and `setPosition` come from Matter's own `Transform` component, and
+    they call `Body.setPosition`. So a plain `setPosition` moves a Matter body, static or not.
+  - The refusal costs the action (`setVelocity`'s split). The panel leaves static bodies out of
+    the object picker, holds the verb back when nothing else is left, and says in a hint why a
+    wall is missing.
+- **A dynamic Arcade body goes through `Body.reset`, and the reason is not the obvious one.** A
+  bare `setPosition` *would* arrive, because `Body.preUpdate` re-reads the object every step.
+  But it leaves `prev` at the old spot, so the first step sweeps the body across the whole gap,
+  and it keeps its momentum. `reset(x, y)` moves the object and the body, re-seats
+  `prev`/`prevFrame` and stops the body. A push after it is one more action in the list. Matter
+  keeps its velocity, and the panel says so. No gate was widened, because `physicsUsedIn`
+  declares `arcadeBody` from the same `physicsOf(node, true)` call.
+- **Everything else is `.setPosition(...)` on every binding**, `destroy`'s `.map`, so a tilemap
+  of several layers moves as one piece. `anchoredCoord` was factored out of the spawn case
+  rather than copied, and the spawn output is unchanged byte for byte. The exporter needed the
+  scene to ask whether the node has a body, so `ruleBodyLines` and `ruleActionLines` now take
+  one. Both callers already had it in hand.
+- **The destination is a *where*, so it is drawn.** `spawnPointsOf` was renamed to
+  `rulePointsOf` rather than widened, the `clampFrame` → `resolveFrame` trick, so each caller
+  had to agree to both. A teleport's point takes the spawn mark unchanged: the same
+  `SPAWN_COLOR` ring and cross, the same label pool and the same signature. The label is
+  `→ <object name>`, and the tether runs from the moved object to where it will land. It is one
+  kind of chrome for "a rule puts something here", so no new colour needed the arithmetic check.
+  The object itself stays where the document puts it, and `hasMotionIn` records the refusal in
+  its comment.
+- **The panel is spawn's card**: `Rule <n> do <m> object`, `… at` ("A fixed point" or an object),
+  and `… x`/`… y`, which become `… offset x/y` once anchored. Switching the anchor resets the
+  numbers, and the key is destructured away rather than written `undefined`. The seed is the
+  scene centre, on the first object that can be moved.
+- **The suite:**
+  - `rules.spec.ts` covers the round trip, both panels, the key's absence once cleared, the
+    tethered mark with the object unmoved, the static refusal under Arcade (and its absence
+    under Matter), a hand-edited static target and a dangling anchor each costing the action,
+    and all four emit shapes.
+  - `export.spec.ts` runs a dynamic body teleported to the column above another object. It
+    checks that the ball lands on that object's `x`, which is what separates "read the anchor"
+    from "used the offset as a point".
+  - The hostile project adds a reset, an anchored body-less move with a negative offset, a
+    static target, a dangling anchor, and a Matter static body anchored on the faller. All ride
+    untriggered rules for `NO_MOTION`'s reason.
+
+**What stays refused.** **No rotation or scale with the move** — those are `startTween`'s job,
+and a teleport that turned the object is two verbs in one. **No moving *towards* a point over
+time** — that is a tween. **No keeping an Arcade body's velocity** — `reset` is the one call that
+leaves the body consistent, and a push afterwards says the rest. **No moving a static Arcade
+body** — above; it is a helper away rather than an argument away, and the loosening is a
+`refreshBody` helper beside `arcadeBody`. **No moving to a spawned object** — a spawned object
+has no id to name, which is the same wall as `destroy`. **No moving to where something was
+tapped or hit** — that is a callback parameter, which iteration 28 refuses by name.
 
 ### Pushing one: the `setVelocity` action
 
@@ -4807,7 +4888,7 @@ back. A `spawn` put an enemy on screen and it stood there for the rest of the ga
   `default`, and `ACTION_LABEL` is a `Record<RuleAction['kind'], string>`, so the *panel* also
   refuses to compile. Every other consumer of `action.kind` across `src/` — in
   `collectLabels`, `prefabsNamedByRules`, `animationsNamedByRules`, `buildCreateBody`'s
-  pre-pass, `migrateRuleToKind`, `removePrefab`, `countPrefabSpawns` and `spawnPointsOf` — is
+  pre-pass, `migrateRuleToKind`, `removePrefab`, `countPrefabSpawns` and `rulePointsOf` — is
   a narrowing `=== 'spawn'` / `=== 'setVar'` check that simply never fires for a new member,
   which is the right answer rather than a missed step. Everything genuinely silent is in the
   usual places: `RULE_ACTION_KINDS` (a plain array, so an omission is an action nobody can
@@ -4927,7 +5008,8 @@ over. **No reading a velocity in a condition** — `RuleCondition`'s own refusal
 the one quantity that survives `scene.start`, validates against a table the document holds, and
 is one shape across the whole union. And **no `setPosition`** — a teleport is not a push, it
 works on nodes with no body at all, and it is a genuine separate loosening rather than a
-smaller version of this one. It is the thing a reader will ask for next.
+smaller version of this one. It is the thing a reader will ask for next. **It shipped in
+iteration 42**; see "Moving one" above.
 
 ### Making one throw: the particles actions
 
@@ -5054,7 +5136,7 @@ wants particles for, the one thing this document could not say.
   else would have cost three edits. The good consequence, stated rather than discovered:
   **a rule whose only action is a particles verb appears on that emitter's own panel**,
   where a camera effect or a spawn, naming nothing a scene holds, appears only in the
-  scene's list. `spawnPointsOf`, `migrateRuleToKind`, `removePrefab` and `countPrefabSpawns`
+  scene's list. `rulePointsOf`, `migrateRuleToKind`, `removePrefab` and `countPrefabSpawns`
   narrow with `=== 'spawn'` / `=== 'setVar'` and never fire for a new member, which is the
   right answer rather than a missed step.
 - **The store is untouched.** Nothing prunes a dangling `nodeId` for `destroy`,
@@ -5853,7 +5935,7 @@ tests/
   rules.spec.ts             a variable declared, a rule built and refused, a caption
                             written, a camera shaken, a number watched, a prefab
                             marked for building at a point or at an object,
-                            an object pushed — and a canvas
+                            an object pushed or moved — and a canvas
                             that runs none of it, builds none of it, moves none
                             of it, and does not move when the camera does
   labels.spec.ts            a caption that follows a variable, formatted, and a
@@ -6277,8 +6359,8 @@ did we refuse" but "what did we build that the newest feature still cannot name"
 pushing leaves is short and all of it is in the section above: no impulse or relative push, no
 acceleration/drag/bounce/gravity from a rule, no angular velocity, no push towards a point or
 at another object, no push on a spawned object or a nested one, no reading a velocity in a
-condition — and **no `setPosition`**, which is the one a reader will ask for next and is a
-genuine separate loosening rather than a smaller version of this.
+condition. **`setPosition`**, which this paragraph named as the next ask, shipped in iteration
+42 — see "Moving one" above.
 
 Blend modes shipped in iteration 36 and are the entry worth reading first, because of the
 three things named in the sentence below, that was the one nobody went back for. Masks,

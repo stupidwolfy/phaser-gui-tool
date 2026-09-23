@@ -29,7 +29,7 @@ import {
   scenePhysicsOf,
   prefabChildrenOf,
   sliceInsetsOf,
-  spawnPointsOf,
+  rulePointsOf,
   scrollFactorOf,
   scrollOffsetOf,
   textStyleOf,
@@ -1045,7 +1045,7 @@ export class EditorScene extends Phaser.Scene {
    * Where the scene's rules will build something, as the last sync read them.
    *
    * Held rather than re-read per frame, which is the **`tweenGhosts` pattern**
-   * and deliberately not `drawTouchZones`': `spawnPointsOf` goes through
+   * and deliberately not `drawTouchZones`': `rulePointsOf` goes through
    * `rulesOf`, which builds a child map and calls `collidersOf`, `soundsOf` and
    * `scenePhysicsOf`. A spawn point changes only when the document does, so the
    * sync is where it belongs and `update()` only has the zoom to react to.
@@ -3010,7 +3010,7 @@ export class EditorScene extends Phaser.Scene {
     // through `rulesOf`, which is far more work than a per-frame draw should be
     // doing, and a spawn point changes only when the document does. Nothing is
     // built from it — the canvas runs no rule — so this is a mark, not a state.
-    this.spawnPoints = spawnPointsOf(state.project, scene);
+    this.spawnPoints = rulePointsOf(state.project, scene);
     this.syncNodes(scene.children, null, seen, '');
 
     for (const [id, object] of this.displayObjects) {
