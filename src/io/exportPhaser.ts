@@ -3702,9 +3702,30 @@ function ruleActionLines(
       // `this` hardcoded rather than `ctx.receiver`, `buildSoundLines`' reason:
       // a rule only ever runs in a Scene's `create()`, and `${ctx.receiver}`
       // would read as though a prefab factory could reach one.
-      return entry === undefined
-        ? []
-        : [`${entry.fn}(this, ${num(action.x)}, ${num(action.y)});`];
+      if (entry === undefined) return [];
+      if (action.nodeId === undefined) {
+        return [`${entry.fn}(this, ${num(action.x)}, ${num(action.y)});`];
+      }
+      // Built at an object, and read off that object's binding *when the rule
+      // fires* — so a player who has walked since the scene started fires from
+      // where they are. `[0]`, `setVelocity`'s read: a tilemap's first layer
+      // stands where the map stands. A zero offset prints no term and a
+      // negative one prints a `-`, so the commonest case — a spawn right on its
+      // anchor — reads as it means and nothing reads `+ -10`.
+      //
+      // Undefined is an anchor that emitted no object, and this says so
+      // rather than returning nothing — unlike `setVelocity`, whose missing
+      // target is a push nobody would have seen, a spawn missing its anchor
+      // is a whole object that never appears. The camera follow's comment.
+      const at = bindings.get(action.nodeId)?.[0];
+      if (at === undefined) {
+        return [`// ${entry.fn} would be built at an object that could not be added.`];
+      }
+      const offset = (axis: string, by: number) =>
+        by === 0
+          ? `${at}.${axis}`
+          : `${at}.${axis} ${by < 0 ? '-' : '+'} ${num(Math.abs(by))}`;
+      return [`${entry.fn}(this, ${offset('x', action.x)}, ${offset('y', action.y)});`];
     }
 
     case 'setVisible':

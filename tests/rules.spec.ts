@@ -1258,6 +1258,160 @@ test.describe('building one', () => {
     expect(await editor.numberValue('Rule 1 do 1 y')).toBe(0);
   });
 
+  /**
+   * `onePrefab` plus one plain object for a spawn to be built at.
+   *
+   * Narrow, so the ring drawn 120 units to its right is clear of its fill on
+   * both projects, and in the scene's middle so the tether and the ring are
+   * both on screen.
+   */
+  async function prefabAndPlayer(editor: EditorPage): Promise<void> {
+    await onePrefab(editor);
+    await editor.addObject('Rectangle');
+    await editor.setField('Name', 'Player');
+    await editor.setField('Width', 40);
+    await editor.setField('Height', 40);
+    await editor.setField('X', 300);
+    await editor.setField('Y', 200);
+    await editor.deselect();
+  }
+
+  /** A rule built from the scene panel that spawns the coin at the player. */
+  async function spawnAtPlayer(editor: EditorPage, offsetX = 120): Promise<string> {
+    const name = await editor.addRule();
+    await editor.setRuleTrigger(name, 1, 'the scene starts');
+    await editor.openRule(name);
+    await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+    await editor.setChoice('Rule 1 do 1 at', 'Player');
+    await editor.setField('Rule 1 do 1 offset x', offsetX);
+    return name;
+  }
+
+  test('a spawn at an object round-trips, and names the object', async ({
+    editor,
+  }, testInfo) => {
+    await prefabAndPlayer(editor);
+    const name = await spawnAtPlayer(editor);
+
+    const document = await saved(editor);
+    expect(document.schemaVersion).toBe(SCHEMA);
+    const scene = (document.scenes as {
+      children: { id: string; name: string }[];
+      rules?: { do: unknown[] }[];
+    }[])[0];
+    const player = scene.children.find((node) => node.name === 'Player');
+    // Choosing an object resets the numbers to an offset of nothing, so what
+    // is left is the one field the test set.
+    expect(scene.rules?.[0].do).toEqual([
+      { kind: 'spawn', prefabId: expect.any(String), x: 120, y: 0, nodeId: player?.id },
+    ]);
+
+    const path = testInfo.outputPath('spawn-at.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    await editor.deselect();
+    await editor.openRule(name);
+    expect(await editor.selectValue('Rule 1 do 1 at')).toBe(player?.id);
+    expect(await editor.numberValue('Rule 1 do 1 offset x')).toBe(120);
+
+    // The field is called `nodeId`, so the rule is on the object's own panel
+    // with no edit to `ruleNames` — which is the reason for the name.
+    await editor.selectInTree('Player');
+    expect(await editor.ruleCount()).toBe(1);
+  });
+
+  test('clearing the object takes the key out of the file', async ({ editor }) => {
+    await prefabAndPlayer(editor);
+    await spawnAtPlayer(editor);
+    await editor.setChoice('Rule 1 do 1 at', 'A fixed point');
+
+    const document = await saved(editor);
+    const scene = (document.scenes as { rules?: { do: Record<string, unknown>[] }[] }[])[0];
+    const action = scene.rules?.[0].do[0] ?? {};
+    // Absent is the only spelling of "no anchor" — never a key holding
+    // `undefined`, which would vanish through `JSON.stringify` here and survive
+    // in memory, two spellings of one state.
+    expect(Object.keys(action)).not.toContain('nodeId');
+    expect(action).toEqual({
+      kind: 'spawn',
+      prefabId: expect.any(String),
+      x: 480,
+      y: 270,
+    });
+  });
+
+  test('the mark is drawn at the object plus the offset, and follows it', async ({
+    editor,
+  }) => {
+    await prefabAndPlayer(editor);
+    await spawnAtPlayer(editor);
+    await editor.closePanels();
+    await editor.settle();
+
+    // An extent rather than a centre: the tether runs from the object to the
+    // ring, so the mark's left end is the object and its right end is past
+    // the point the offset names.
+    const before = await editor.findDrawnBox(MARKER);
+    const anchor = await editor.sceneToScreen({ x: 300, y: 200 });
+    const point = await editor.sceneToScreen({ x: 420, y: 200 });
+    expect(Math.abs(before.x - anchor.x)).toBeLessThan(4);
+    expect(before.x + before.width).toBeGreaterThan(point.x);
+    // Nothing built, by the rule the unanchored spawn already keeps.
+    expect((await editor.findDrawn(COIN)).count).toBe(0);
+
+    // Moving the object moves the mark: the offset is from the object.
+    await editor.selectInTree('Player');
+    await editor.setField('X', 400);
+    await editor.deselect();
+    await editor.closePanels();
+    await editor.settle();
+    const after = await editor.findDrawnBox(MARKER);
+    const moved = await editor.sceneToScreen({ x: 400, y: 200 });
+    expect(Math.abs(after.x - moved.x)).toBeLessThan(4);
+  });
+
+  test('it emits a call that reads the object when the rule fires', async ({
+    editor,
+  }) => {
+    await prefabAndPlayer(editor);
+    await spawnAtPlayer(editor);
+    await editor.setField('Rule 1 do 1 offset y', -30);
+    await editor.settle();
+
+    const exported = (await editor.exportCode('ts')).contents;
+    expect(exported).toContain('createCoin(this, player.x + 120, player.y - 30);');
+  });
+
+  test('a hand-edited spawn at a missing object costs the action', async ({
+    editor,
+  }, testInfo) => {
+    await prefabAndPlayer(editor);
+    const name = await spawnAtPlayer(editor);
+    await editor.panel('inspect').getByTitle('Add an action to rule 1').click();
+    await editor.settle();
+
+    const document = await saved(editor);
+    const scene = (document.scenes as { rules: { do: Record<string, unknown>[] }[] }[])[0];
+    // Not repaired to a fixed point: that would turn an offset of (120, 0)
+    // into a prefab built in the corner of the level, which widens what the
+    // action says.
+    scene.rules[0].do[0] = { ...scene.rules[0].do[0], nodeId: 'gone' };
+
+    const path = testInfo.outputPath('bent-anchor.phaser.json');
+    await fs.writeFile(path, JSON.stringify(document), 'utf8');
+    await editor.newProject();
+    await editor.openFile(path);
+    await editor.deselect();
+
+    expect(await editor.ruleCount()).toBe(1);
+    await editor.openRule(name);
+    await expect(editor.panel('inspect').getByTitle('Remove action 2 of rule 1')).toHaveCount(0);
+    expect(await editor.selectValue('Rule 1 do 1')).toBe('restartScene');
+    await editor.closePanels();
+    expect((await editor.findDrawn(MARKER)).count).toBe(0);
+  });
+
   test('deleting the prefab takes the spawn and leaves the rest', async ({
     editor,
   }) => {

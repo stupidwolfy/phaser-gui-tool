@@ -147,7 +147,11 @@ a hole by finding a *false* argument, because the clause that kept masks out ("t
 thing in this document that points at another node") was wrong about a document holding
 `followId`, both sides of a collider and ten `RuleAction` node ids. The first feature here
 whose refusal was **one sentence covering six filters at once**, which is where a welded
-argument is hardest to see.
+argument is hardest to see. Iteration 41 (shipped) let a rule build a prefab **where an object
+stands** rather than only at a fixed point: an optional `nodeId` on the `spawn` action, with
+`x`/`y` read as an offset from it — the loosening iteration 34 named as "the obvious next ask",
+and cheaper than it predicted, because naming the field `nodeId` rather than `at` made
+`ruleNames` and the scene duplicator's remap inherit it with no edit.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -4592,10 +4596,9 @@ placement and never again. This calls it a second time.
   names a document node and a spawned one has no id, which is `containerBounds`' "two coins would
   fight over one map entry" arriving at runtime; a `delayedCall` per spawn is "spawn, *then*
   destroy", which is `tweens.chain`'s refusal and iteration 28's line verbatim. It is the hole a
-  reader meets first, so the panel says it. **No spawn at an object's position**, which is the
-  obvious next ask and a pure loosening — `at: { x, y } | { nodeId }` — but a second shape the
-  reader, the panel and the canvas mark each have to carry, and a dangling node would then cost
-  the action too. **No random position, no count and no velocity**: the first two are values that
+  reader meets first, so the panel says it. ~~No spawn at an object's position~~ — **shipped in
+  iteration 41**; see "Building one at an object" below, including why the shape turned out to be
+  an optional field rather than the `at: { x, y } | { nodeId }` union predicted here. **No random position, no count and no velocity**: the first two are values that
   depend on nothing the document said, and a velocity is a body on a definition's child, which
   physics bans for the reason it bans one in a container. **No spawning a plain node**, see
   above. And **a spawned object lands on top of everything**, because it is added after every
@@ -4609,6 +4612,101 @@ placement and never again. This calls it a second time.
   that deliberately produces one — and the name is the exported factory's. The workaround is to
   place one, edit it and delete the placement; the fix is prefab controls in the library, which is
   a panel rather than a field.
+
+### Building one at an object: the spawn anchor
+
+Iteration 41 closes the loosening iteration 34 named first: a `spawn` may carry an optional
+`nodeId`, and then the prefab is built **where that object is when the rule fires**, with
+`x`/`y` read as an offset from it. "A bullet from the player" and "a coin where the enemy
+stood" are the two things a fixed point could never say.
+
+- **An optional field, not the predicted union, and the name is the whole saving.** Iteration
+  34 wrote `at: { x, y } | { nodeId }`. That is a second shape every reader of the action would
+  have had to switch on. An optional `nodeId` beside the existing `x`/`y` is one shape. Calling
+  it `nodeId` rather than `at` or `anchorId` is iteration 37's lesson paid out a second time:
+  `ruleNames` and the store's `remapActionRefs` both key off `'nodeId' in action`, so an
+  anchored spawn **appears on its anchor's own panel** and a **duplicated scene remaps the
+  anchor to the copy**, with no edit to either. That is the opposite of an unanchored spawn,
+  which names nothing scene-local and appears only in the scene's own list.
+- **`remapActionRefs` needed exactly one change, and the compiler asked for it.** With the
+  field optional, `node(action.nodeId)` is `string | undefined` and does not compile. The
+  guard is `action.nodeId !== undefined`, which also stops an unanchored spawn gaining a key
+  holding `undefined` on a scene duplicate.
+- **`x`/`y` change meaning, and the panel says so in the label.** `Rule <n> do <m> x`/`y` for
+  a fixed point, `… offset x`/`offset y` once anchored. That is `cameraPan`'s "centre" and
+  `setVelocity`'s "speed": one word for a place and a distance is the recorded trap. Choosing
+  an object resets the numbers to (0, 0), and choosing "A fixed point" resets them to the scene
+  centre. Otherwise an offset of (480, 270) or a point of (0, 0) carries over from the other
+  meaning.
+- **Absent is the only spelling of "no anchor".** The panel destructures the key away rather
+  than writing `undefined`, and the reader attaches it only when present. So the inspector,
+  which writes the reader's output straight back, never adds an empty key. The rule
+  `setNodeBlendMode` and friends follow, one action over. `rules.spec.ts` asserts the key is
+  absent from the saved file.
+- **A dangling anchor costs the action, and it is not repaired to a fixed point.** That would
+  turn an offset of (10, 0) into the scene point (10, 0): a prefab built in the corner of the
+  level. That *widens* what the action says, which `rulesOf`'s one sentence forbids. It is
+  `destroy`'s split: a node reaches nothing outside the action naming it. `byId` is
+  `scene.children`, so an anchor inside a container or a definition is refused by the same
+  mechanism as every other rule reference. Any node type may anchor one, since every node has an
+  `x` and a `y`.
+- **Reading a position when the rule fires is not a condition on a live property.** Nothing
+  *tests* it, so no gate can widen. The value lands in a factory call whose result is still
+  discarded, so the list stays a list. `RuleCondition`'s refusal is about a **gate** and still
+  stands.
+- **The emit is `createCoin(this, player.x + 12, player.y - 34);`.** It reads the anchor's
+  binding at the moment the callback runs, so a player who has walked since the scene started
+  fires from where they are.
+  - It uses `[0]`, which is `setVelocity`'s read: a tilemap's first layer stands where the map
+    stands.
+  - A zero offset prints no term, and a negative one prints a `-`, so nothing reads `+ -34`.
+  - An anchor that emitted no object gets a **comment** rather than nothing. That is the
+    camera follow's treatment, and it deliberately differs from `setVelocity`'s silent `[]`: a
+    missing push is invisible, while a missing spawn is a whole object that never appears.
+  - There is no gate, helper, table or `EmitContext` field, so nothing above it moved.
+- **The canvas draws the ring at the anchor's document position plus the offset, tethered to
+  the object by a line.**
+  - `spawnPointsOf` resolves the anchor itself, so the renderer still never reads a table.
+  - Without the tether, an offset ring reads as a fixed point, which is the one thing it is
+    not.
+  - The ring is drawn from the document position, not from `scrollOffsets`: it is a mark about
+    a rule, not a drawn object.
+  - The anchor is folded into `spawnSignature`, so moving the object moves the mark.
+- **`SCHEMA_VERSION` did not bump — the guides case, eighteenth time — and this is the
+  sharpest edge any no-bump decision has recorded.** No new `NodeType`, and the key rides in on
+  `scenes`, which `parseProject` passes through verbatim, so a re-save keeps it. But an old
+  build's `ruleActionsOf` rebuilds a spawn field by field and **drops `nodeId`**. That build
+  then draws and exports the action as a fixed point *at the offset*, which is the corner of
+  the level. That is a wrong picture rather than a missing one, which is worse than iterations
+  31–38's "an old build doing less". And editing that rule there writes the key away for good,
+  because the panel writes the reader's output back. It stays unbumped on the rule's own
+  wording — the file does not break, and an untouched re-save loses nothing — but if a future
+  iteration adds a second edge like this, bump rather than record a third.
+- **The suite:**
+  - `rules.spec.ts` carries the round trip, the anchor's own panel, the key's absence once
+    cleared, the extent of the tethered mark (its left end on the object, its right end past
+    the offset) following the object, the dangling anchor costing the action, and the emitted
+    line.
+  - `export.spec.ts` carries the runtime claim, with a prefab placed nowhere and an anchor at
+    the left of the scene. The coin arriving near the anchor rather than at (0, 0) is what
+    separates "read the object" from "used the offset as a point".
+  - The hostile project adds three spawns, all on the *placed* prefab so `prefab-2`'s
+    "called exactly once" claim is untouched:
+    - one anchored at the node whose name is the breakout string, with a negative offset;
+    - one at the image-less emitter, which must emit the comment;
+    - one at a missing node, which must emit nothing.
+  - The dangling-anchor guard was **removed and the test confirmed red**, iteration 33's rule.
+
+**What stays refused.**
+- **No spawn at a *spawned* object**: a spawned object has no id for anything to name, which
+  is the wall `destroy` and `setVelocity` already hit.
+- **No rotation from the anchor**: the offset is in scene axes, not the object's, so "in front
+  of the player" means a fixed direction. Turning it with the object is `x * cos + y * sin`,
+  which is arithmetic on a live value and a value depending on a value.
+- **No velocity inherited from the anchor**, for the same reason `spawn` refuses a velocity at
+  all.
+- **No anchor on another rule's trigger object implicitly** ("spawn at whatever was tapped"):
+  that is a callback parameter, which iteration 28 refuses by name.
 
 ### Pushing one: the `setVelocity` action
 
@@ -5754,7 +5852,8 @@ tests/
                             the buttons a thumb will drive it with
   rules.spec.ts             a variable declared, a rule built and refused, a caption
                             written, a camera shaken, a number watched, a prefab
-                            marked for building, an object pushed — and a canvas
+                            marked for building at a point or at an object,
+                            an object pushed — and a canvas
                             that runs none of it, builds none of it, moves none
                             of it, and does not move when the camera does
   labels.spec.ts            a caption that follows a variable, formatted, and a
@@ -6230,9 +6329,9 @@ trigger. **No lifespan, and nothing destroys a spawned object** — the one a us
 and it is not deferred work: `destroy` names a document node, a spawned one has no id, and a
 `delayedCall` per spawn is "spawn, *then* destroy", which is `tweens.chain`'s refusal and
 iteration 28's line verbatim. A loosening would need spawned objects to be *addressable*,
-which is the per-instance identity prefabs already refuse. **No spawn at an object's
-position** — the obvious next ask and a genuine pure loosening, `at: { x, y } | { nodeId }`,
-though it is a second shape the reader, the panel and the canvas mark each have to carry.
+which is the per-instance identity prefabs already refuse. **Spawning at an object's
+position has since shipped**, in iteration 41, as an optional `nodeId` rather than the
+predicted union. See "Building one at an object".
 **No random position, no count, no velocity** — the first two are values that depend on
 nothing the document said, and the third is a body on a definition's child, which physics
 bans for the reason it bans one in a container. **No spawning a plain node** — a node is one

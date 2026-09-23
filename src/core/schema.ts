@@ -3740,8 +3740,30 @@ export type RuleAction =
    * shares it and there is nothing to remap. Unlike them it *can* dangle, and
    * a dangling prefab costs the **action** rather than the rule: see
    * `ruleActionsOf`.
+   *
+   * **`nodeId` is an optional anchor, and iteration 41 is the whole of it.**
+   * Present, the prefab is built where that object *is when the rule fires*
+   * and `x`/`y` become an offset from it — which is "a bullet from the
+   * player" and "a coin where the enemy stood", the two things a fixed point
+   * could never say. Absent, `x`/`y` are the scene point they always were, so
+   * every spawn written before this reads, draws and exports byte for byte as
+   * it did. Absent is the only spelling of "no anchor": the store never writes
+   * the key holding `undefined`.
+   *
+   * The field is called `nodeId` and not `at` or `anchorId` on purpose —
+   * iteration 37's note, and the reason this cost almost nothing: `ruleNames`
+   * and the store's `remapActionRefs` both key off `'nodeId' in action`, so an
+   * anchored spawn appears on its anchor's own panel and a duplicated scene
+   * remaps the anchor to the copy, with no edit to either. Its anchor is also
+   * the one reference here that is scene-local, which is exactly why the remap
+   * is wanted.
+   *
+   * Reading a position at the moment the rule fires is not a condition on a
+   * live property: nothing *tests* it, so no gate can widen, and the value
+   * lands in a factory call whose result is still discarded. The list stays a
+   * list.
    */
-  | { kind: 'spawn'; prefabId: string; x: number; y: number }
+  | { kind: 'spawn'; prefabId: string; x: number; y: number; nodeId?: string }
   /**
    * The five camera effects, and they are the first actions besides
    * `restartScene` that **name nothing the document holds** — no node, no
@@ -4203,6 +4225,16 @@ function ruleActionsOf(
         // the rule's only action the empty-`do` check takes the rule, which is
         // the treatment a lone `destroy` of a missing node already gets.
         if (findPrefab(project, prefabId) === undefined) break;
+        // The anchor, when there is one. A dangling anchor costs the action,
+        // `destroy`'s split for `destroy`'s reason — and it is *not* repaired
+        // to "no anchor", because that would turn an offset of (10, 0) into
+        // the scene point (10, 0): a prefab built in the corner of the level,
+        // which widens what the action says rather than narrowing it. `byId`
+        // is `scene.children` alone, so a nested anchor is out by the same
+        // mechanism that keeps every other rule reference top-level. Any type
+        // may anchor one: every node has an `x` and a `y`.
+        const anchor = typeof row.nodeId === 'string' && row.nodeId !== '' ? row.nodeId : '';
+        if (anchor !== '' && !byId.has(anchor)) break;
         // Repaired, never dropped, and `cameraPan`'s own two coordinates to
         // the character: there is no gate here to open, so a repair cannot
         // widen what the rule says. `prefabChildrenOf` is deliberately *not*
@@ -4210,12 +4242,16 @@ function ruleActionsOf(
         // and `buildFactories` still emits an empty Container for it, so a
         // length check here would have the reader and the exporter disagree
         // about whether the action exists at all.
-        actions.push({
+        const spawn: RuleAction = {
           kind: 'spawn',
           prefabId,
           x: finiteOr(row.x, 0),
           y: finiteOr(row.y, 0),
-        });
+        };
+        // Attached only when present, so the inspector — which edits this
+        // reader's output and writes it back — never puts an empty key into a
+        // spawn that had none.
+        actions.push(anchor === '' ? spawn : { ...spawn, nodeId: anchor });
         break;
       }
 
@@ -4515,6 +4551,12 @@ export interface SpawnPoint {
   y: number;
   /** The prefab's own name, resolved here so the renderer never reads the table. */
   name: string;
+  /**
+   * Where the anchor object stands in the document, for a spawn built at one.
+   * The renderer draws a tether from here to the ring, because an offset ring
+   * with nothing joining it to its object reads as a fixed point.
+   */
+  anchor?: { x: number; y: number };
 }
 
 /**
@@ -4546,7 +4588,19 @@ export function spawnPointsOf(project: Project, scene: SceneDoc): SpawnPoint[] {
       // cannot answer undefined — the `?? ` is the belt to that reader's
       // braces, `rgbArgs`' fallback one module over.
       const prefab = findPrefab(project, action.prefabId);
-      points.push({ x: action.x, y: action.y, name: prefab?.name ?? 'Prefab' });
+      const name = prefab?.name ?? 'Prefab';
+      if (action.nodeId === undefined) {
+        points.push({ x: action.x, y: action.y, name });
+        continue;
+      }
+      // An anchored spawn is drawn at the anchor's *document* position plus the
+      // offset — the frame the game opens on, which is the only moment the
+      // canvas can speak for. `rulesOf` has already refused a dangling anchor,
+      // and a top-level node's `x`/`y` are scene coordinates, so this is exact.
+      const node = scene.children.find((child) => child.id === action.nodeId);
+      if (node === undefined) continue;
+      const at = { x: node.transform.x, y: node.transform.y };
+      points.push({ x: at.x + action.x, y: at.y + action.y, name, anchor: at });
     }
   }
   return points;

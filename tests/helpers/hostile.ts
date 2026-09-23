@@ -546,6 +546,19 @@ export function hostileProject(): Project {
               // `tsc --strict` — and, in the runnable page, a factory that has
               // to exist and have had its texture preloaded.
               { kind: 'spawn' as const, prefabId: 'prefab-2', x: 137, y: 249 },
+              // Built at an object, on the node whose *name* is the breakout
+              // string — so the anchor's binding, which is `toIdentifier` of
+              // that name, is what `.x` and `.y` are read off. A non-zero
+              // offset on both axes and a negative one, so `tsc --strict` meets
+              // `<binding>.x + n` and `<binding>.y - n` rather than a bare read.
+              // It names the *placed* prefab, so `prefab-2`'s "called exactly
+              // once" claim in `export.spec.ts` is left alone.
+              { kind: 'spawn' as const, prefabId: 'prefab-1', x: 12, y: -34, nodeId: 'a' },
+              // And one at `o`, the emitter with no image, which emits no
+              // object: the action has to answer with a comment rather than a
+              // read of a binding nothing declared — which in the `.ts` would
+              // be a compile error rather than a wrong picture.
+              { kind: 'spawn' as const, prefabId: 'prefab-1', x: 0, y: 0, nodeId: 'o' },
               { kind: 'setVisible' as const, nodeId: 'c', visible: false },
               { kind: 'playSound' as const, soundId: 'snd-1' },
               { kind: 'stopSound' as const, soundId: 'snd-3' },
@@ -855,6 +868,11 @@ export function hostileProject(): Project {
             conditions: [],
             do: [
               { kind: 'spawn' as const, prefabId: 'prefab-gone', x: 10, y: 20 },
+              // A real prefab at an object that is not there, which costs the
+              // action for the same reason and is *not* repaired to a fixed
+              // point: an offset of (5, 6) read as a place is a prefab built in
+              // the corner of the level.
+              { kind: 'spawn' as const, prefabId: 'prefab-1', x: 5, y: 6, nodeId: 'gone' },
               { kind: 'addVar' as const, variableId: 'var-2', by: 3 },
             ],
           },

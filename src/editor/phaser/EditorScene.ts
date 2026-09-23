@@ -3356,7 +3356,9 @@ export class EditorScene extends Phaser.Scene {
   private drawSpawnPoints(): void {
     const { zoom } = this.cameras.main;
     const signature = this.spawnPoints.length
-      ? `${zoom}:${this.spawnPoints.map((p) => `${p.x},${p.y}/${p.name}`).join('|')}`
+      ? `${zoom}:${this.spawnPoints
+          .map((p) => `${p.x},${p.y}/${p.name}@${p.anchor ? `${p.anchor.x},${p.anchor.y}` : ''}`)
+          .join('|')}`
       : '';
     if (signature === this.spawnSignature) return;
     this.spawnSignature = signature;
@@ -3376,6 +3378,26 @@ export class EditorScene extends Phaser.Scene {
       const arm = radius * 1.6;
       this.spawnGraphics.lineBetween(point.x - arm, point.y, point.x + arm, point.y);
       this.spawnGraphics.lineBetween(point.x, point.y - arm, point.x, point.y + arm);
+      // A spawn built at an object is tethered to it, from the object's
+      // position to the ring's edge. Without the line an offset ring reads as
+      // a fixed point, which is the one thing it is not: it goes wherever the
+      // object has gone by the time the rule fires. Drawn from the document
+      // position only — this is a mark about a rule, not a drawn object, so a
+      // scroll factor's offset has nothing to say about it.
+      if (point.anchor !== undefined) {
+        const dx = point.x - point.anchor.x;
+        const dy = point.y - point.anchor.y;
+        const length = Math.hypot(dx, dy);
+        if (length > radius) {
+          const scale = (length - radius) / length;
+          this.spawnGraphics.lineBetween(
+            point.anchor.x,
+            point.anchor.y,
+            point.anchor.x + dx * scale,
+            point.anchor.y + dy * scale,
+          );
+        }
+      }
 
       let label = this.spawnLabels[index];
       if (label === undefined) {
