@@ -509,6 +509,23 @@ select {
   margin-bottom: 10px;
 }
 
+/* One prefab definition's controls in the library, below the Manage toggle.
+   A hairline above and nothing else, which is `.section + .section`'s voice —
+   several cards stacked should read as one list, not as boxes. */
+.prefab-card {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* Its delete button carries the prefab's name, which is free user text, and
+   `.btn` is `nowrap` — so a long name is cut off inside the button rather than
+   drawn straight through its right-hand border. `.btn--add`'s rule for chips. */
+.prefab-card .btn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Same shape as .add-row, but it lives in the inspector: on a phone the tree
    row is already three controls wide, so draw order is arranged from here. */
 .arrange-row {

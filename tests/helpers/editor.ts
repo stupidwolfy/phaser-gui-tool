@@ -288,6 +288,49 @@ export class EditorPage {
     await this.settle();
   }
 
+  /**
+   * Opens the prefab library's own controls in the scene panel — rename and
+   * delete for every definition, placed or not.
+   *
+   * Pressed only when it is not already open: it is a toggle, and a second
+   * press from a test that did not know would close the very cards it wants.
+   */
+  async managePrefabs(): Promise<void> {
+    await this.openPanel('scene');
+    const toggle = this.panel('scene').getByRole('button', { name: 'Manage prefabs' });
+    if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click();
+    await this.settle();
+  }
+
+  /**
+   * An input in the prefab library, found by its label's exact text.
+   *
+   * `field()` is scoped to the inspector, and must stay so: on the desktop
+   * layout both panels are on screen together, so a page-wide lookup would find
+   * the inspector's `Prefab name` beside the library's `Prefab 1 name`.
+   */
+  libraryField(label: string): Locator {
+    return this.labelled(label, 'scene').locator('input.field__input');
+  }
+
+  /** Types into a library field the way `setField` types into the inspector's. */
+  async setLibraryField(label: string, value: string): Promise<void> {
+    await this.managePrefabs();
+    const input = this.libraryField(label);
+    await input.fill(value);
+    await input.blur();
+    await this.settle();
+  }
+
+  /** Deletes a prefab from the library, by its named button. */
+  async deletePrefabFromLibrary(name: string): Promise<void> {
+    await this.managePrefabs();
+    await this.panel('scene')
+      .getByRole('button', { name: `Delete prefab ${name}`, exact: true })
+      .click();
+    await this.settle();
+  }
+
   /** Turns the current selection into a prefab, from the inspector. */
   async saveAsPrefab(): Promise<void> {
     await this.openPanel('inspect');
@@ -1131,9 +1174,9 @@ export class EditorPage {
     return this.labelled(label).locator('input.field__check');
   }
 
-  private labelled(label: string): Locator {
+  private labelled(label: string, panel: PanelName = 'inspect'): Locator {
     const exact = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
-    return this.panel('inspect')
+    return this.panel(panel)
       .locator('label.field')
       .filter({ has: this.page.locator('.field__label').filter({ hasText: exact }) });
   }

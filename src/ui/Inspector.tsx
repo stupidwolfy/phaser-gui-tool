@@ -88,6 +88,7 @@ import { AudioSection } from './AudioPicker';
 import { FontPicker } from './FontPicker';
 import { SolidPalette, TilePalette } from './TilePalette';
 import { AnimationEditor } from './AnimationEditor';
+import { prefabRemovalSummary } from './SceneTree';
 import { Section, SectionsToggle } from './Section';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
 
@@ -2567,13 +2568,7 @@ function InstanceSection({ node }: { node: GameObjectNode }) {
         <button
           className="btn btn--block btn--danger"
           onClick={() => removePrefab(prefab.id)}
-          title={
-            `Detaches ${uses} instance${uses === 1 ? '' : 's'}` +
-            (spawns > 0
-              ? `, removes ${spawns} spawn action${spawns === 1 ? '' : 's'}`
-              : '') +
-            ' and removes the prefab'
-          }
+          title={prefabRemovalSummary(uses, spawns)}
         >
           Delete prefab
         </button>

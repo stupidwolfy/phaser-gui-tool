@@ -156,7 +156,12 @@ let a rule **move** an object: a `setPosition` action, to a point or to another 
 offset. That is the loosening iteration 37 named as "the thing a reader will ask for next", and
 it works on a node with no body at all. It is the first action to carry a *second* node
 reference (`atId`), so it is the first that `ruleNames` and `remapActionRefs` could not inherit
-from a field name, and each gained one explicit line.
+from a field name, and each gained one explicit line. Iteration 43 (shipped) closed the one
+hole iteration 34 recorded as having *made* rather than inherited: a prefab placed nowhere had
+no controls anywhere, so one built only by a rule could be neither renamed nor deleted without
+placing it first. The library in the scene panel now carries each definition's name, where it
+is used and a delete, behind one toggle — and like iteration 32 it changes the document not at
+all.
 See the README for the user-facing feature list.
 
 **Mobile is a first-class target**, not an afterthought. Anything added has to work with
@@ -805,6 +810,44 @@ plus its own transform, name, visibility and alpha.
 - **The clip's field is labelled "Prefab name" for the reason the clip's is "Animation
   name".** The object's own Name field is a few rows up the same panel, and this one is the
   definition's, shared by every instance — and the factory function's name in exported code.
+
+### The library's own controls
+
+Iteration 43 put each definition's rename and delete in the scene panel's library, beside the
+place buttons, because until then they lived only on a placed instance's panel — and a prefab a
+rule's `spawn` builds is placed nowhere. There was no way to rename the exported factory or
+delete the definition without placing one first, and the suite said so in a comment.
+
+- **No document change at all**: no schema, no reader, no exporter, no `EditorScene` edit and no
+  `SCHEMA_VERSION` question. Both controls go through `renamePrefab` and `removePrefab`, which
+  already existed, so a delete from the library detaches instances and strips spawn actions
+  exactly as the inspector's does — one store action, two buttons.
+- **Behind one `Manage prefabs` toggle, not always open.** The scene panel is on screen at all
+  times and on a phone sheet the tree sits under it; three rows per prefab would push every
+  object down for an action taken a handful of times a project. A per-prefab button in the
+  place grid was the other shape, and a grid cell cannot hold a card. The open state is local
+  `useState`, like the tree's collapsed groups — never saved, never undoable, not persisted.
+- **The field is `Prefab <n> name`, never the inspector's `Prefab name`.** On desktop both panels
+  are on screen together, so with an instance selected both fields are visible at once and an
+  exact label would name two of them. Indexed, as `Variable <n> name` and `Rule <n> name` are.
+  One field, two controls — the tile eraser's rule.
+- **The delete is `Delete prefab <name>`.** The inspector's is a bare `Delete prefab` and the
+  tree's rows are `Delete <object>`, so a named one collides with neither under exact matching
+  (`Delete layer <x>`'s rule). No confirm, matching the inspector's: it is one undo step.
+  Because the name is free user text, `.prefab-card .btn` ellipsises rather than letting a long
+  one run through the button's border.
+- **`prefabRemovalSummary` is the one sentence for both delete buttons' titles.** It is exported
+  from `SceneTree.tsx` and imported by `InstanceSection`, so the two cannot drift apart about a
+  press that detaches instances and removes rule actions.
+- **The usage hint has a third case that matters most**: "Placed nowhere and built by nothing".
+  A definition in that state is dead weight in the export's factory list, and this is the one
+  place in the editor that can say so. Both counts are plain numbers, so they are selected
+  directly: `countPrefabUses` and `countPrefabSpawns` are *not* the `tileMapOf` trap.
+- **The suite reaches the library through `EditorPage.managePrefabs`, `setLibraryField` and
+  `deletePrefabFromLibrary`**, and `labelled` now takes a panel defaulting to `'inspect'`, so
+  `field()` stays inspector-scoped for every existing caller. `rules.spec.ts`' "deleting the
+  prefab takes the spawn" test lost its place-then-delete workaround and now deletes a prefab
+  that was never placed, which is the claim the hole was about.
 
 ## Scenes
 
@@ -4610,7 +4653,8 @@ placement and never again. This calls it a second time.
   object `create()` emitted — Phaser's display list rather than a decision here, there being no
   `depth` in this schema at all; it is the first thing the document can say that has no position
   in the array "draw order is the array order" is about.
-- **One hole this iteration *made* rather than inherited, and it is worth naming:** a prefab
+- **One hole this iteration *made* rather than inherited — closed in iteration 43**, which put
+  the definition's controls in the library; see "The library's own controls". What it said: a prefab
   placed nowhere **has no panel**. `removePrefab`, `renamePrefab` and the use count all live in
   `InstanceSection`, which renders only with an `instance` node selected, and the scene panel's
   library only places. That was already true of an unplaced definition; this is the first feature
@@ -5908,7 +5952,8 @@ tests/
   guides.spec.ts            placing a guide, dragging it, and a drag agreeing with it
   animation.spec.ts         slicing a sheet, drawing one frame, playing a clip
   atlas.spec.ts             an image cut into named frames of unequal size, and repacked
-  prefabs.spec.ts           saving a prefab, placing it twice, editing it once
+  prefabs.spec.ts           saving a prefab, placing it twice, editing it once, and
+                            renaming or deleting it from the library
   tilemap.spec.ts           slicing a tileset, painting it, filling and erasing, and
                             layering it: which one is on top, hidden, moved and resized
   particles.spec.ts         an emitter stopped, previewed, reconfigured and cleared
@@ -6418,10 +6463,9 @@ predicted union. See "Building one at an object".
 nothing the document said, and the third is a body on a definition's child, which physics
 bans for the reason it bans one in a container. **No spawning a plain node** — a node is one
 object that already exists; the thing this document has for "build another" is a prefab.
-And **no panel for a prefab nothing places**, which is the one hole this iteration *made*:
-the definition's own controls live on an instance's panel, so a spawn-only prefab can be
-neither renamed nor deleted without placing one first — see "Making one" above, and note that
-the shape of the fix is prefab controls in the library rather than a field anywhere.
+The one hole this iteration *made* — **no panel for a prefab nothing places** — closed in
+iteration 43, in the shape predicted here: prefab controls in the library rather than a field
+anywhere. See "The library's own controls" under Prefabs.
 
 Play shipped in iteration 32, and what it leaves is short because it adds nothing to the
 document to leave holes in. **No hot reload** — the overlay covers every control that could

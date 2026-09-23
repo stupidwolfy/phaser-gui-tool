@@ -1425,16 +1425,15 @@ test.describe('building one', () => {
     await editor.setChoice('Rule 1 do 2', 'Restart this scene');
     await editor.settle();
 
-    // Reached through a placement, since the definition's own controls live on
-    // an instance's panel — which is itself a hole this iteration names.
-    await editor.placePrefab('Coin');
-    // `placePrefab` opens the *scene* panel, and on mobile that leaves the
-    // inspector sheet translated off-screen — where it still matches a locator
-    // and cannot be clicked. Every `setField`/`setChoice` helper opens it for
-    // you; a raw `panel('inspect')` press has to say so itself.
-    await editor.openPanel('inspect');
-    await editor.panel('inspect').getByRole('button', { name: 'Delete prefab' }).click();
-    await editor.settle();
+    // From the library, with no instance of it ever placed: a prefab only a
+    // rule builds is exactly the one that used to have no controls anywhere,
+    // and deleting it meant placing one first.
+    await editor.managePrefabs();
+    await expect(editor.panel('scene').getByTitle('Prefab 1 use')).toHaveText(
+      'Placed nowhere — only rules build it (1 spawn action).',
+    );
+    await expect(editor.treeItems()).toHaveCount(0);
+    await editor.deletePrefabFromLibrary('Coin');
 
     // The action goes and the rule stays, which is the store agreeing with the
     // reader: a dangling prefab costs the action, so a deletion must cost the

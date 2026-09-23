@@ -164,6 +164,78 @@ test('deleting a prefab detaches its instances rather than erasing them', async 
   expect((await editor.findDrawn(BODY)).count).toBeGreaterThan(200);
 });
 
+/**
+ * The library's own controls — rename and delete for a definition, reachable
+ * with no instance selected, and with no instance anywhere at all.
+ *
+ * Before these, a definition's only controls lived on a placed instance's
+ * panel, so a prefab nothing placed could not be renamed or deleted without
+ * placing one first. `rules.spec.ts` carries the spawn-only case, which is the
+ * one the hole was about; these carry the library's own behaviour.
+ */
+test.describe('the library', () => {
+  test('renaming a prefab there renames it everywhere it is shown', async ({ editor }) => {
+    await oneRectanglePrefab(editor);
+    // The new instance is selected, so the inspector's own `Prefab name` is on
+    // the page too — on desktop at the same moment as the library's field.
+    await editor.placePrefab('Body');
+
+    await editor.setLibraryField('Prefab 1 name', 'Crate');
+
+    await expect(
+      editor.panel('scene').getByRole('button', { name: '+ Crate', exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      editor.panel('scene').getByRole('button', { name: 'Delete prefab Crate', exact: true }),
+    ).toHaveCount(1);
+    // One field, two controls: the instance's panel reads what the library wrote.
+    expect(await editor.fieldValue('Prefab name')).toBe('Crate');
+
+    const saved = JSON.parse((await editor.saveToFile()).contents);
+    expect(saved.prefabs.map((p: { name: string }) => p.name)).toEqual(['Crate']);
+  });
+
+  test('deleting a prefab there detaches its instances, and undo brings it back', async ({
+    editor,
+  }) => {
+    await oneRectanglePrefab(editor);
+    await editor.placePrefab('Body');
+    await editor.deselect();
+
+    await editor.deletePrefabFromLibrary('Body');
+
+    // The inspector's delete does exactly this, and the two go through the one
+    // store action: two groups, each holding its own copy of the rectangle.
+    await expect(editor.treeItems()).toHaveCount(4);
+    await expect(editor.panel('scene').getByRole('button', { name: '+ Body' })).toHaveCount(0);
+    await editor.closePanels();
+    expect((await editor.findDrawn(BODY)).count).toBeGreaterThan(200);
+
+    // One undo step, and no confirm dialog in the way of taking it.
+    await editor.undo();
+    await expect(editor.treeItems()).toHaveCount(2);
+    await editor.openPanel('scene');
+    await expect(
+      editor.panel('scene').getByRole('button', { name: '+ Body', exact: true }),
+    ).toHaveCount(1);
+  });
+
+  test('says where a prefab is used, including nowhere', async ({ editor }) => {
+    await oneRectanglePrefab(editor);
+    // Its only instance gone, the definition is still in the library — and
+    // this is the one place in the editor that can say it is dead weight.
+    await editor.clearScene();
+    await editor.managePrefabs();
+    const use = editor.panel('scene').getByTitle('Prefab 1 use');
+    await expect(use).toHaveText('Placed nowhere and built by nothing.');
+
+    await editor.placePrefab('Body');
+    await editor.placePrefab('Body');
+    await editor.openPanel('scene');
+    await expect(use).toHaveText('Placed 2 times.');
+  });
+});
+
 test('a prefab survives a save and an open', async ({ editor }, testInfo) => {
   await oneRectanglePrefab(editor);
   await editor.placePrefab('Body');
