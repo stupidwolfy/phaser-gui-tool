@@ -1795,7 +1795,11 @@ function remapActionRefs(
   node: (id: string) => string,
   sound: (id: string) => string,
 ): RuleAction {
-  if ('nodeId' in action) return { ...action, nodeId: node(action.nodeId) };
+  // `!== undefined` because a spawn's anchor is optional: an unanchored spawn
+  // names nothing scene-local and must not gain a key holding `undefined`.
+  if ('nodeId' in action && action.nodeId !== undefined) {
+    return { ...action, nodeId: node(action.nodeId) };
+  }
   if ('soundId' in action) return { ...action, soundId: sound(action.soundId) };
   return action;
 }

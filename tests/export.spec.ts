@@ -211,7 +211,18 @@ test('a prefab exports as one factory function, called once per instance', async
   expect(names[0]).toBe(fn);
   // Two placements, one definition: the whole reason a factory is emitted at
   // all rather than the instance being expanded inline.
-  expect(exported.contents.split(`${fn}(this, `)).toHaveLength(3);
+  // Plus one from `rule-1`, which builds this one at an object — the only
+  // call to it that is not a placement.
+  expect(exported.contents.split(`${fn}(this, `)).toHaveLength(4);
+  expect(exported.contents).toMatch(
+    new RegExp(`${fn}\\(this, (\\w+)\\.x \\+ 12, \\1\\.y - 34\\);`),
+  );
+  // The anchor that emitted no object answers with a comment, never a read
+  // of a binding nothing declared; the dangling one answers with nothing.
+  expect(exported.contents).toContain(
+    `// ${fn} would be built at an object that could not be added.`,
+  );
+  expect(exported.contents).not.toContain('.x + 5, ');
   // And the spawned one exactly once, from inside a rule's callback and from no
   // placement at all — which is the whole claim `prefab-2` exists to make.
   expect(exported.contents.split(`${spawned}(this, `)).toHaveLength(2);
@@ -1949,6 +1960,68 @@ test('the exported page builds a prefab a rule spawns', async ({
     (blob) => blob.count > 200,
   );
   expect(reading.count).toBeGreaterThan(200);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
+test('the exported page builds a spawned prefab where its object stands', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // The anchored half of the claim above, and for its reason only here: the
+  // editor runs no rule. The anchor sits at the left of the scene and the coin
+  // is placed nowhere, so the coin's fill arriving *on the left* rather than
+  // at the scene's middle or its corner is what separates "read the object's
+  // position" from "used the offset as a point", which is the failure a lost
+  // `nodeId` would produce: a prefab built at (0, 0).
+  await editor.clearScene();
+  await editor.setSnapping(false);
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Coin');
+  await editor.setField('Fill', PREFAB_FILL);
+  await editor.setField('Width', 120);
+  await editor.setField('Height', 120);
+  await editor.saveAsPrefab();
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Player');
+  await editor.setField('Width', 20);
+  await editor.setField('Height', 20);
+  await editor.setField('X', 200);
+  await editor.setField('Y', 270);
+  await editor.deselect();
+
+  const name = await editor.addRule();
+  await editor.setRuleTrigger(name, 1, 'the scene starts');
+  await editor.openRule(name);
+  await editor.setChoice('Rule 1 do 1', 'Build a prefab');
+  await editor.setChoice('Rule 1 do 1 at', 'Player');
+  await editor.setField('Rule 1 do 1 offset y', 100);
+
+  const exported = await editor.exportCode('html');
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('spawn-at'),
+    exported.contents,
+  );
+
+  const reading = await reaches(
+    async () =>
+      findColor(run.page, await run.page.locator('canvas').screenshot(), PREFAB_FILL),
+    (blob) => blob.count > 200,
+  );
+  expect(reading.count).toBeGreaterThan(200);
+  // As fractions of the canvas, because the page letterboxes the scene into
+  // whatever the viewport is: the point is (200, 370) of a 960x540 scene.
+  const box = await run.page.locator('canvas').boundingBox();
+  expect(box).not.toBeNull();
+  const width = box?.width ?? 1;
+  const height = box?.height ?? 1;
+  expect(reading.x / width).toBeGreaterThan(200 / 960 - 0.05);
+  expect(reading.x / width).toBeLessThan(200 / 960 + 0.05);
+  expect(reading.y / height).toBeGreaterThan(370 / 540 - 0.05);
+  expect(reading.y / height).toBeLessThan(370 / 540 + 0.05);
   expect(run.errors).toEqual([]);
 
   await run.close();

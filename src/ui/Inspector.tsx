@@ -1329,7 +1329,10 @@ function ActionFields({
           </p>
         );
       }
-      // Three controls, so two rows — `cameraPan`'s layout and the 390px rule.
+      // Four controls, so three rows — `cameraPan`'s layout and the 390px rule,
+      // with the anchor picker on a row of its own because an object name is
+      // the widest thing on the card.
+      const anchored = action.nodeId !== undefined;
       return (
         <>
           <SelectField
@@ -1341,19 +1344,55 @@ function ActionFields({
             }))}
             onChange={(prefabId) => onChange({ ...action, prefabId })}
           />
+          <SelectField
+            label={`${label} at`}
+            value={action.nodeId ?? ''}
+            options={[{ value: '', label: 'A fixed point' }, ...nodeOptions(scene)]}
+            onChange={(nodeId) => {
+              // Cleared by destructuring the key away rather than writing
+              // `undefined`, which would survive in memory and vanish through
+              // `JSON.stringify` — two spellings of "no anchor". Switching
+              // between the two meanings resets the numbers, because an offset
+              // of (480, 270) and a point of (0, 0) are both nonsense carried
+              // over from the other meaning: an anchored spawn starts on its
+              // object, and a fixed one at the scene centre, `defaultAction`'s
+              // seed.
+              const { nodeId: _previous, ...rest } = action;
+              void _previous;
+              if (nodeId === '') {
+                onChange({
+                  ...rest,
+                  x: Math.round(scene.width / 2),
+                  y: Math.round(scene.height / 2),
+                });
+              } else {
+                onChange(
+                  anchored
+                    ? { ...rest, nodeId }
+                    : { ...rest, nodeId, x: 0, y: 0 },
+                );
+              }
+            }}
+          />
           <div className="field-row">
+            {/* "offset x" once anchored, because the same number now means a
+                distance from an object rather than a place in the scene — one
+                word for both is `cameraPan`'s recorded trap. */}
             <NumberField
-              label={`${label} x`}
+              label={anchored ? `${label} offset x` : `${label} x`}
               value={action.x}
               onChange={(x) => onChange({ ...action, x })}
             />
             <NumberField
-              label={`${label} y`}
+              label={anchored ? `${label} offset y` : `${label} y`}
               value={action.y}
               onChange={(y) => onChange({ ...action, y })}
             />
           </div>
           <p className="hint">
+            {anchored
+              ? 'Built where that object is when the rule fires, moved by the offset. '
+              : ''}
             Drawn on the canvas as a ring, and built only in the running game.
             It arrives on top of everything already there, and nothing removes
             it again — a spawn has no handle for another rule to name.
