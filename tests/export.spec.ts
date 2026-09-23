@@ -303,7 +303,11 @@ test('an emitter exports as one add.particles with its whole config', async ({
   // because the fixture holds three emitters — one over a sheet, one over an
   // atlas frame, and one with no image at all, which takes `constructorFor`'s
   // null return.
-  expect(exported.contents.split('.add.particles(')).toHaveLength(3);
+  //
+  // Scoped to the first scene, where those three live: the second holds the
+  // particle-trail fixtures, which are emitters too.
+  const [, first] = exported.contents.split(/^export class /m);
+  expect(first.split('.add.particles(')).toHaveLength(3);
 
   // The config is emitted whole, defaults included, so the generated code says
   // exactly what the document says rather than half-hiding settings behind
@@ -475,9 +479,10 @@ test('a body exports as add.existing and its setters, and a nested one as nothin
 
   const exported = await editor.exportCode('ts');
 
-  // Four bodies reach the output and no more: the fixture holds six, and the
+  // Six bodies reach the output and no more: the fixture holds eight, and the
   // two it leaves out are the one nested in a group and the one inside a prefab
-  // definition. Both are container children, whose x/y are their parent's
+  // definition. (Six rather than four since round bodies: the second scene's
+  // round ball and round bumper are two more top-level Arcade bodies.) Both are container children, whose x/y are their parent's
   // coordinates rather than the world's — a count rather than a whole-file
   // `not.toContain`, which is a shared resource this file has already been
   // burned by once.
@@ -486,7 +491,7 @@ test('a body exports as add.existing and its setters, and a nested one as nothin
   // anywhere that `PHYSICS_TYPES` actually learned about the two types
   // iteration 19 added. That list is a silent step: a type missing from it is
   // simply never offered a body, which looks exactly like a decision.
-  expect(exported.contents.match(/physics\.add\.existing\(/g) ?? []).toHaveLength(4);
+  expect(exported.contents.match(/physics\.add\.existing\(/g) ?? []).toHaveLength(6);
 
   // A static body is one call with nothing chained onto it, because Phaser's
   // StaticBody genuinely has no velocity, bounce, drag, mass or gravity.
@@ -941,8 +946,10 @@ test('a project with one world of each engine emits both, and neither leaks', as
   expect(exported.contents).toMatch(/\w+\.ignoreGravity = false;/);
 
   // And the static body gets the literal and nothing after it, which is the
-  // Arcade branch's "a StaticBody has nothing to chain" one engine over.
-  expect(exported.contents.match(/matter\.body\.setMass\(/g) ?? []).toHaveLength(1);
+  // Arcade branch's "a StaticBody has nothing to chain" one engine over. Two
+  // calls, one per *dynamic* Matter body — the faller and the round ball — so a
+  // third would be the static ramp wrongly given a mass.
+  expect(exported.contents.match(/matter\.body\.setMass\(/g) ?? []).toHaveLength(2);
 
   // The one thing a Matter scene must *not* emit: a collider row is Arcade's
   // `physics.add.collider`, and the scene that started Matter has no
