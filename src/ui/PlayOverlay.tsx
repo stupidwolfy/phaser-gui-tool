@@ -77,8 +77,8 @@ import phaserRuntimeUrl from '../../node_modules/phaser/dist/phaser.min.js?url';
  *   that worked only between the press and the boot would be worse than none.
  */
 export function PlayOverlay() {
-  const playing = useEditorStore((s) => s.playing);
-  if (!playing) return null;
+  const playGameRunning = useEditorStore((s) => s.playGameRunning);
+  if (!playGameRunning) return null;
   return <PlayFrame />;
 }
 
@@ -89,7 +89,7 @@ export function PlayOverlay() {
  * string alive for the rest of the session on a project nobody is playing.
  */
 function PlayFrame() {
-  const setPlaying = useEditorStore((s) => s.setPlaying);
+  const setPlayGameRunning = useEditorStore((s) => s.setPlayGameRunning);
   const stopRef = useRef<HTMLButtonElement>(null);
   /** Bumping this re-keys the iframe, which is the whole of Restart. */
   const [run, setRun] = useState(0);
@@ -125,18 +125,25 @@ function PlayFrame() {
   }, []);
 
   return (
-    <div className="play" role="dialog" aria-label="Play game">
+    <div className="play" role="dialog" aria-label="Play game" data-state="running">
       <div className="play__bar">
-        <span className="play__title">{sceneName}</span>
-        <button className="btn" onClick={() => setRun((current) => current + 1)}>
-          Restart
+        <span className="play__title">Play game running · {sceneName}</span>
+        <button
+          className="btn"
+          onClick={() => setRun((current) => current + 1)}
+          title="Restart Play game from the authored document"
+          aria-label="Restart"
+        >
+          <span aria-hidden="true">↻</span> Restart
         </button>
         <button
           ref={stopRef}
           className="btn btn--primary"
-          onClick={() => setPlaying(false)}
+          onClick={() => setPlayGameRunning(false)}
+          title="Stop Play game and return to the unchanged document"
+          aria-label="Stop"
         >
-          Stop
+          <span aria-hidden="true">■</span> Stop
         </button>
       </div>
       {/*
@@ -148,7 +155,7 @@ function PlayFrame() {
       <iframe
         key={run}
         className="play__frame"
-        title={`${sceneName} running`}
+        title={`${sceneName} — Play game running`}
         sandbox="allow-scripts"
         srcDoc={html}
       />

@@ -177,7 +177,7 @@ export default function App() {
       // anyway. This block stays because focus does come back out here: the
       // overlay's own bar is in this document, and a press on Restart leaves it
       // holding the keyboard until the next boot.
-      if (store.playing) return;
+      if (store.playGameRunning) return;
 
       if (event.ctrlKey || event.metaKey) {
         const key = event.key.toLowerCase();
@@ -290,7 +290,7 @@ export default function App() {
     try {
       useEditorStore.getState().showValidationIssues(validateProject(project));
       downloadFile(generateRunnableHtml(project), name, 'text/html');
-      notify(`Exported ${name}`);
+      notify(`Exported playable game page ${name}`);
     } catch (error) {
       if (error instanceof ProjectValidationError) notify('Export blocked by validation errors.');
       else throw error;

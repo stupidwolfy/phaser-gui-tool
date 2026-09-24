@@ -669,7 +669,7 @@ function RulesSection() {
       </button>
       <p className="hint">
         A rule is a moment, an optional check, and a list of things to do. The editor
-        never runs one — press Export to play what they build.
+        never runs one — choose Play game to run what they build.
       </p>
     </Section>
   );
@@ -1628,7 +1628,7 @@ function ActionFields({
             Pixels a second, and it <em>replaces</em> whatever the body was
             doing rather than adding to it — so 0 and 0 stops it dead. Negative
             y is upwards. Gravity, drag and whatever it hits take over from
-            there. The editor never runs it: press Play to see it move.
+            there. The editor never runs it: choose Play game to see it move.
           </p>
         </>
       );
@@ -1733,7 +1733,7 @@ function ActionFields({
           <p className="hint">
             One burst of {action.count} at the emitter&rsquo;s own position, and
             the flow stops there — an emitter a rule bursts does not go back to
-            streaming afterwards. The editor never fires a rule: press Play to
+            streaming afterwards. The editor never fires a rule: choose Play game to
             see it, or ▶ to watch the emitter itself.
           </p>
         </>
@@ -3249,7 +3249,7 @@ function ParticlesSection({
           between two collapsed bars, belonging to neither. */}
       {!previewMotion && (
         <p className="hint">
-          Stopped. Press ▶ in the toolbar to watch it run — the canvas holds
+          Stopped. Choose Preview motion in the toolbar to watch it run — the canvas holds
           still by default so objects stay where you put them.
         </p>
       )}
@@ -5000,7 +5000,7 @@ function TweenSection({ node }: { node: GameObjectNode }) {
 
           <p className="hint">
             −1 repeats forever. The dashed outline is where the tween ends up —
-            press ▶ to run it. Nothing here is written back to the object: the
+            choose Preview motion to run it. Nothing here is written back to the object: the
             numbers above stay exactly as you left them, and switching preview
             off puts everything back.
           </p>

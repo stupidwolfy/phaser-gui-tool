@@ -27,9 +27,9 @@ test('Play and every export report identical blocking codes', () => {
   const project = newProject();
   project.schemaVersion += 1;
   useEditorStore.getState().loadProject(project, null);
-  useEditorStore.getState().setPlaying(true);
+  useEditorStore.getState().setPlayGameRunning(true);
   const playCodes = useEditorStore.getState().validationIssues.filter((issue) => issue.blocksExport).map((issue) => issue.code);
-  expect(useEditorStore.getState().playing).toBe(false);
+  expect(useEditorStore.getState().playGameRunning).toBe(false);
 
   for (const exportPath of [() => generateScene(project, 'ts'), () => generateScene(project, 'js'), () => generateRunnableHtml(project)]) {
     let codes: string[] = [];
@@ -45,6 +45,6 @@ test('warnings do not block Play or export', () => {
   project.name = '';
   expect(() => generateScene(project)).not.toThrow();
   useEditorStore.getState().loadProject(project, null);
-  useEditorStore.getState().setPlaying(true);
-  expect(useEditorStore.getState().playing).toBe(true);
+  useEditorStore.getState().setPlayGameRunning(true);
+  expect(useEditorStore.getState().playGameRunning).toBe(true);
 });
