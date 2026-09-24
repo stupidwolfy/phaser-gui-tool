@@ -35,7 +35,10 @@ const FILE_TYPE_OPTIONS = {
 };
 const OPEN_FILE_TYPE_OPTIONS = [
   FILE_TYPE_OPTIONS,
-  { description: 'Legacy Phaser GUI project', accept: { 'application/json': [LEGACY_FILE_EXTENSION, '.json'] as string[] } },
+  {
+    description: 'Legacy Phaser GUI project',
+    accept: { 'application/json': [LEGACY_FILE_EXTENSION, '.json'] as string[] },
+  },
 ];
 
 // The File System Access API is still not in lib.dom for every TS release, and
