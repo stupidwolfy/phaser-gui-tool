@@ -276,12 +276,12 @@ export interface EditorState {
    * Coming back to a game covering the document is coming back to a document
    * you cannot see.
    *
-   * It is not `previewMotion` and does not touch it, which is the distinction
-   * worth keeping sharp. Preview animates the *document's* canvas and is the
-   * one moment that canvas stops mirroring the document exactly; Play runs a
-   * *game*, in a document of its own, and the editor's canvas goes on refusing
-   * to simulate underneath it because the editor's canvas is not what is
-   * running. See "Play" in CLAUDE.md.
+   * It is not `previewMotion`, which is the distinction worth keeping sharp.
+   * Starting Play game turns Preview motion off so two runtimes are never
+   * presented as active at once, but neither transition touches `project`.
+   * Preview motion animates the *document's* canvas; Play game runs a *game* in
+   * a document of its own, while the editor canvas underneath keeps refusing
+   * to simulate. See "Play" in CLAUDE.md.
    *
    * Nothing prunes it the way `paintingId` is pruned, because there is nothing
    * here to dangle — the overlay holds a snapshot of the page, not a reference

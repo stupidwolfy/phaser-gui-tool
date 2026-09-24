@@ -104,7 +104,7 @@ keyboard handlers.
 ### 3. Play and Preview terminology
 
 **Priority:** P0
-**Status:** Completed
+**Status:** Proposed
 
 **User problem.** The motion preview toggle and full game Play action use similar visual
 language even though one previews passive animation on the canvas and the other runs the
@@ -112,11 +112,11 @@ exported game in an isolated overlay.
 
 **Proposed scope.**
 
-- [x] Rename and visually distinguish **Preview motion** from **Play game** everywhere.
-- [x] Add short state text and accessible names that explain what runs and whether project
+- [ ] Rename and visually distinguish **Preview motion** from **Play game** everywhere.
+- [ ] Add short state text and accessible names that explain what runs and whether project
   data can change.
-- [x] Ensure Stop and Restart are unmistakable inside the running-game surface.
-- [x] Update Help, onboarding, and export language to use the same terms.
+- [ ] Ensure Stop and Restart are unmistakable inside the running-game surface.
+- [ ] Update Help, onboarding, and export language to use the same terms.
 
 **Relevant modules.** `src/ui/Toolbar.tsx`, `src/ui/PlayOverlay.tsx`,
 `src/editor/Viewport.tsx`, `src/core/store.ts`, and `tests/play.spec.ts`.
@@ -125,10 +125,10 @@ exported game in an isolated overlay.
 
 **Acceptance criteria.**
 
-- [x] Every motion-preview control is named “Preview motion,” and every full runtime launch
+- [ ] Every motion-preview control is named “Preview motion,” and every full runtime launch
   is named “Play game,” including accessible names and tooltips.
-- [x] Entering and leaving either mode restores the exact authored document state.
-- [x] Only controls relevant to the active mode are presented as active, and Play cannot be
+- [ ] Entering and leaving either mode restores the exact authored document state.
+- [ ] Only controls relevant to the active mode are presented as active, and Play cannot be
   mistaken for an on/off editor toggle.
 
 **Required validation.** Automated: extend Playwright coverage for labels, pressed states,
