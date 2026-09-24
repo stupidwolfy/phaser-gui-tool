@@ -174,7 +174,7 @@ export default function App() {
       // anyway. This block stays because focus does come back out here: the
       // overlay's own bar is in this document, and a press on Restart leaves it
       // holding the keyboard until the next boot.
-      if (store.playing) return;
+      if (store.playGameRunning) return;
 
       if (event.ctrlKey || event.metaKey) {
         const key = event.key.toLowerCase();
@@ -279,7 +279,7 @@ export default function App() {
     const { project } = useEditorStore.getState();
     const name = exportFileName(project, '.html');
     downloadFile(generateRunnableHtml(project), name, 'text/html');
-    notify(`Exported ${name}`);
+    notify(`Exported playable game page ${name}`);
   }, [notify]);
 
   const actions: ToolbarActions = {

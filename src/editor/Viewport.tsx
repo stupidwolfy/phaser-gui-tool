@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type Phaser from 'phaser';
 import { createEditorGame, getEditorScene } from './phaser/EditorGame';
+import { useEditorStore } from '../core/store';
 
 /**
  * React host for the Phaser canvas.
@@ -11,6 +12,7 @@ import { createEditorGame, getEditorScene } from './phaser/EditorGame';
 export function Viewport({ onReady }: { onReady?: (game: Phaser.Game) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
+  const previewMotion = useEditorStore((state) => state.previewMotion);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -41,7 +43,15 @@ export function Viewport({ onReady }: { onReady?: (game: Phaser.Game) => void })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return <div ref={containerRef} className="viewport" data-testid="viewport" />;
+  return (
+    <div
+      ref={containerRef}
+      className="viewport"
+      data-testid="viewport"
+      data-motion-state={previewMotion ? 'previewing' : 'stopped'}
+      aria-label={previewMotion ? 'Editor canvas — Preview motion running' : 'Editor canvas'}
+    />
+  );
 }
 
 /** Re-frames the scene in the viewport. Used by the "Fit" toolbar button. */
