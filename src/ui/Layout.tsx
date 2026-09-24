@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useEditorStore } from '../core/store';
 import { MoveBar } from './MoveBar';
 import { TileBar } from './TileBar';
@@ -11,16 +11,20 @@ function TabButton({
   icon,
   active,
   onClick,
+  buttonRef,
 }: {
   label: string;
   icon: string;
   active: boolean;
   onClick: () => void;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   return (
     <button
       className={`tabbar__btn ${active ? 'is-active' : ''}`}
       aria-pressed={active}
+      aria-expanded={active}
+      ref={buttonRef}
       onClick={onClick}
     >
       <span aria-hidden="true">{icon}</span>
@@ -53,6 +57,9 @@ export function Layout({
   fileMenu: ReactNode;
 }) {
   const [tab, setTab] = useState<MobileTab>(null);
+  const sceneTab = useRef<HTMLButtonElement>(null);
+  const inspectTab = useRef<HTMLButtonElement>(null);
+  const fileTab = useRef<HTMLButtonElement>(null);
   const painting = useEditorStore((s) => s.paintingId !== null);
 
   if (!isMobile) {
@@ -72,21 +79,28 @@ export function Layout({
     );
   }
 
-  const toggle = (next: Exclude<MobileTab, null>) =>
-    setTab((current) => (current === next ? null : next));
+  const tabRefs = { scene: sceneTab, inspect: inspectTab, file: fileTab };
+  const close = (closed: Exclude<MobileTab, null>) => {
+    setTab(null);
+    requestAnimationFrame(() => tabRefs[closed].current?.focus());
+  };
+  const toggle = (next: Exclude<MobileTab, null>) => {
+    if (tab === next) close(next);
+    else setTab(next);
+  };
 
   return (
     <div className={`app app--mobile ${tab ? 'has-sheet' : ''}`}>
       {toolbar}
       <main className="app__center">{viewport}</main>
 
-      <Sheet open={tab === 'scene'} title="Scene" onClose={() => setTab(null)}>
+      <Sheet open={tab === 'scene'} title="Scene" onClose={() => close('scene')}>
         {tree}
       </Sheet>
-      <Sheet open={tab === 'inspect'} title="Properties" onClose={() => setTab(null)}>
+      <Sheet open={tab === 'inspect'} title="Properties" onClose={() => close('inspect')}>
         {inspector}
       </Sheet>
-      <Sheet open={tab === 'file'} title="File" onClose={() => setTab(null)}>
+      <Sheet open={tab === 'file'} title="File" onClose={() => close('file')}>
         {fileMenu}
       </Sheet>
 
@@ -98,14 +112,15 @@ export function Layout({
       {tab === null && !painting && <MoveBar />}
 
       <nav className="tabbar">
-        <TabButton label="Scene" icon="☰" active={tab === 'scene'} onClick={() => toggle('scene')} />
+        <TabButton label="Scene" icon="☰" active={tab === 'scene'} onClick={() => toggle('scene')} buttonRef={sceneTab} />
         <TabButton
           label="Properties"
           icon="⚙"
           active={tab === 'inspect'}
           onClick={() => toggle('inspect')}
+          buttonRef={inspectTab}
         />
-        <TabButton label="File" icon="⬒" active={tab === 'file'} onClick={() => toggle('file')} />
+        <TabButton label="File" icon="⬒" active={tab === 'file'} onClick={() => toggle('file')} buttonRef={fileTab} />
       </nav>
     </div>
   );

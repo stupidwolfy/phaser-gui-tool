@@ -92,6 +92,7 @@ function PlayFrame() {
   const stopRef = useRef<HTMLButtonElement>(null);
   /** Bumping this re-keys the iframe, which is the whole of Restart. */
   const [run, setRun] = useState(0);
+  const returnFocus = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
 
   /**
    * The document as it was when this run began.
@@ -118,19 +119,24 @@ function PlayFrame() {
   // default is the safe one: Stop puts the editor back.
   useEffect(() => {
     stopRef.current?.focus();
+    return () => {
+      if (returnFocus.current?.isConnected) returnFocus.current.focus();
+    };
   }, []);
 
+  const stop = () => setPlaying(false);
+
   return (
-    <div className="play" role="dialog" aria-label="Play game">
+    <div className="play" role="dialog" aria-modal="true" aria-labelledby="play-title" onKeyDown={(event) => { if (event.key === 'Escape') stop(); }}>
       <div className="play__bar">
-        <span className="play__title">{sceneName}</span>
+        <span className="play__title" id="play-title">Playing {sceneName}</span>
         <button className="btn" onClick={() => setRun((current) => current + 1)}>
           Restart
         </button>
         <button
           ref={stopRef}
           className="btn btn--primary"
-          onClick={() => setPlaying(false)}
+          onClick={stop}
         >
           Stop
         </button>
@@ -145,6 +151,7 @@ function PlayFrame() {
         key={run}
         className="play__frame"
         title={`${sceneName} running`}
+        tabIndex={-1}
         sandbox="allow-scripts"
         srcDoc={html}
       />

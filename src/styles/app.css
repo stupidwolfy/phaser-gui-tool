@@ -14,12 +14,14 @@
   --text: #e6e9ef;
   --text-dim: #98a1b3;
   --accent: #4f8cff;
+  --accent-solid: #286bd6;
   --danger: #ff6b6b;
   --radius: 8px;
   --toolbar-h: 52px;
   --tabbar-h: 58px;
   --sheet-h: 55vh;
-  --touch: 40px;
+  /* WCAG 2.2 AA minimum target size, with 44px used throughout where space allows. */
+  --touch: 44px;
 }
 
 * {
@@ -48,6 +50,12 @@ input,
 select {
   font: inherit;
   color: inherit;
+}
+
+/* One strong, predictable focus treatment for every native and composite control. */
+:where(button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid #ffd166;
+  outline-offset: 2px;
 }
 
 /* ---------------------------------------------------------------- layout -- */
@@ -196,8 +204,8 @@ select {
 }
 
 .btn--primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
   color: #fff;
   font-weight: 600;
 }
@@ -220,8 +228,8 @@ select {
    action — and the name is allowed to ellipsis rather than widen the grid,
    since it is only ever a handful of scenes deciding the column count. */
 .btn--add.is-active {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
   color: #fff;
 }
 
@@ -242,9 +250,16 @@ select {
 }
 
 .btn--toggle.is-active {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
   color: #fff;
+}
+
+/* A check mark keeps active state apparent without relying on the blue fill. */
+.btn--toggle.is-active::after,
+.btn--add.is-active::after {
+  content: ' ✓';
+  font-weight: 700;
 }
 
 .btn--block {
@@ -271,8 +286,8 @@ select {
 }
 
 .icon-btn {
-  min-width: 34px;
-  min-height: 34px;
+  min-width: var(--touch);
+  min-height: var(--touch);
   background: transparent;
   border: none;
   border-radius: 6px;
@@ -493,6 +508,11 @@ select {
 
 .hint--error {
   color: var(--danger);
+  font-weight: 600;
+}
+
+.hint--error::before {
+  content: 'Error: ';
 }
 
 /* ------------------------------------------------------------ scene tree -- */
@@ -578,6 +598,13 @@ select {
 
 .tree__item.is-selected {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.tree__item.is-selected .tree__name::after {
+  content: ' (selected)';
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .tree__label {
@@ -977,6 +1004,28 @@ select {
 
 .tabbar__btn.is-active {
   color: var(--accent);
+  border-top: 3px solid currentColor;
+  font-weight: 700;
+}
+
+.tabbar__btn.is-active::after {
+  content: 'Selected';
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 /* ----------------------------------------------------------------- toast -- */
