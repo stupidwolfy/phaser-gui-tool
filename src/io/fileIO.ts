@@ -14,6 +14,7 @@ import {
   type Project,
   type ProjectVariable,
 } from '../core/schema';
+import { assertProjectExportable } from '../core/validation';
 
 /**
  * Saving and opening project files, entirely on the user's device.
@@ -137,6 +138,9 @@ function encodeDataUrl(mime: string, bytes: Uint8Array): string {
 
 /** Builds the portable ZIP used for explicit saves. Autosave deliberately uses serializeProject. */
 export function createProjectArchive(project: Project): Uint8Array {
+  // In particular, never rewrite a newer document through an older schema.
+  // Warnings are intentionally allowed; only explicitly blocking errors throw.
+  assertProjectExportable(project);
   const entries: Record<string, Uint8Array> = {};
   const usedPaths = new Set<string>();
   const pack = <T extends ImageAsset | AudioAsset | FontAsset>(

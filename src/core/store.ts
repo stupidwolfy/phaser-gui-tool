@@ -104,6 +104,7 @@ import {
   type Transform,
   type VariableKind,
 } from './schema';
+import { blockingIssues, validateProject, type ValidationIssue } from './validation';
 
 const HISTORY_LIMIT = 100;
 
@@ -289,7 +290,13 @@ export interface EditorState {
    * game whose project has been replaced is a game no document describes.
    */
   playing: boolean;
+  /** Last validation result, shared by Play/export UI and navigable in-place. */
+  validationIssues: ValidationIssue[];
+  /** Field requested by the issue summary; inspectors may use it as a focus target. */
+  validationFocusPath: string | null;
   setPlaying: (playing: boolean) => void;
+  showValidationIssues: (issues: ValidationIssue[]) => void;
+  focusValidationIssue: (issue: ValidationIssue) => void;
 
   /**
    * Which sections of the inspector are open.
@@ -1942,6 +1949,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
     guidesVisible: true,
     previewMotion: false,
     playing: false,
+    validationIssues: [],
+    validationFocusPath: null,
     sectionsOpenByDefault: false,
     sectionOverrides: {},
     paintingId: null,
@@ -1968,7 +1977,22 @@ export const useEditorStore = create<EditorState>((set, get) => {
       }),
     setGuidesVisible: (guidesVisible) => set({ guidesVisible }),
     setPreviewMotion: (previewMotion) => set({ previewMotion }),
-    setPlaying: (playing) => set({ playing }),
+    setPlaying: (playing) => {
+      if (!playing) return set({ playing: false });
+      const issues = validateProject(get().project);
+      set({ validationIssues: issues, playing: blockingIssues(issues).length === 0 });
+    },
+    showValidationIssues: (validationIssues) => set({ validationIssues }),
+    focusValidationIssue: (issue) => set((state) => ({
+      project: issue.sceneId && state.project.scenes.some((scene) => scene.id === issue.sceneId)
+        ? { ...state.project, activeSceneId: issue.sceneId }
+        : state.project,
+      selectedIds: issue.objectId ? [issue.objectId] : [],
+      validationFocusPath: issue.fieldPath,
+      ...(issue.inspectorSection
+        ? { sectionOverrides: { ...state.sectionOverrides, [issue.inspectorSection]: true } }
+        : {}),
+    })),
 
     // An override is written for the section that was pressed and nothing else,
     // so a later Expand-all still reaches every section this one does not name.

@@ -1,4 +1,5 @@
 import { activeScene } from '../core/store';
+import { assertProjectExportable } from '../core/validation';
 import {
   RULE_OPERATOR_JS,
   TARGET_PHASER_VERSION,
@@ -5102,6 +5103,7 @@ ${created.body}
  * outputs cover the three real cases without overlapping.
  */
 export function generateScene(project: Project, language: SceneLanguage = 'ts'): string {
+  assertProjectExportable(project);
   const { scenes, ctx, boot, physics, touch, rules, labels, effects } = prepare(project);
 
   // A project with no images emits no ASSETS const and no preload() at all, so
@@ -5211,6 +5213,7 @@ export default ${boot.className};
  * always was, so every exported file is byte for byte what it was.
  */
 export function generateRunnableHtml(project: Project, phaserSrc?: string): string {
+  assertProjectExportable(project);
   const { scenes, ctx, boot, physics, touch, rules, labels, effects } = prepare(project);
   // phaserVersion comes from the project file, so it is not trustworthy input
   // for a URL. Anything that is not a plain version falls back to the version
