@@ -50,7 +50,7 @@ on a desktop.
 - Slice an image into a sprite sheet — frame size, margin and spacing — and pick
   which frame a sprite shows
 - Animate it: build a clip from the frames (`0-3, 7` picks and orders them), set the
-  frame rate and whether it loops, and press ▶ in the toolbar to watch it play on the
+  frame rate and whether it loops, and choose **Preview motion** in the toolbar to watch it play on the
   canvas — the same button starts and stops every particle emitter and every tween, since
   all three are the canvas moving by itself. Animations are saved with the project and exported as real
   `this.anims.create(...)` calls, so the sheet and the clip come out the other side
@@ -78,21 +78,21 @@ on a desktop.
 - Throw **particles**: `+ Particles` adds an emitter, an imported image is what it
   throws, and the inspector shapes it — lifespan, how fast and in which directions, how it
   grows and fades, how many and how often, gravity, tint and blend mode. It sits still
-  until you press ▶ in the toolbar, so an emitter stays where you put it while you place
+  until you choose **Preview motion** in the toolbar, so an emitter stays where you put it while you place
   the rest of the scene, and exports as a real `this.add.particles(...)` with every
   setting in one object. In the game it runs from the start unless a rule says
   otherwise — see **Throw something at a moment** below
 - Leave a **particle trail**: the emitter's *Follow* section picks an object for it to
   follow — smoke behind a player, sparks on a coin. The emitter stays where it is drawn
   and its X and Y become an offset from what it follows; move the object and the emitter
-  goes with it, and under ▶ a tweened object leaves its particles behind as a trail. It
+  goes with it, and under **Preview motion** a tweened object leaves its particles behind as a trail. It
   exports as a real `emitter.startFollow(player)`. A following emitter can't be turned or
   scaled (Phaser would turn and scale the followed object's position with it — the panel
   says so), and only objects placed directly in the scene can follow or be followed
 - Make an object **move by itself**: switch on Tween in the inspector and say where its
   X, Y, rotation, scale or alpha should end up, over how long, with which easing, and
   whether it goes back again and repeats. The destination is drawn on the canvas as a
-  dashed outline, so you can place it by eye; press ▶ and it runs, press ▶ again and
+  dashed outline, so you can place it by eye; choose **Preview motion** and it runs, choose **Preview motion** again and
   everything snaps back exactly where you left it — a preview never changes a single
   number in your project. It works on anything at any depth, groups and prefabs included,
   and exports as a real `this.tweens.add({ ... })` beside the object it belongs to
@@ -153,7 +153,7 @@ on a desktop.
   those numbers under Variables — a score, a lives count — and a rule can check one before
   it runs (`only if Score is at least 3`). Variables survive a change of scene, so a score
   carries from level to level. The editor never runs a rule, because a rule deletes things:
-  press **Play** and the game does
+  choose **Play game** and the game does
 - **Build things while the game runs**: pick *Build a prefab* as a rule's action and say
   where. A ring on the canvas shows the spot — the editor never builds anything there, so what
   you are placing is the instruction, not the object — and the running game makes one every
@@ -169,14 +169,14 @@ on a desktop.
   whatever the object was doing rather than adding to it, so 0 and 0 stops it dead. From
   there gravity, drag and anything it collides with take over. The editor never runs it —
   nothing here simulates a body, and nothing is drawn for a speed the way a ring is drawn for
-  a spawn, because a speed has no place on the canvas to be — so press **Play** to watch it go
+  a spawn, because a speed has no place on the canvas to be — so choose **Play game** to watch it go
 - **Move something**: pick *Move an object to* as a rule's action to put an object at a
   point, or pick an object under *at* to put it where that object is when the rule fires, plus
   an offset. That is a checkpoint respawn, a ball back on the centre spot, a portal. Any object
   can be moved, with or without physics, except one whose body is *Static*: that would move the
   picture and leave the wall behind. A dynamic body stops when it arrives, and a push after it
   in the same rule sends it on. The canvas draws a ring where the object will land, joined to
-  the object, and moves nothing. Press **Play** to watch it happen.
+  the object, and moves nothing. Choose **Play game** to watch it happen.
 - **Throw something at a moment**: a rule can *Start particles*, *Stop particles* or *Burst
   particles* — so smoke puffs when something is hit, a thruster runs only while it should,
   and a shower of sparks is one row of settings. A burst throws a count you set, all at once,
@@ -186,7 +186,7 @@ on a desktop.
   between a puff of smoke and a smoke machine, and you do not set it anywhere: the export
   works it out from the rule. One a rule only *stops* was running all along. The editor still
   fires no rule, so the canvas shows what it always did — the emitter's marker until you
-  press ▶, and everything it throws once you do
+  choose **Preview motion**, and everything it throws once you start Preview motion
 - **Act on a number reaching something**: pick *a variable changes* as a rule's moment and
   add a check, and you have `when Score changes, only if Score is at least 10, go to the Win
   scene`. The rule runs on every change from 10 upwards rather than only the first time, so
@@ -209,13 +209,13 @@ on a desktop.
   step
 - Save and open `.phaser.zip` project archives from your device, with an autosaved draft in
   the browser so a closed tab doesn't lose your work
-- **Play it, without leaving the editor.** The Play button in the toolbar runs your
+- **Play game, without leaving the editor.** The **Play game** button in the toolbar runs your
   project — the real exported game, the same one the `.html` export gives you, in a frame
   over the editor. Physics falls, rules fire, tweens run, keys and on-screen buttons drive
   things: everything the canvas deliberately refuses to do while you are placing objects.
   Nothing it does touches your project — Stop throws the running game away and the scene is
   exactly as you left it, down to the last number. Restart plays it again from the top.
-  Phaser comes from the editor's own copy, so Play works with no connection at all
+  Phaser comes from the editor's own copy, so Play game works with no connection at all
 - Export the project as real Phaser code: a Scene class per scene in TypeScript or
   JavaScript, or a self-contained runnable HTML page — images included, so an export needs
   no files alongside it. The scene you are editing is the module's default export and the
@@ -298,7 +298,7 @@ The editor **draws** the body and never runs it. Its green box is where the body
 because an Arcade body is axis-aligned it stays square to the screen however the object is
 turned — which is the one thing about physics the canvas can tell you and the docs cannot.
 Nothing moves while you are placing it: the document is what you are editing, so the
-simulation belongs to the game you export. Press **Play** to watch it go.
+simulation belongs to the game you export. Choose **Play game** to watch it go.
 
 **Body shape** makes a body **round** instead of a box: the circle that fits inside the
 object, drawn as a green ring. A round ball rolls off another round body rather than
@@ -352,7 +352,7 @@ against the scene rectangle, and the keys still work alongside them — one expo
 desktop and on a phone.
 
 None of it runs in the editor. Nothing moves, nothing collides and no key does anything
-while you are placing objects: the document is what you are editing. Press **Play** to
+while you are placing objects: the document is what you are editing. Choose **Play game** to
 play it — that runs the game rather than the canvas, so your scene is untouched by it.
 
 What is still deliberately yours is what *happens* — a coin that disappears, a scene that

@@ -135,7 +135,10 @@ test('the game does what the canvas refuses to, and the document never moves', a
   expect(await editor.numberValue('Y')).toBe(TOP.y);
 
   const saved = await editor.saveToFile();
-  expect(saved.contents).toContain(`"y": ${TOP.y}`);
+  const savedProject = JSON.parse(saved.contents) as {
+    scenes: { children: { transform: { y: number } }[] }[];
+  };
+  expect(savedProject.scenes[0]?.children[0]?.transform.y).toBe(TOP.y);
 });
 
 test('Restart is a new game, not a resumed one', async ({ editor }) => {
@@ -295,4 +298,59 @@ test('Play is reachable in both layouts, and is not the preview toggle', async (
   await editor.closePanels();
   await expect(editor.page.getByRole('button', { name: 'Preview motion' })).toBeVisible();
   await expect(play).toBeVisible();
+});
+
+test('Preview motion and Play game expose distinct keyboard and running states', async ({
+  editor,
+}) => {
+  await editor.addObject('Particles');
+  await editor.closePanels();
+
+  const preview = editor.page.getByRole('button', { name: 'Preview motion' });
+  const play = editor.page.getByRole('button', { name: 'Play game' });
+
+  await expect(preview).toHaveAttribute('title', /animate sprites, particles, and tweens/);
+  await expect(preview).toHaveAttribute('aria-pressed', 'false');
+  await preview.focus();
+  await expect(preview).toBeFocused();
+  await editor.page.keyboard.press('Space');
+  await expect(preview).toHaveAttribute('aria-pressed', 'true');
+  await expect(editor.page.getByTestId('viewport')).toHaveAttribute(
+    'data-motion-state',
+    'previewing',
+  );
+  await editor.page.keyboard.press('Space');
+  await expect(preview).toHaveAttribute('aria-pressed', 'false');
+
+  // Play game is an action that opens a running surface, not a second toggle.
+  await expect(play).not.toHaveAttribute('aria-pressed', /.+/);
+  await expect(play).toHaveAttribute('aria-haspopup', 'dialog');
+  await expect(play).toHaveAttribute('data-state', 'stopped');
+  await play.focus();
+  await expect(play).toBeFocused();
+  await editor.page.keyboard.press('Enter');
+
+  const dialog = editor.page.getByRole('dialog', { name: 'Play game' });
+  await expect(dialog).toHaveAttribute('data-state', 'running');
+  await expect(dialog).toContainText('Play game running');
+  await expect(editor.page.getByRole('button', { name: 'Restart', exact: true })).toBeVisible();
+  await expect(editor.page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
+  await editor.stopPlay();
+});
+
+test('both runtime modes preserve the authored document byte for byte', async ({ editor }) => {
+  await setupFalling(editor);
+  await editor.addObject('Particles');
+  const before = (await editor.saveToFile()).contents;
+
+  await editor.setPreview(true);
+  await editor.setPreview(false);
+  const afterPreview = (await editor.saveToFile()).contents;
+  expect(afterPreview).toBe(before);
+
+  await editor.play();
+  await editor.restartPlay();
+  await editor.stopPlay();
+  const afterPlay = (await editor.saveToFile()).contents;
+  expect(afterPlay).toBe(before);
 });

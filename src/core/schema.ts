@@ -198,6 +198,20 @@ export const SCHEMA_VERSION = 16;
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
 
+/** Stable diagnostics shared by editing, persistence, Play, and exporters. */
+export type ValidationSeverity = 'warning' | 'error';
+export interface ValidationIssue {
+  code: string;
+  severity: ValidationSeverity;
+  message: string;
+  sceneId?: string;
+  objectId?: string;
+  /** Dot-separated source-document path, suitable for focusing a field. */
+  fieldPath: string;
+  inspectorSection?: string;
+  blocksExport: boolean;
+}
+
 /** Object kinds the editor can currently place. Grows one entry at a time. */
 export type NodeType =
   | 'rectangle'

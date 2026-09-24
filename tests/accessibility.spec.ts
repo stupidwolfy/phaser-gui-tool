@@ -42,7 +42,7 @@ test('Play is modal and returns focus to its launcher', async ({ editor, page })
   void editor;
   const play = page.getByRole('button', { name: 'Play game' });
   await play.click();
-  const dialog = page.getByRole('dialog', { name: /Playing/ });
+  const dialog = page.getByRole('dialog', { name: 'Play game' });
   await expect(dialog).toHaveAttribute('aria-modal', 'true');
   await page.getByRole('button', { name: 'Stop' }).click();
   await expect(play).toBeFocused();

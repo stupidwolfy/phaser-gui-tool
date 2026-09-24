@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { activeScene, useEditorStore } from '../core/store';
 import { generateRunnableHtml } from '../io/exportPhaser';
+import { assertProjectExportable } from '../core/validation';
 
 /**
  * The runtime the game runs on, as a URL this page can hand to a `<script>`.
@@ -74,8 +75,8 @@ import phaserRuntimeUrl from '../../node_modules/phaser/dist/phaser.min.js?url';
  *   to the game — which is right, since a driven object uses the arrow keys.
  */
 export function PlayOverlay() {
-  const playing = useEditorStore((s) => s.playing);
-  if (!playing) return null;
+  const playGameRunning = useEditorStore((s) => s.playGameRunning);
+  if (!playGameRunning) return null;
   return <PlayFrame />;
 }
 
@@ -86,7 +87,7 @@ export function PlayOverlay() {
  * string alive for the rest of the session on a project nobody is playing.
  */
 function PlayFrame() {
-  const setPlaying = useEditorStore((s) => s.setPlaying);
+  const setPlayGameRunning = useEditorStore((s) => s.setPlayGameRunning);
   const stopRef = useRef<HTMLButtonElement>(null);
   /** Bumping this re-keys the iframe, which is the whole of Restart. */
   const [run, setRun] = useState(0);
@@ -103,6 +104,9 @@ function PlayFrame() {
    */
   const { html, sceneName } = useMemo(() => {
     const { project } = useEditorStore.getState();
+    // Belt-and-braces with the store gate: Restart and future Play entry points
+    // use precisely the same pure export validation as downloaded formats.
+    assertProjectExportable(project);
     return {
       html: generateRunnableHtml(project, phaserRuntimeUrl),
       sceneName: activeScene(project).name,
@@ -121,21 +125,39 @@ function PlayFrame() {
     };
   }, []);
 
-  const stop = () => setPlaying(false);
+  const stop = () => setPlayGameRunning(false);
 
   return (
-    <div className="play" role="dialog" aria-modal="true" aria-labelledby="play-title" onKeyDown={(event) => { if (event.key === 'Escape') stop(); }}>
+    <div
+      className="play"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Play game"
+      data-state="running"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') stop();
+      }}
+    >
       <div className="play__bar">
-        <span className="play__title" id="play-title">Playing {sceneName}</span>
-        <button className="btn" onClick={() => setRun((current) => current + 1)}>
-          Restart
+        <span className="play__title" id="play-title">
+          Play game running · {sceneName}
+        </span>
+        <button
+          className="btn"
+          onClick={() => setRun((current) => current + 1)}
+          title="Restart Play game from the authored document"
+          aria-label="Restart"
+        >
+          <span aria-hidden="true">↻</span> Restart
         </button>
         <button
           ref={stopRef}
           className="btn btn--primary"
           onClick={stop}
+          title="Stop Play game and return to the unchanged document"
+          aria-label="Stop"
         >
-          Stop
+          <span aria-hidden="true">■</span> Stop
         </button>
       </div>
       {/*
@@ -147,7 +169,7 @@ function PlayFrame() {
       <iframe
         key={run}
         className="play__frame"
-        title={`${sceneName} running`}
+        title={`${sceneName} — Play game running`}
         tabIndex={-1}
         sandbox="allow-scripts"
         srcDoc={html}

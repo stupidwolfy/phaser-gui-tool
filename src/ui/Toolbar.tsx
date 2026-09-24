@@ -139,7 +139,8 @@ export function Toolbar({
   // the toolbar rather than a panel, because on a phone a panel is a sheet
   // covering the canvas you are trying to watch.
   const hasMotion = useEditorStore((s) => hasMotionIn(s.project));
-  const setPlaying = useEditorStore((s) => s.setPlaying);
+  const playGameRunning = useEditorStore((s) => s.playGameRunning);
+  const setPlayGameRunning = useEditorStore((s) => s.setPlayGameRunning);
 
   return (
     <header className="toolbar" role="toolbar" aria-label="Project tools">
@@ -206,7 +207,11 @@ export function Toolbar({
             className={`btn btn--toggle ${previewMotion ? 'is-active' : ''}`}
             aria-pressed={previewMotion}
             onClick={() => setPreviewMotion(!previewMotion)}
-            title={previewMotion ? 'Preview on' : 'Preview off'}
+            title={
+              previewMotion
+                ? 'Preview motion is on — stop passive canvas animation'
+                : 'Preview motion — animate sprites, particles, and tweens without changing the document'
+            }
             aria-label="Preview motion"
           >
             <PreviewIcon playing={previewMotion} />
@@ -222,10 +227,12 @@ export function Toolbar({
             so the way out belongs on the surface the mode has taken, which is
             the rule that put the way out of paint mode on the tile bar. */}
         <button
-          className="btn"
-          onClick={() => setPlaying(true)}
-          title="Run this project"
+          className={`btn btn--play ${playGameRunning ? 'is-running' : ''}`}
+          onClick={() => setPlayGameRunning(true)}
+          title="Play game — run the exported game without changing the document"
           aria-label="Play game"
+          aria-haspopup="dialog"
+          data-state={playGameRunning ? 'running' : 'stopped'}
         >
           <PlayIcon />
         </button>
@@ -274,7 +281,7 @@ export function Toolbar({
           <button
             className="btn"
             onClick={actions.onExportHtml}
-            title="Export a self-contained page that runs this scene"
+            title="Export a self-contained game page"
             aria-label="Export runnable HTML page"
           >
             .html
@@ -345,7 +352,7 @@ export function FilePanel({ actions }: { actions: ToolbarActions }) {
           Scene class (.js)
         </button>
         <button className="btn btn--block" onClick={actions.onExportHtml}>
-          Runnable page (.html)
+          Playable game page (.html)
         </button>
       </div>
       <p className="hint">
