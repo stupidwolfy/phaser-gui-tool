@@ -10,9 +10,10 @@ the conditions for calling each initiative complete.
 - **Priority** describes order within and across phases: **P0** is required groundwork,
   **P1** is the next highest-value work, and **P2** follows once the earlier workflows are
   sound.
-- **Status** records the current delivery state. At publication, every initiative below is
-  **Proposed**; existing partial capabilities are called out in scope rather than implying
-  that the initiative is complete.
+- **Status** records the current delivery state. **Implemented** means every acceptance
+  criterion and required validation has evidence; **In progress** may include shipped code
+  but still has unmet criteria or validation; **Deferred** records an explicit product
+  decision not to pursue the initiative in the current plan.
 - Checkboxes appear only beside concrete deliverables. Problems, dependencies, and
   validation notes are intentionally not checklists.
 - “Automated validation” means a repeatable CI-suitable check. “Manual validation” means a
@@ -28,7 +29,10 @@ standards before larger workflows are added.
 ### 1. Guided onboarding and starter project
 
 **Priority:** P0
-**Status:** Proposed
+**Status:** Deferred (out of scope)
+
+**Status note (2026-09-24).** Product decision: skip guided onboarding. No deliverable or
+acceptance checkbox below is claimed; the scope is retained as a record of what was deferred.
 
 **User problem.** A first-time user lands in a feature-dense editor without a clear first
 task, an explanation of the three-panel model, or confidence that experimenting will not
@@ -80,13 +84,12 @@ a game when they need that information.
   topics, keyboard shortcuts, file/privacy behavior, and a link to full documentation.
 - [ ] Add context links from complex inspector sections and validation messages to the
   matching Help topic.
-- [ ] Include “Restart tour,” version, Phaser target version, and feedback links in Help.
+- [ ] Include version, Phaser target version, and feedback links in Help.
 
 **Relevant modules.** `src/ui/Toolbar.tsx`, `src/ui/Layout.tsx`, `src/ui/Inspector.tsx`,
 `src/ui/Section.tsx`, `src/core/schema.ts`, and `README.md`.
 
-**Dependencies.** Agreed product terminology; onboarding launch action; accessible dialog or
-sheet primitive.
+**Dependencies.** Agreed product terminology; accessible dialog or sheet primitive.
 
 **Acceptance criteria.**
 
@@ -104,7 +107,13 @@ keyboard handlers.
 ### 3. Play and Preview terminology
 
 **Priority:** P0
-**Status:** Proposed
+**Status:** In progress
+
+**Status note (2026-09-24).** The runtime terminology and behavior are implemented and covered
+by `tests/play.spec.ts` in desktop and mobile projects, including labels, distinct toggle/action
+states, keyboard activation, Stop/Restart, and byte-for-byte document preservation. The required
+five-task manual terminology comprehension review has not been recorded, so this initiative is
+not yet Implemented.
 
 **User problem.** The motion preview toggle and full game Play action use similar visual
 language even though one previews passive animation on the canvas and the other runs the
@@ -112,10 +121,10 @@ exported game in an isolated overlay.
 
 **Proposed scope.**
 
-- [ ] Rename and visually distinguish **Preview motion** from **Play game** everywhere.
-- [ ] Add short state text and accessible names that explain what runs and whether project
+- [x] Rename and visually distinguish **Preview motion** from **Play game** everywhere.
+- [x] Add short state text and accessible names that explain what runs and whether project
   data can change.
-- [ ] Ensure Stop and Restart are unmistakable inside the running-game surface.
+- [x] Ensure Stop and Restart are unmistakable inside the running-game surface.
 - [ ] Update Help, onboarding, and export language to use the same terms.
 
 **Relevant modules.** `src/ui/Toolbar.tsx`, `src/ui/PlayOverlay.tsx`,
@@ -125,10 +134,10 @@ exported game in an isolated overlay.
 
 **Acceptance criteria.**
 
-- [ ] Every motion-preview control is named “Preview motion,” and every full runtime launch
+- [x] Every motion-preview control is named “Preview motion,” and every full runtime launch
   is named “Play game,” including accessible names and tooltips.
-- [ ] Entering and leaving either mode restores the exact authored document state.
-- [ ] Only controls relevant to the active mode are presented as active, and Play cannot be
+- [x] Entering and leaving either mode restores the exact authored document state.
+- [x] Only controls relevant to the active mode are presented as active, and Play cannot be
   mistaken for an on/off editor toggle.
 
 **Required validation.** Automated: extend Playwright coverage for labels, pressed states,
@@ -206,7 +215,14 @@ vision simulation and a screen reader.
 ### 6. Validation foundation
 
 **Priority:** P0
-**Status:** Proposed
+**Status:** In progress
+
+**Status note (2026-09-24).** `src/core/validation.ts`, `src/core/store.ts`,
+`src/ui/IssueSummary.tsx`, and `tests/validation.spec.ts` provide the shared issue model,
+Play/export gates, warning behavior, schema protection, and scene/object navigation. Validation
+does not currently run after every edit or on every load, and issue navigation records a field
+path but no inspector control consumes it to focus the smallest editable target. The full issue
+matrix, integration coverage, and manual fixture/responsiveness review also remain outstanding.
 
 **User problem.** Invalid references and incomplete configuration can surface late during
 Play or export, while feedback is distributed across controls and lacks a consistent severity
@@ -214,7 +230,7 @@ or recovery path.
 
 **Proposed scope.**
 
-- [ ] Define structured validation issues with stable code, severity, message, object/scene
+- [x] Define structured validation issues with stable code, severity, message, object/scene
   location, field path, and export-blocking flag.
 - [ ] Validate project load, edits, Play, and export through shared pure validators.
 - [ ] Add an issue summary with navigation to the affected scene, tree item, and inspector
@@ -231,12 +247,12 @@ policy; Help context links.
 
 **Acceptance criteria.**
 
-- [ ] The same invalid project produces the same issue codes before Play and every export
+- [x] The same invalid project produces the same issue codes before Play and every export
   format.
 - [ ] Each blocking issue explains how to recover and navigates to the smallest editable
   target.
-- [ ] Valid projects generate no issues, and warnings do not block saving or export.
-- [ ] Unknown/newer schema versions remain protected from destructive saves.
+- [x] Valid projects generate no issues, and warnings do not block saving or export.
+- [x] Unknown/newer schema versions remain protected from destructive saves.
 
 **Required validation.** Automated: table-driven validator tests for missing assets,
 references, duplicate/unsafe names, malformed values, and schema versions; integration tests
@@ -247,7 +263,14 @@ responsive.
 ### 7. Accessibility baseline
 
 **Priority:** P0
-**Status:** Proposed
+**Status:** In progress
+
+**Status note (2026-09-24).** Foundational accessible names, visible focus, compact-sheet and
+Play-dialog focus handling, keyboard tree selection, non-color selection state, touch sizing,
+and reduced-motion behavior are covered in part by `tests/accessibility.spec.ts`. There is no
+automated axe-equivalent scan or complete keyboard-path coverage, and the required keyboard,
+screen-reader, 200%/400% zoom, forced-colors, contrast, reduced-motion, and touch audit has not
+been recorded. Accessibility therefore remains In progress.
 
 **User problem.** Icon-only actions, dense panels, canvas interaction, and modal mobile sheets
 can exclude keyboard, screen-reader, low-vision, and motor-impaired users.
