@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { activeScene, useEditorStore } from '../core/store';
 import { generateRunnableHtml } from '../io/exportPhaser';
+import { assertProjectExportable } from '../core/validation';
 
 /**
  * The runtime the game runs on, as a URL this page can hand to a `<script>`.
@@ -104,6 +105,9 @@ function PlayFrame() {
    */
   const { html, sceneName } = useMemo(() => {
     const { project } = useEditorStore.getState();
+    // Belt-and-braces with the store gate: Restart and future Play entry points
+    // use precisely the same pure export validation as downloaded formats.
+    assertProjectExportable(project);
     return {
       html: generateRunnableHtml(project, phaserRuntimeUrl),
       sceneName: activeScene(project).name,
