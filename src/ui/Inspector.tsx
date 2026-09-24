@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
   countPrefabSpawns,
   countPrefabUses,
@@ -101,8 +101,26 @@ export function Inspector() {
   // The selection's roots, so picking a group and something inside it edits the
   // group rather than showing two panels' worth of the same objects.
   const nodes = useSelectionNodes();
-  if (nodes.length > 1) return <SelectionInspector nodes={nodes} />;
-  return nodes.length === 1 ? <NodeInspector node={nodes[0]} /> : <SceneInspector />;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const selectionKey = nodes.map((node) => node.id).join(':');
+  const previousKey = useRef(selectionKey);
+  useLayoutEffect(() => {
+    if (previousKey.current !== selectionKey && !document.activeElement?.isConnected) {
+      panelRef.current?.focus();
+    }
+    previousKey.current = selectionKey;
+  }, [selectionKey]);
+  return (
+    <div className="inspector-focus" ref={panelRef} tabIndex={-1} aria-label="Properties inspector">
+      {nodes.length > 1 ? (
+        <SelectionInspector nodes={nodes} />
+      ) : nodes.length === 1 ? (
+        <NodeInspector node={nodes[0]} />
+      ) : (
+        <SceneInspector />
+      )}
+    </div>
+  );
 }
 
 /**

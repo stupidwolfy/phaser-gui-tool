@@ -69,12 +69,10 @@ import phaserRuntimeUrl from '../../node_modules/phaser/dist/phaser.min.js?url';
  *   ships — which is the one property this feature exists to preserve. Errors
  *   go to the browser console, named by frame, which is where a developer tool
  *   should put them.
- * - **The game takes the keyboard, and Stop is therefore the only way out.**
- *   Phaser focuses its own canvas as it boots, so the iframe becomes the
- *   editor's `activeElement` and every key after that belongs to the game —
- *   which is right, since a driven object is read with the arrow keys. There is
- *   no Escape shortcut for that reason and it is recorded in `App.tsx`: one
- *   that worked only between the press and the boot would be worse than none.
+ * - **The game takes the keyboard after its canvas is focused.** Stop therefore
+ *   remains the dependable way out. Escape also closes the dialog while focus
+ *   is on its control bar, but keystrokes sent into the sandboxed game belong
+ *   to the game — which is right, since a driven object uses the arrow keys.
  */
 export function PlayOverlay() {
   const playGameRunning = useEditorStore((s) => s.playGameRunning);
@@ -93,6 +91,7 @@ function PlayFrame() {
   const stopRef = useRef<HTMLButtonElement>(null);
   /** Bumping this re-keys the iframe, which is the whole of Restart. */
   const [run, setRun] = useState(0);
+  const returnFocus = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
 
   /**
    * The document as it was when this run began.
@@ -115,19 +114,34 @@ function PlayFrame() {
   }, [run]);
 
   // Focus the way out, for the moment before the game claims the keyboard and
-  // for every moment after a press on this bar brings it back. It is not there
-  // to make a shortcut work — there is no Escape here, see `App.tsx` — but so
-  // that a keyboard user is not left tabbing into a frame they cannot tab back
-  // out of. Stop rather than Restart, by the rule that a destructive-looking
-  // default is the safe one: Stop puts the editor back.
+  // for every moment after a press on this bar brings it back. A sandboxed
+  // frame cannot participate in the parent dialog's focus trap, so it is
+  // removed from sequential focus and the game remains reachable by pointer.
+  // Stop rather than Restart is the safe initial target: it restores the editor.
   useEffect(() => {
     stopRef.current?.focus();
+    return () => {
+      if (returnFocus.current?.isConnected) returnFocus.current.focus();
+    };
   }, []);
 
+  const stop = () => setPlayGameRunning(false);
+
   return (
-    <div className="play" role="dialog" aria-label="Play game" data-state="running">
+    <div
+      className="play"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Play game"
+      data-state="running"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') stop();
+      }}
+    >
       <div className="play__bar">
-        <span className="play__title">Play game running · {sceneName}</span>
+        <span className="play__title" id="play-title">
+          Play game running · {sceneName}
+        </span>
         <button
           className="btn"
           onClick={() => setRun((current) => current + 1)}
@@ -139,7 +153,7 @@ function PlayFrame() {
         <button
           ref={stopRef}
           className="btn btn--primary"
-          onClick={() => setPlayGameRunning(false)}
+          onClick={stop}
           title="Stop Play game and return to the unchanged document"
           aria-label="Stop"
         >
@@ -156,6 +170,7 @@ function PlayFrame() {
         key={run}
         className="play__frame"
         title={`${sceneName} — Play game running`}
+        tabIndex={-1}
         sandbox="allow-scripts"
         srcDoc={html}
       />

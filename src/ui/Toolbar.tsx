@@ -143,7 +143,7 @@ export function Toolbar({
   const setPlayGameRunning = useEditorStore((s) => s.setPlayGameRunning);
 
   return (
-    <header className="toolbar">
+    <header className="toolbar" role="toolbar" aria-label="Project tools">
       <div className="toolbar__brand">
         <span className="toolbar__logo" aria-hidden="true">
           ◆
@@ -166,13 +166,13 @@ export function Toolbar({
       <div className="toolbar__spacer" />
 
       <div className="toolbar__group">
-        <button className="btn" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">
+        <button className="btn" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)" aria-label="Undo">
           ↶
         </button>
-        <button className="btn" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)">
+        <button className="btn" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
           ↷
         </button>
-        <button className="btn" onClick={actions.onFit} title="Fit scene to view">
+        <button className="btn" onClick={actions.onFit} title="Fit scene to view" aria-label="Fit scene to view">
           ⤢
         </button>
         {/* In the toolbar rather than the tree or the inspector because it is
@@ -266,6 +266,7 @@ export function Toolbar({
             className="btn"
             onClick={actions.onExportSceneTs}
             title="Export a TypeScript Phaser Scene class"
+            aria-label="Export TypeScript scene"
           >
             .ts
           </button>
@@ -273,6 +274,7 @@ export function Toolbar({
             className="btn"
             onClick={actions.onExportSceneJs}
             title="Export a JavaScript Phaser Scene class"
+            aria-label="Export JavaScript scene"
           >
             .js
           </button>
@@ -280,6 +282,7 @@ export function Toolbar({
             className="btn"
             onClick={actions.onExportHtml}
             title="Export a self-contained game page"
+            aria-label="Export runnable HTML page"
           >
             .html
           </button>

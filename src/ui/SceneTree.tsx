@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type MouseEvent } from 'react';
+import { useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import {
   countPrefabSpawns,
   countPrefabUses,
@@ -140,7 +140,7 @@ export function SceneTree() {
         ))}
       </div>
 
-      <ul className="tree">
+      <ul className="tree" aria-label="Scene objects">
         <TreeRows
           nodes={scene.children}
           depth={0}
@@ -394,6 +394,21 @@ function TreeRows(props: RowsProps) {
     else select(id);
   };
 
+  const navigate = (event: KeyboardEvent<HTMLButtonElement>, node: GameObjectNode) => {
+    const labels = [...document.querySelectorAll<HTMLButtonElement>('.tree__label[data-tree-object]')];
+    const index = labels.indexOf(event.currentTarget);
+    let next = index;
+    if (event.key === 'ArrowDown') next += 1;
+    else if (event.key === 'ArrowUp') next -= 1;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = labels.length - 1;
+    else if (event.key === 'ArrowRight' && node.type === 'container' && collapsed.has(node.id)) props.onToggleCollapsed(node.id);
+    else if (event.key === 'ArrowLeft' && node.type === 'container' && !collapsed.has(node.id)) props.onToggleCollapsed(node.id);
+    else return;
+    event.preventDefault();
+    labels[Math.max(0, Math.min(labels.length - 1, next))]?.focus();
+  };
+
   /**
    * A drop on the middle of a container row nests; anywhere else, and any drop
    * on anything that is not a container, reorders. The bands are generous
@@ -458,7 +473,7 @@ function TreeRows(props: RowsProps) {
               ) : (
                 <span className="tree__twisty" />
               )}
-              <button className="tree__label" onClick={(event) => pick(event, node.id)}>
+              <button className="tree__label" data-tree-object aria-pressed={selectedIds.includes(node.id)} aria-label={`${node.name}, ${node.type}`} onKeyDown={(event) => navigate(event, node)} onClick={(event) => pick(event, node.id)}>
                 <span className="tree__type" data-type={node.type} />
                 <span className="tree__name">{node.name}</span>
               </button>

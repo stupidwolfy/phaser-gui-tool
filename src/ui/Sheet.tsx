@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 /**
  * The mobile bottom sheet.
@@ -18,12 +18,28 @@ export function Sheet({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const titleId = useId();
+  const sheetRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open) requestAnimationFrame(() => sheetRef.current?.querySelector<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus());
+  }, [open]);
+
+  const keepFocusInside = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') return onClose();
+    if (event.key !== 'Tab') return;
+    const controls = [...(sheetRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? [])];
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  };
   return (
-    <div className={`sheet ${open ? 'is-open' : ''}`} aria-hidden={!open}>
-      <div className="sheet__grip" />
+    <div ref={sheetRef} className={`sheet ${open ? 'is-open' : ''}`} aria-hidden={!open} role="dialog" aria-modal={open || undefined} aria-labelledby={titleId} onKeyDown={keepFocusInside}>
+      <div className="sheet__grip" aria-hidden="true" />
       <div className="sheet__header">
-        <span>{title}</span>
-        <button className="icon-btn" onClick={onClose} aria-label="Close panel">
+        <span id={titleId}>{title}</span>
+        <button className="icon-btn" onClick={onClose} aria-label={`Close ${title} panel`}>
           ✕
         </button>
       </div>

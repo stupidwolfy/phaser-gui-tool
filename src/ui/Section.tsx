@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { useEditorStore } from '../core/store';
 
 /**
@@ -37,6 +37,7 @@ import { useEditorStore } from '../core/store';
  * shortcut, say) has to blur the panel itself.
  */
 export function Section({ title, children }: { title: string; children: ReactNode }) {
+  const bodyId = useId();
   const open = useEditorStore(
     (s) => s.sectionOverrides[title] ?? s.sectionsOpenByDefault,
   );
@@ -48,6 +49,7 @@ export function Section({ title, children }: { title: string; children: ReactNod
         type="button"
         className="section__head"
         aria-expanded={open}
+        aria-controls={bodyId}
         onClick={() => toggleSection(title)}
       >
         <span className="section__title">{title}</span>
@@ -59,7 +61,7 @@ export function Section({ title, children }: { title: string; children: ReactNod
         </span>
       </button>
       {open && (
-        <div className="section__body">
+        <div className="section__body" id={bodyId}>
           {children}
         </div>
       )}
