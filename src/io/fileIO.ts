@@ -28,11 +28,17 @@ export const FILE_EXTENSION = '.phaser.zip';
 export const LEGACY_FILE_EXTENSION = '.phaser.json';
 const FILE_TYPE_OPTIONS = {
   description: 'Phaser GUI project archive',
-  accept: { 'application/zip': [FILE_EXTENSION] as string[] },
+  // Include the ordinary suffix as well as our compound one. Some platform
+  // pickers match only the final extension and otherwise hide `.phaser.zip`
+  // files even though their names end with the advertised compound suffix.
+  accept: { 'application/zip': [FILE_EXTENSION, '.zip'] as string[] },
 };
 const OPEN_FILE_TYPE_OPTIONS = [
   FILE_TYPE_OPTIONS,
-  { description: 'Legacy Phaser GUI project', accept: { 'application/json': ['.json'] as string[] } },
+  {
+    description: 'Legacy Phaser GUI project',
+    accept: { 'application/json': [LEGACY_FILE_EXTENSION, '.json'] as string[] },
+  },
 ];
 
 // The File System Access API is still not in lib.dom for every TS release, and

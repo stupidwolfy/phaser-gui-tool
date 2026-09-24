@@ -22,7 +22,9 @@ const EMITTER_MARKER = '#ff6bd6';
 /** Screenshot centroids and CSS-pixel maths agree to about a pixel. */
 const NEAR = 4;
 
-test('saves a ZIP archive with a data-URL-free manifest', async ({ editor }) => {
+test('saves and reopens a ZIP archive with a data-URL-free manifest', async ({
+  editor,
+}, testInfo) => {
   const saved = await editor.saveToFile();
   const files = unzipSync(saved.archive);
   expect(Object.keys(files)).toContain('project.json');
@@ -30,6 +32,12 @@ test('saves a ZIP archive with a data-URL-free manifest', async ({ editor }) => 
   expect(JSON.parse(manifest).scenes).toHaveLength(1);
   expect(manifest).not.toContain('data:');
   expect(saved.name).toMatch(/\.phaser\.zip$/);
+  const path = testInfo.outputPath(saved.name);
+  await fs.writeFile(path, saved.archive);
+  await editor.addObject('Rectangle');
+  await expect(editor.treeItems()).toHaveCount(4);
+  await editor.openFile(path);
+  await expect(editor.treeItems()).toHaveCount(3);
 });
 
 test('rejects unsafe, missing, oversized, and corrupt archives without loading them', async ({
