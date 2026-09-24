@@ -184,8 +184,16 @@
  * good. That is a wrong picture that becomes a lost field — the spawn anchor's
  * edge (41), the `setPosition` anchor's (42), and now this one. The bump turns
  * it into `parseProject`'s "made with a newer version of the editor" message.
+ *
+ * **v16 is a particle trail, and it bumps on that same edge for the fourth
+ * time.** `ParticlesProps.followId` rides in on `scenes` verbatim and adds no
+ * `NodeType`, so a v15 build opens the file and re-saves it untouched. What it
+ * cannot do is read it: while a follow is in force the emitter's own `x`/`y` is
+ * an *offset* from its target, so a v15 build draws and exports the emitter at
+ * that offset — a few pixels from the scene's corner — with no `startFollow`,
+ * which is a wrong picture rather than a missing one.
  */
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -1375,6 +1383,26 @@ export interface ParticlesProps {
   blendMode?: 'NORMAL' | 'ADD';
   /** The emitter object's own alpha, as every node type has. */
   alpha: number;
+  /**
+   * A top-level object this emitter follows, or absent for one that stays put.
+   * Read only through `particleFollowOf`.
+   *
+   * **While the follow is in force, the node's own `x`/`y` is the offset from
+   * the target**, and there are no offset fields. That is not a convention this
+   * editor chose: Phaser fires each particle at `follow.x + followOffset.x` and
+   * then draws it through the emitter's *own* transform, so an emitter at
+   * `(ox, oy)` following a player spawns at `player + (ox, oy)` whether anybody
+   * meant that or not. Emitting `add.particles(ox, oy, …)` and then a bare
+   * `startFollow(player)` is therefore exactly what the document says, and two
+   * offset fields beside `x`/`y` would be two answers to one question. It is
+   * the spawn anchor's `x`/`y`-become-an-offset rule, one feature over.
+   *
+   * On props rather than beside `physics` and `tween`, because it is the one
+   * thing here only an emitter can do: `startFollow` is `ParticleEmitter`'s.
+   * Optional so every project written before it reads, draws and exports
+   * exactly as it did.
+   */
+  followId?: string;
 }
 
 export interface NodePropsByType {
@@ -2692,6 +2720,86 @@ export function scrollFactorOf(node: GameObjectNode, topLevel: boolean): ScrollF
 /** Whether this is the factor absence already means, and so emits and draws nothing. */
 export function isDefaultScrollFactor(factor: ScrollFactor): boolean {
   return factor.x === 1 && factor.y === 1;
+}
+
+/**
+ * The object an emitter follows, or null — the only reader of
+ * `ParticlesProps.followId`, in the `cameraOf` / `scrollFactorOf` /
+ * `physicsOf` family. It answers four questions at once, and any one of them
+ * answered somewhere else is a canvas and an export that disagree about where a
+ * trail is:
+ *
+ * - **Is this a top-level emitter?** A follow is emitted in `create()`'s
+ *   epilogue against the bindings `scene.children` makes, so a nested emitter has
+ *   no binding to call it on — and one inside a prefab definition shares its
+ *   node id with every placement, so there would be no saying *which* emitter.
+ *   `physicsOf`'s `topLevel`, the rules' reason.
+ * - **Is the target a direct child of this scene, and not the emitter itself?**
+ *   The camera's `followId` rule to the character: a target found deeper, or
+ *   not at all, reads as absent rather than being deleted, so a node dragged into
+ *   a group and back out keeps the trail that follows it.
+ * - **Is the target not itself an emitter?** A following emitter's `x` is an
+ *   offset, so Phaser would read a number that is not where anything is; and a
+ *   standing emitter as a target is a point nobody asks a trail to follow. One
+ *   sentence rather than a check on *which* emitter, which is a chain.
+ * - **Is the emitter unturned and unscaled?** Phaser draws every particle
+ *   through the emitter's own `applyITRS(x, y, rotation, scale)` — read out of
+ *   `ParticleEmitterWebGLRenderer.js`, not recalled — so a turned emitter turns
+ *   the *target's position* about the scene origin, and a scaled one multiplies
+ *   it. There is no emit that undoes that, so the follow reads as absent and the
+ *   panel says why. *A repair may narrow what the document says; it may never
+ *   widen it* — this narrows, and the field is kept, so turning it back brings
+ *   the trail back.
+ *
+ * It hands back a node of the document **by identity**, so unlike most of this
+ * family it is safe inside a zustand selector — said because thirteen of its
+ * neighbours carry the opposite warning.
+ */
+export function particleFollowOf(
+  node: GameObjectNode,
+  scene: SceneDoc,
+  topLevel: boolean,
+): GameObjectNode | null {
+  if (node.type !== 'particles' || !topLevel) return null;
+  const id = node.props.followId;
+  if (typeof id !== 'string' || id === node.id) return null;
+
+  const { rotation, scaleX, scaleY } = node.transform;
+  if (rotation % 360 !== 0 || scaleX !== 1 || scaleY !== 1) return null;
+
+  const target = scene.children.find((child) => child.id === id);
+  if (target === undefined || target.type === 'particles') return null;
+  return target;
+}
+
+/**
+ * World deltas for a move, with every following emitter's own delta taken back
+ * off by its target's.
+ *
+ * A following emitter is drawn at its target plus its own `x`/`y`, so when the
+ * two move together — a drag of both, a nudge, an alignment of a row that
+ * holds both — applying each its delta moves the trail *twice*. Its stored
+ * offset has to change by what it moved **relative to** its target, which for a
+ * drag or a nudge is zero and for an alignment is the difference. One helper,
+ * so align, distribute and the arrow keys cannot disagree about it.
+ *
+ * `selectionRoots` is deliberately not where this lives: that decides what an
+ * edit *acts on*, and deleting a player and its trail together must delete
+ * both. This is about how far each one moves, which is a different question.
+ */
+export function compensateFollowers(
+  scene: SceneDoc,
+  deltas: ReadonlyMap<string, { dx: number; dy: number }>,
+): Map<string, { dx: number; dy: number }> {
+  const out = new Map(deltas);
+  for (const [id, delta] of deltas) {
+    const node = scene.children.find((child) => child.id === id);
+    if (!node) continue;
+    const target = particleFollowOf(node, scene, true);
+    const carried = target ? deltas.get(target.id) : undefined;
+    if (carried) out.set(id, { dx: delta.dx - carried.dx, dy: delta.dy - carried.dy });
+  }
+  return out;
 }
 
 /**

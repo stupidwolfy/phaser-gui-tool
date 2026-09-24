@@ -303,7 +303,11 @@ test('an emitter exports as one add.particles with its whole config', async ({
   // because the fixture holds three emitters — one over a sheet, one over an
   // atlas frame, and one with no image at all, which takes `constructorFor`'s
   // null return.
-  expect(exported.contents.split('.add.particles(')).toHaveLength(3);
+  //
+  // Scoped to the first scene, where those three live: the second holds the
+  // particle-trail fixtures, which are emitters too.
+  const [, first] = exported.contents.split(/^export class /m);
+  expect(first.split('.add.particles(')).toHaveLength(3);
 
   // The config is emitted whole, defaults included, so the generated code says
   // exactly what the document says rather than half-hiding settings behind
@@ -475,9 +479,10 @@ test('a body exports as add.existing and its setters, and a nested one as nothin
 
   const exported = await editor.exportCode('ts');
 
-  // Four bodies reach the output and no more: the fixture holds six, and the
+  // Six bodies reach the output and no more: the fixture holds eight, and the
   // two it leaves out are the one nested in a group and the one inside a prefab
-  // definition. Both are container children, whose x/y are their parent's
+  // definition. (Six rather than four since round bodies: the second scene's
+  // round ball and round bumper are two more top-level Arcade bodies.) Both are container children, whose x/y are their parent's
   // coordinates rather than the world's — a count rather than a whole-file
   // `not.toContain`, which is a shared resource this file has already been
   // burned by once.
@@ -486,7 +491,7 @@ test('a body exports as add.existing and its setters, and a nested one as nothin
   // anywhere that `PHYSICS_TYPES` actually learned about the two types
   // iteration 19 added. That list is a silent step: a type missing from it is
   // simply never offered a body, which looks exactly like a decision.
-  expect(exported.contents.match(/physics\.add\.existing\(/g) ?? []).toHaveLength(4);
+  expect(exported.contents.match(/physics\.add\.existing\(/g) ?? []).toHaveLength(6);
 
   // A static body is one call with nothing chained onto it, because Phaser's
   // StaticBody genuinely has no velocity, bounce, drag, mass or gravity.
@@ -941,8 +946,10 @@ test('a project with one world of each engine emits both, and neither leaks', as
   expect(exported.contents).toMatch(/\w+\.ignoreGravity = false;/);
 
   // And the static body gets the literal and nothing after it, which is the
-  // Arcade branch's "a StaticBody has nothing to chain" one engine over.
-  expect(exported.contents.match(/matter\.body\.setMass\(/g) ?? []).toHaveLength(1);
+  // Arcade branch's "a StaticBody has nothing to chain" one engine over. Two
+  // calls, one per *dynamic* Matter body — the faller and the round ball — so a
+  // third would be the static ramp wrongly given a mass.
+  expect(exported.contents.match(/matter\.body\.setMass\(/g) ?? []).toHaveLength(2);
 
   // The one thing a Matter scene must *not* emit: a collider row is Arcade's
   // `physics.add.collider`, and the scene that started Matter has no
@@ -1959,7 +1966,102 @@ test('the camera is emitted per scene, and the follow line after the objects', a
   // Per scene, not per file: the second scene has no camera of its own, so
   // `cameraOf`'s default branch reaches the same export and emits nothing.
   expect(second).not.toContain('setZoom');
-  expect(second).not.toContain('startFollow');
+  // The *camera's* follow, specifically: the second scene holds a particle
+  // trail, which is a `startFollow` of its own on an emitter.
+  expect(second).not.toContain('cameras.main.startFollow');
+});
+
+test('a trail exports as one startFollow after the objects, and only where it can follow', async ({
+  editor,
+}, testInfo) => {
+  const path = testInfo.outputPath('hostile-trails.phaser.json');
+  await fs.writeFile(path, JSON.stringify(hostileProject()), 'utf8');
+  await editor.openFile(path);
+
+  const exported = await editor.exportCode('ts');
+  const [, , second] = exported.contents.split(/^export class /m);
+
+  // Five emitters ask to follow and one may: the rest name nothing, are turned,
+  // are inside a group, or follow an object that emitted nothing — and that one
+  // is a comment rather than a call on a binding nothing declared.
+  const calls = second.match(/\.startFollow\(/g) ?? [];
+  expect(calls).toHaveLength(1);
+  expect(second).toMatch(/^\s*trailSparks\.startFollow\(\w+\);$/m);
+  expect(second).toContain('// A particle trail follows an object that could not be added.');
+  // After the object list, since a target can come later in it than its trail.
+  expect(second.indexOf('trailSparks.startFollow')).toBeGreaterThan(
+    second.lastIndexOf('.add.particles('),
+  );
+  // Bare, with the offset left in the emitter's own position: -12, 30.
+  expect(second).toContain('this.add.particles(-12, 30,');
+});
+
+test('a project with no trail exports no startFollow', async ({ editor }) => {
+  // The byte-for-byte rule, scoped to a project with no trail rather than
+  // asserted over the hostile one, which legitimately holds the string.
+  const exported = await editor.exportCode('ts');
+  expect(exported.contents).not.toContain('startFollow');
+});
+
+test('the exported page leaves a trail behind the object it follows', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // Built through the UI, the tween test's reason: this is the one claim that
+  // the whole chain arrived — the follow line, its place after the objects, and
+  // Phaser firing at the target plus the emitter's own position.
+  await editor.clearScene();
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Player');
+  await editor.setField('X', 160);
+  await editor.setField('Y', 270);
+  await editor.setTween(true);
+  await editor.setTweenTarget('X', 800);
+  await editor.setField('Tween duration ms', 4000);
+  await editor.setChoice('Tween ease', 'Linear');
+  // Yoyo forever, the tween test's reason: something that never stops moving
+  // can be sampled at any moment.
+  await editor.setField('Tween repeat', -1);
+
+  await editor.addObject('Particles');
+  await editor.setField('Name', 'Smoke');
+  await editor.importImage({ name: 'smoke.png', buffer: solidPng(32, 32, PARTICLE_FILL) });
+  await editor.setField('X', 160);
+  await editor.setField('Y', 270);
+  await editor.setField('Speed min', 0);
+  await editor.setField('Speed max', 0);
+  await editor.setField('Scale start', 1);
+  await editor.setField('Scale end', 1);
+  await editor.setField('Alpha start', 1);
+  await editor.setField('Alpha end', 1);
+  await editor.setField('Lifespan', 8000);
+  // Set on the player, so the offset it leaves in X and Y is zero — which means
+  // an export that dropped the follow would throw every particle into the
+  // scene's top-left corner rather than anywhere near the player.
+  await editor.setChoice('Emitter follows', 'Player');
+  await editor.settle();
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain('smoke.startFollow(player);');
+  expect(exported.contents).toContain('this.add.particles(0, 0,');
+
+  const run = await runExportedPage(page.context(), testInfo.outputPath('trail'), exported.contents);
+  const canvas = run.page.locator('canvas');
+  const scale = (await canvas.boundingBox())!.width / 960;
+
+  // The particles leave from the player and stay where they were thrown, so the
+  // box they occupy stretches along its path — a standing emitter's is one
+  // 32-unit block, and a dropped follow's sits in the corner at the top.
+  const box = await reaches(
+    async () => findColorBox(run.page, await canvas.screenshot(), PARTICLE_FILL),
+    (found) => found.count > 0 && found.width / scale > 250,
+  );
+  expect(box.width / scale, 'the particles did not trail the player').toBeGreaterThan(250);
+  const middle = (box.y + box.height / 2) / scale;
+  expect(Math.abs(middle - 270), 'the trail is not at the player').toBeLessThan(30);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
 });
 
 test('a project with no bodies exports no physics at all', async ({ editor }) => {

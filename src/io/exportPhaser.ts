@@ -32,6 +32,7 @@ import {
   touchZonesOf,
   blendModeOf,
   scrollFactorOf,
+  particleFollowOf,
   isDefaultScrollFactor,
   effectsOf,
   tweenOf,
@@ -4509,6 +4510,34 @@ function buildCreateBody(
       lines.push(
         `this.cameras.main.startFollow(${target}, ${camera.roundPixels}, ` +
           `${num(camera.followLerp)}, ${num(camera.followLerp)});`,
+      );
+    }
+  }
+
+  // A trail, after the objects for the camera follow's reason: it names a
+  // binding the list may not have made yet, since an emitter can come before
+  // what it follows. One bare `startFollow` per emitter, with no offset
+  // arguments, because the emitter's own `x`/`y` already *is* the offset —
+  // Phaser fires at `target.x + followOffset.x` and then draws through the
+  // emitter's transform, so `add.particles(ox, oy, …)` above has said it.
+  //
+  // An emitter that emitted nothing has had `missingReason` write its comment
+  // already; a target that emitted nothing gets the camera follow's comment.
+  // Nothing is gated or tabled, so a project with no trail exports byte for
+  // byte what it did before.
+  const trails = scene.children.flatMap((node) => {
+    const target = particleFollowOf(node, scene, true);
+    const emitter = bindings.get(node.id)?.[0];
+    return target === null || emitter === undefined ? [] : [{ emitter, target }];
+  });
+  if (trails.length > 0) {
+    if (lines.at(-1) !== '') lines.push('');
+    for (const { emitter, target } of trails) {
+      const binding = bindings.get(target.id)?.[0];
+      lines.push(
+        binding === undefined
+          ? '// A particle trail follows an object that could not be added.'
+          : `${emitter}.startFollow(${binding});`,
       );
     }
   }

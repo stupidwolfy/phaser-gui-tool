@@ -35,6 +35,27 @@ const NO_MOTION = {
   friction: 0.1,
 };
 
+/** One emitter's dials, shared by the trail fixtures in the second scene. */
+const TRAIL_PROPS = {
+  assetId: 'atlas-1',
+  frame: 0,
+  lifespan: 600,
+  speedMin: 0,
+  speedMax: 40,
+  angleMin: 0,
+  angleMax: 360,
+  scaleStart: 1,
+  scaleEnd: 0,
+  alphaStart: 1,
+  alphaEnd: 0,
+  quantity: 1,
+  frequency: 80,
+  gravityX: 0,
+  gravityY: 0,
+  tint: '#ffffff',
+  alpha: 1,
+};
+
 export function hostileProject(): Project {
   const breakout = '</script><script>window.__pwned = "yes";</script>';
   // A real four-frame sheet, because the export path for one runs Phaser's own
@@ -1926,6 +1947,84 @@ export function hostileProject(): Project {
             props: { width: 60, height: 40, fill: '#3b5bdb', alpha: 1 },
             physics: { ...NO_MOTION, kind: 'static' as const, shape: 'circle' as const },
             children: [],
+          },
+          // Particle trails, here in the registered-never-started scene so the
+          // emitted `startFollow` meets `ParticleEmitter` and a `Vector2Like`
+          // target under `tsc --strict` without a frame paying to run it.
+          //
+          // One real follow of the hostile-named player, with a negative offset
+          // — the only line that must be emitted.
+          {
+            id: 'trail-1',
+            name: 'trail sparks',
+            type: 'particles',
+            visible: true,
+            transform: { x: -12, y: 30, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { ...TRAIL_PROPS, followId: 'k' },
+            children: [],
+          },
+          // One naming a node that is not there, which only a hand edit can
+          // hold: it reads as absent, so no call and no comment.
+          {
+            id: 'trail-2',
+            name: 'lost trail',
+            type: 'particles',
+            visible: true,
+            transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { ...TRAIL_PROPS, followId: 'nobody' },
+            children: [],
+          },
+          // One following an object that emits nothing — a sprite with no image —
+          // which gets the camera follow's comment rather than a call on a
+          // binding nothing declared: a compile error in the `.ts`.
+          {
+            id: 'trail-blank',
+            name: 'blank target',
+            type: 'sprite',
+            visible: true,
+            transform: { x: 100, y: 100, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { assetId: null, frame: 0, animationId: null, tint: '#ffffff', flipX: false, flipY: false, alpha: 1 },
+            children: [],
+          },
+          {
+            id: 'trail-3',
+            name: 'blank trail',
+            type: 'particles',
+            visible: true,
+            transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { ...TRAIL_PROPS, followId: 'trail-blank' },
+            children: [],
+          },
+          // One turned, which Phaser would turn the target's position with, so
+          // the reader strips it — and one inside a group, which has no binding
+          // to call it on. Neither may emit a call.
+          {
+            id: 'trail-4',
+            name: 'turned trail',
+            type: 'particles',
+            visible: true,
+            transform: { x: 0, y: 0, rotation: 30, scaleX: 1, scaleY: 1 },
+            props: { ...TRAIL_PROPS, followId: 'k' },
+            children: [],
+          },
+          {
+            id: 'trail-group',
+            name: 'trail group',
+            type: 'container',
+            visible: true,
+            transform: { x: 200, y: 200, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { alpha: 1 },
+            children: [
+          {
+            id: 'trail-5',
+            name: 'nested trail',
+            type: 'particles',
+            visible: true,
+            transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+            props: { ...TRAIL_PROPS, followId: 'k' },
+            children: [],
+          },
+            ],
           },
         ],
       },
