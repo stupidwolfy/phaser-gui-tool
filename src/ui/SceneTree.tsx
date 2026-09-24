@@ -402,7 +402,7 @@ function TreeRows(props: RowsProps) {
     else if (event.key === 'ArrowUp') next -= 1;
     else if (event.key === 'Home') next = 0;
     else if (event.key === 'End') next = labels.length - 1;
-    else if (event.key === 'ArrowRight' && node.type === 'container' && !isNaN(index) && collapsed.has(node.id)) props.onToggleCollapsed(node.id);
+    else if (event.key === 'ArrowRight' && node.type === 'container' && collapsed.has(node.id)) props.onToggleCollapsed(node.id);
     else if (event.key === 'ArrowLeft' && node.type === 'container' && !collapsed.has(node.id)) props.onToggleCollapsed(node.id);
     else return;
     event.preventDefault();
