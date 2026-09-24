@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { expect, test } from './helpers/fixtures';
 import { SCENE } from './helpers/editor';
 
@@ -20,6 +21,45 @@ const EMITTER_MARKER = '#ff6bd6';
 
 /** Screenshot centroids and CSS-pixel maths agree to about a pixel. */
 const NEAR = 4;
+
+test('saves a ZIP archive with a data-URL-free manifest', async ({ editor }) => {
+  const saved = await editor.saveToFile();
+  const files = unzipSync(saved.archive);
+  expect(Object.keys(files)).toContain('project.json');
+  const manifest = strFromU8(files['project.json']);
+  expect(JSON.parse(manifest).scenes).toHaveLength(1);
+  expect(manifest).not.toContain('data:');
+  expect(saved.name).toMatch(/\.phaser\.zip$/);
+});
+
+test('rejects unsafe, missing, oversized, and corrupt archives without loading them', async ({
+  editor,
+  page,
+}, testInfo) => {
+  const saved = await editor.saveToFile();
+  const original = unzipSync(saved.archive);
+  const manifest = JSON.parse(strFromU8(original['project.json']));
+  manifest.assets = [{
+    id: 'missing', name: 'missing.png', mimeType: 'image/png',
+    path: 'assets/images/6d697373696e67.png', width: 1, height: 1,
+  }];
+
+  const cases: Array<[string, Uint8Array, RegExp]> = [
+    ['missing.phaser.zip', zipSync({ 'project.json': strToU8(JSON.stringify(manifest)) }), /missing referenced asset/i],
+    ['unsafe.phaser.zip', zipSync({ ...original, '../outside': strToU8('no') }), /unsafe path/i],
+    ['oversized.phaser.zip', zipSync({ ...original, huge: new Uint8Array(33 * 1024 * 1024) }), /too large/i],
+    ['corrupt.phaser.zip', Uint8Array.from([0x50, 0x4b, 3, 4, 1, 2, 3]), /not a valid ZIP/i],
+  ];
+
+  for (const [name, bytes, message] of cases) {
+    const path = testInfo.outputPath(name);
+    await fs.writeFile(path, bytes);
+    await editor.openFile(path);
+    await expect(page.getByText(message)).toBeVisible();
+    // Failed validation is atomic: the starter project is still in the tree.
+    await expect(editor.treeItems()).toHaveCount(3);
+  }
+});
 
 test('boots with the starter project, and draws it where the document says', async ({
   editor,
@@ -209,7 +249,7 @@ test('saves a file, starts over, and reopens it', async ({ editor, page }, testI
   await editor.setField('Name', 'Marker');
 
   const saved = await editor.saveToFile();
-  expect(saved.name).toMatch(/\.phaser\.json$/);
+  expect(saved.name).toMatch(/\.phaser\.zip$/);
 
   const parsed = JSON.parse(saved.contents);
   // A literal rather than the imported constant: the point is that a bump is

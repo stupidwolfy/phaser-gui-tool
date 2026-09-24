@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { strFromU8, unzipSync } from 'fflate';
 import { expect, test } from './helpers/fixtures';
 import { toneWav } from './helpers/wav';
 
@@ -40,19 +41,21 @@ test('a registered sound survives a save and an open', async ({ editor }, testIn
   await editor.checkbox('Loop').check();
 
   const saved = await editor.saveToFile();
-  const parsed = JSON.parse(saved.contents);
+  const entries = unzipSync(saved.archive);
+  const parsed = JSON.parse(strFromU8(entries['project.json']));
 
   // Asserted in the artefact so that a future bump is a deliberate act, the way
   // `guides.spec`, `scenes.spec` and `physics.spec` each assert their own.
   expect(parsed.schemaVersion).toBe(16);
   expect(parsed.audio).toHaveLength(1);
-  // Nothing but the five allowed mime types is ever written or read back.
-  expect(parsed.audio[0].dataUrl).toMatch(/^data:audio\/wav;base64,/);
+  expect(parsed.audio[0].dataUrl).toBeUndefined();
+  expect(parsed.audio[0].path).toMatch(/^assets\/audio\/[0-9a-f]+\.wav$/);
+  expect(Buffer.from(entries[parsed.audio[0].path])).toEqual(wav().buffer);
   expect(parsed.scenes[0].sounds).toHaveLength(1);
   expect(parsed.scenes[0].sounds[0]).toMatchObject({ loop: true, volume: 0.25 });
 
-  const path = testInfo.outputPath('with-audio.phaser.json');
-  await fs.writeFile(path, saved.contents, 'utf8');
+  const path = testInfo.outputPath('with-audio.phaser.zip');
+  await fs.writeFile(path, saved.archive);
 
   await editor.newProject();
   await editor.openFile(path);

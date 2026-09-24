@@ -6478,579 +6478,79 @@ setting **Settings → Pages → Source: GitHub Actions** is already configured;
 gives a blank page with 404ing assets — the single most likely deploy failure. Override
 with the `VITE_BASE` env var for a fork or custom domain.
 
-## Not built yet
+## Product roadmap and technical limitations
 
-Particle trails shipped in iteration 45, and they are the result of the check iteration 40
-prescribed: split every refusal that names several things with one reason. Particles' "no
-`stopAfter`, no `flow`, no emit or death zone, no follow target" was named there as one of
-two candidates. Taken one at a time, zones are still the `.tmj` argument and `stopAfter` is
-still behaviour over time, but the follow was the camera's `followId` again. The other
-candidate named alongside it, blend's six refusals, has not been split yet. What trails leave
-is in "Trails" above.
+Product priorities, delivery status, and follow-up work belong in
+[`docs/PRODUCT_PLAN.md`](docs/PRODUCT_PLAN.md). Keep that document aligned with the findings
+in [`docs/UX_REVIEW.md`](docs/UX_REVIEW.md); do not turn this contributor guide into a
+second roadmap.
 
-Masks shipped in iteration 40 and are the entry worth reading first, because the check that
-found them was the one iteration 39 wrote down — and because they are the second hole in a
-row closed by finding an argument that was **false** rather than dated.
+The following are architectural boundaries contributors must account for when changing the
+editor. They are constraints, not a prioritized backlog:
 
-Run that check — re-read every refusal that justifies itself by pointing at a neighbour —
-and the one that fails hardest is not phrased like a citation at all. It is a *list*.
-`EFFECT_KINDS`' comment refused six filters in one sentence: `addMask`, `addDisplacement`,
-`addBlend`, `addGradientMap`, `addCombineColorMatrix` and `addImageLight` "all take a
-texture or another game object … which is an iteration rather than a member", and this file's
-copy of it added that a mask "would be the first thing in this document that points *at
-another node*". The document has held `followId` since iteration 18, both sides of a
-`SceneCollider` since 20, and a `nodeId` on nine `RuleAction` members since 28 — every one
-with a dangling-reference story already written. And a mask fed a *texture* never needed the
-"or another game object" half at all.
+- **The editor does not simulate the game.** The document stores declarations and the
+  exporter emits runtime behaviour. Rules, collisions, camera actions, audio, particle
+  lifecycle, and physics do not run on the editor canvas. Preview runs the generated game
+  in a separate sandboxed iframe; state must not be copied back into the project document.
+- **Stored values remain authoritative.** Do not persist transient Phaser state such as a
+  tweened position, current animation frame, particle state, physics velocity, or camera
+  interpolation. The renderer may temporarily display it, but stopping preview must restore
+  the document value.
+- **References need a complete lifecycle.** Features that point to an asset, node, scene,
+  prefab, animation, variable, or rule target must define validation, duplication/remapping,
+  deletion/dangling-reference behaviour, per-scene asset collection, and export naming. A
+  field being easy to add to the schema does not make the reference cheap.
+- **Nested content is intentionally constrained.** Physics bodies and behaviours belong to
+  top-level nodes, not container children or prefab internals. Effects, masks, blend modes,
+  scroll factors, and similar node-level properties cannot be applied externally to an
+  individual tilemap layer or prefab child. Prefabs cannot contain instances, because that
+  requires cycle detection and topological export; per-instance overrides require a merge
+  and revert model rather than another optional prop.
+- **Runtime-created prefab instances have no document identity.** Existing actions that
+  name document nodes cannot later address a spawned instance. Lifetimes, follow-up actions,
+  and rule-driven mutation of one spawned copy need an explicit runtime identity model; do
+  not quietly reuse document node ids.
+- **Rules are event/action data, not an embedded programming language.** Sequences, delays,
+  loops, arbitrary expressions, custom callbacks, and user code require a control-flow and
+  validation model. Additions should remain serializable, inspectable actions with explicit
+  targets and deterministic export.
+- **Masks and texture-backed filters share asset plumbing.** A mask currently uses an image
+  asset. Masks sourced from another node need ordering and dangling-reference handling;
+  geometry masks need a serializable geometry format. Displacement, gradient-map,
+  combine-color-matrix, and image-light filters can reuse the asset picker/collection path,
+  but still need separate schemas and Phaser export cases.
+- **Tilemap layers share one grid and tileset.** A per-layer tileset can disagree about tile
+  dimensions and therefore needs a map model that resolves grid size explicitly. Layers are
+  not nodes, so node-level alpha, effects, blend, and scroll-factor features do not apply to
+  them automatically. Tiled (`.tmj`) import is a document-format conversion problem, not a
+  file-picker addition: named tilesets, object layers, properties, and orientations all need
+  mappings.
+- **A particle follow is a top-level offset.** While `ParticlesProps.followId` is in force,
+  the emitter's own `x`/`y` is its offset from the target, because Phaser fires at
+  `follow.x` and then draws through the emitter's transform. It follows only when the
+  emitter is top-level, unturned and unscaled, and the target is a top-level node that is
+  not an emitter; `particleFollowOf` is the only reader. A move that carries both must not
+  move the trail twice (`compensateFollowers`, and the drag's carried-follower filter).
+- **Particle zones are geometry, not scalar emitter props.** Emit/death zones need their own
+  serializable shape model, editor controls, validation, and export. Per-particle animation
+  also needs an animation reference and collection path rather than only another emitter
+  toggle.
+- **Tween targets stay deliberately narrow.** Transform and alpha targets share one stable
+  shape across node types. Tweening type-specific props or effects needs a discriminated
+  target model; chaining and completion actions need control flow. Do not add either as an
+  unvalidated string field.
+- **The play iframe is deliberately isolated.** Hot editing, runtime inspection, and error
+  reporting require an explicit communication protocol. Do not weaken the sandbox or read
+  mutable game state back into the document as a shortcut.
+- **Some Phaser capabilities imply new sub-formats.** Custom shaders, custom blend equations,
+  arbitrary Matter polygons, emit/death zones, gradient fills, atlas rotation, and imported
+  Tiled maps need parsers, validation, editing UI, and export—not merely a new union member.
+- **Geometry tools operate on axis-aligned drawn bounds.** Angled guides cannot use the
+  current per-axis snapping offsets and require a different intersection/projection model.
+  Keep selection, snapping, handles, and tests based on the shared bounds helpers rather than
+  deriving a second geometry representation.
 
-**So the reading to carry forward is narrower than iteration 39's, and it is about the
-shape of the sentence rather than its content: a refusal that covers a list is the hardest
-kind to check, because it is right about most of the list.** Iteration 39 found a fake limit
-riding beside a real one inside one sentence about one feature. This was a fake limit riding
-beside a real one across six features at once — and anyone who spot-checked it would have
-picked `addDisplacement` or `addImageLight`, found the sentence true, and moved on. The list
-was doing the work of six arguments while having been thought through for about two.
-
-**The check for iteration 41 is therefore to find every refusal in this file that refuses
-more than one thing in a single breath** — the ones that name three or four or six things
-and then give one reason — and split them: write the reason out once per item, and see which
-ones stop being reasons when they have to stand alone. Two are already visible from here.
-"No canvas-only modes, no ERASE, no custom blend equation, no per-layer or per-child blend,
-no camera-wide blend, and no animating one" is six refusals and about three arguments. So is
-particles' "no `stopAfter`, no `flow`, no emit or death zone, no follow target". The
-survivors of this iteration's own list are the model: `addDisplacement`,
-`addGradientMap`, `addCombineColorMatrix` and `addImageLight` are now each named with their
-own cost, and three of the four turn out to be one member and one picker rather than an
-iteration.
-
-What iteration 40 leaves is in "Masks" above: no mask from another node (the half of that
-sentence which was always true), no geometry mask, no `viewCamera`/`viewTransform`/
-`scaleFactor`, no animating a mask, and no mask on a tilemap layer or a prefab child from
-outside. **And the four remaining texture-taking filters are now a pure loosening** of the
-machinery masks built, which is the part of this worth carrying: their price dropped the
-moment somebody paid it once.
-
-Scroll factors shipped in iteration 39, and were the entry worth reading first before that,
-because the
-check that found them was the one iteration 38 wrote down — and because what they found was
-a **new** way for this list to be wrong. The previous four lessons were all about a refusal
-being *dated*: 34 said a refusal list is a list of things somebody thought of, 37 said it
-gets longer in the direction it is already looking, 38 said the holes are in the sentences a
-feature wrote about itself before the closer existed. All three assume the sentence was true
-when it was written. This one was not.
-
-Run the grep 38 prescribed — `scene.start`, "game logic", everything older than iteration 28
-— and nineteen refusals come back. Eleven were already closed. Most survivors were one cheap
-member. The one that mattered read, in iteration 25: *"a layer that drifts is behaviour over
-time, and a layer that moves at a different rate to the camera is a second camera's
-question."* The first clause is a correct citation of iteration 19's real limit. The second
-is a **standing fact** — `setScrollFactor`, declared once at boot — smuggled in beside it on
-a comma, and it inherited the first clause's authority for fourteen iterations. Meanwhile
-the exporter had been emitting `setScrollFactor(0)` since iteration 21 for its own HUD, and
-the README had been advertising a "parallax background layer" since iteration 19.
-
-**So the reading to carry forward: a refusal sentence can weld a real limit to a fake one,
-and the fake half inherits the real half's authority.** A dated refusal is at least honest
-about its own iteration; this kind is not wrong about the vocabulary, it is wrong about the
-*feature*. The check it set for iteration 40 was to re-read every refusal that justifies
-itself by pointing at a neighbour — the ones phrased "X's argument one type over", "the
-same sentence one feature on", "the `.tmj` argument at a smaller scale", "the second field
-over one number" — and ask whether the neighbour's argument actually reaches this case or
-only the case beside it. **That check was run and it worked**; see the head of this section
-for what it turned up, and note that the answer was a refusal covering a *list*, which is
-the same failure one order of magnitude up.
-
-What iteration 39 leaves is in "Parallax and pinning" above: no scroll speed or drift (still
-iteration 19's genuine limit, and still the first thing that would need an emitted
-`update()`), no factor on a tilemap layer or a prefab child from outside, no animating one,
-no rule action that sets one, no camera-relative size, and no screen-space authoring mode.
-
-Starting, stopping and bursting an emitter shipped in iteration 38 and is the entry worth
-reading first, because it is the **fourth** hole in a row that nothing on this list had ever
-named — and because it finally says where to look, where the three before it only said where
-not to. Iteration 34 said a refusal list is a list of things somebody thought of. Iteration
-37 said it gets longer in the direction it is already looking, and that the check to run is
-"what did we build that the newest feature cannot name". Run over eighteen action kinds that
-found this in one pass; and what it found was not an oversight but a **sentence with a date
-on it**. Iteration 15 refused a timed burst and an `emitting` prop as "behaviour over time is
-game logic, the `scene.start` argument again" — the exact phrase rules were built, thirteen
-iterations later, to answer. Rules arrived in 28. Iterations 28, 31, 34 and 37 each went back
-for one of those pre-rules `scene.start` refusals, and not one of them noticed the one that
-used the phrase twice in its own section.
-
-**So the reading to carry forward is narrower than 37's: the holes are in the sentences a
-feature wrote about itself before the thing that would close them existed.** A refusal is
-dated, and a dated refusal is a claim about the vocabulary of its own iteration, not about
-the document. The check it set for iteration 39 was mechanical, which was the point:
-`grep` this file for `scene.start` and for "game logic", and read every refusal older than
-iteration 28 against what a rule can say now. That check was run, and it worked — see the
-head of this section for what it turned up and for why the answer was not the kind of thing
-this paragraph was expecting.
-
-What iteration 38 leaves is short and is in "Making one throw" above: no pause or resume, no
-burst at a point, no emit or death zones, no `stopAfter` (the follow target shipped in 45), no `advance` or
-`duration` on a start, and nothing that reads whether an emitter is running. And the
-`emitting` prop is **not** on that list — it is refused and stays refused, because the
-exporter derives one.
-
-Pushing an object shipped in iteration 37 and is the entry worth reading next, because it is
-the third hole in a row that **nothing on this list had ever named** — and the one that says
-most about how this list goes wrong. The two before it were in the drawing domain, where the
-"Phaser 4, not 3" bullet had at least written the word down. This one was in the domain with
-eight sections of argument about it: rules had a "what stays refused" paragraph per iteration
-from 28 onwards, each one carefully refusing a *sequence* — `onComplete`, a "while" trigger,
-an expression tree — while none of them noticed that the vocabulary could not touch a physics
-body at all. **The reading to carry forward is narrower than iteration 34's and sharper: a
-refusal list gets longer in the direction it is already looking.** Six iterations of them
-asked "is this a program?" and none asked "what in this project can a rule not reach?" The
-answer was the entire physics stack, shipped across iterations 16, 20, 21 and 26 and reachable
-only by a player holding a key. The check worth running on the *next* iteration is not "what
-did we refuse" but "what did we build that the newest feature still cannot name". What
-pushing leaves is short and all of it is in the section above: no impulse or relative push, no
-acceleration/drag/bounce/gravity from a rule, no angular velocity, no push towards a point or
-at another object, no push on a spawned object or a nested one, no reading a velocity in a
-condition. **`setPosition`**, which this paragraph named as the next ask, shipped in iteration
-42 — see "Moving one" above.
-
-Blend modes shipped in iteration 36 and are the entry worth reading first, because of the
-three things named in the sentence below, that was the one nobody went back for. Masks,
-filters and blend modes were all absent from `src/` while the "Phaser 4, not 3" bullet had
-been saying for thirty iterations that those three had changed. Filters shipped in 35 and
-the paragraph announcing them quoted iteration 34's closing lesson — *a refusal list is a
-list of things somebody thought of, and the hole that survives is the one nothing prompted
-the question* — and then left two of its own three untouched. One of them was refused with
-an argument, which is a decision; the other was simply not mentioned again, which is the
-lesson repeating inside the paragraph that states it. **The reading to carry forward: a
-sentence naming three gaps is not a list of three tasks, and the one that is neither done
-nor argued against is the one to go back to.** What blend modes leave is short, and all of
-it is in the section above: no canvas-only modes, no ERASE, no custom blend equation, no
-per-layer or per-child blend, no camera-wide blend, and no animating one. **Masks were the
-last of the three still standing, and iteration 40 closed them** — so that sentence about
-three gaps is now fully discharged, and what it cost is recorded at the head of this
-section: the argument still standing against masks was itself the same failure one order of
-magnitude up, a single refusal covering six filters at once.
-
-Visual effects shipped in iteration 35, and they were the entry worth reading first before
-that, because nothing on this list had ever named them either. What that feature leaves is
-short, because it adds no table, no node type and no reference. **Masks were the one entry
-here that has since shipped** — iteration 40 took them, and the sentence that stood in this
-spot is worth reading beside what it cost: it said `addMask` "would be the first thing in
-this document that points at *another node*", which was false, and it priced six filters
-together. What was true of it is kept in "Masks" above. **No camera-wide effects here**, since a
-filter on `cameras.main` is a property of the view and iteration 31 already put what
-happens to a view on a rule. **No custom shader**, which is code in the document — the
-emit-zone argument and the gradient fill's. **No animating an effect**: a tween's `to` is
-six properties that are one shape across the whole union, and an effect's dials are
-per-kind, which is exactly the refusal that keeps a seventh tween property out. And the
-eight remaining built-in filters — vignette, barrel, bokeh, tilt shift, threshold,
-quantize, key, blocky — are a **pure loosening**, one union member and one emit case each;
-the first two are effects on a view rather than on an object, and the rest are dials nobody
-has asked for yet. Since iteration 40 the four *texture*-taking ones —
-`addDisplacement`, `addGradientMap`, `addCombineColorMatrix` and `addImageLight` — are a
-loosening too, each one member and one picker, because masks paid for the asset plumbing
-they all share.
-
-Spawning shipped in iteration 34, and it is worth reading beside the list below because it is
-the one entry nothing on that list had ever named. `destroy` had been in `RuleAction` since
-iteration 28 and every "what stays refused" paragraph since had gone looking for a *sequence*
-to refuse, so nobody noticed the vocabulary had a verb for taking something away and none for
-putting one there. The lesson is not about spawning: it is that a refusal list is a list of
-things somebody thought of, and the hole that survives six iterations is the one nothing
-prompted the question. What spawning leaves is short, because it adds no table and no
-trigger. **No lifespan, and nothing destroys a spawned object** — the one a user meets first,
-and it is not deferred work: `destroy` names a document node, a spawned one has no id, and a
-`delayedCall` per spawn is "spawn, *then* destroy", which is `tweens.chain`'s refusal and
-iteration 28's line verbatim. A loosening would need spawned objects to be *addressable*,
-which is the per-instance identity prefabs already refuse. **Spawning at an object's
-position has since shipped**, in iteration 41, as an optional `nodeId` rather than the
-predicted union. See "Building one at an object".
-**No random position, no count, no velocity** — the first two are values that depend on
-nothing the document said, and the third is a body on a definition's child, which physics
-bans for the reason it bans one in a container. **No spawning a plain node** — a node is one
-object that already exists; the thing this document has for "build another" is a prefab.
-The one hole this iteration *made* — **no panel for a prefab nothing places** — closed in
-iteration 43, in the shape predicted here: prefab controls in the library rather than a field
-anywhere. See "The library's own controls" under Prefabs.
-
-Play shipped in iteration 32, and what it leaves is short because it adds nothing to the
-document to leave holes in. **No hot reload** — the overlay covers every control that could
-make an edit, so this is not deferred work but a question the shape answers; a loosening
-would mean the game and the editor side by side, which is a layout this editor has nowhere
-to put on a 390px screen. **No error panel** — see "Play" above: reading an opaque-origin
-frame means giving the exported page a reporting channel, and the export's bytes being
-exactly what runs is the property the feature exists for. **No pause, step, slow-motion or
-inspector**, which is a debugger and is a different tool rather than more of this one; the
-shape it would take is a second window onto a game the editor deliberately cannot see
-inside. **No editing while it runs, and nothing read back out of the game** — the second is
-the one to keep refusing hardest, because "drag it in the running game and keep the
-position" is the obvious next ask and it is the physics refusal exactly: a running game
-that can write to the document is a document that simulates. And **no choosing which scene
-to play** — a second answer to what Export already decides, though if it ever arrives it is
-a one-field loosening rather than a shape change, since `generateRunnableHtml` already
-emits every scene and boots the active one.
-
-Text variables and `setText` shipped in iteration 29, which closed the first hole iteration
-28 left — and it is worth reading the prediction beside the work, because the prediction was
-right about the sequencing and wrong about the cost. It said a string variable was "a
-loosening in shape", and the *shape* was indeed one field's type. What it did not name is
-the half that carried all the risk: a kind is a thing every rule naming the variable has to
-agree with, so the work was four new refusals in `rulesOf` and a store action that migrates
-the document when a kind is switched — **strip on read, repair on write** — without which the
-refusals are a trap rather than a guard. The emit was mechanical, as predicted. Five holes
-were left and **two of them closed in iteration 30** — see "Showing one as it changes" above,
-and read that prediction beside the work too, because this time it was right about the shape
-and wrong about where the cost fell. It said a following label "needs a field on the node
-rather than an action", which is exactly what `TextProps.label` is, and it said number
-formatting was "a field on the action and a pure loosening", which is exactly what two
-`NumberField`s are. What neither line names is the half the work actually went into: a format
-on the action and a format on the node are two ways of showing one number, so the emit had to
-grow **one printed formatter with two callers** rather than two call sites each printing their
-own arithmetic — and the first version of that formatter disagreed with the editor's copy
-about a text variable, which is the one disagreement this codebase has no reader to catch. The
-other surprise was the store: `updateProps` could set a label and could never remove one, so a
-feature whose document change is one optional field still needed an action of its own. Four
-holes left, one of which is now a remainder rather than a hole. **No template in a caption** — `Score: {score}` would be a syntax inside a field, so
-nothing parses the text and one variable goes on the end instead; two in one caption is an
-expression, which is the line this vocabulary does not cross, and the shape a loosening would
-take is a *list* of parts rather than a parser. Note what iteration 30 did **not** make of
-this: a bound label appends one value to one caption, which is the same refusal said a second
-time from the node's side. **No thousands separator**, which is what is left of the formatting
-hole — zero padding and decimal places shipped, and a separator is the one of the three that
-is a *locale* rather than a number: `toLocaleString` takes a language tag, which is a field
-whose right answer depends on who is playing, and `padStart` and `toFixed` were chosen
-precisely because neither has an answer that varies. **No text on a type that has no
-`setText`** — a `BitmapText` is the obvious second one and it does not exist yet; everything else in the union has no text at all,
-which is Phaser's limit and is said in the panel. And **no concatenating two variables**,
-which is the expression tree again and is refused rather than deferred.
-
-Rules shipped in iteration 28, and what they refuse divides cleanly into things that are a
-pure loosening later and things the feature exists to say no to.
-
-*Loosenings.* **No OR and no nesting** — an OR is two rules with one trigger and one action
-list, and the editor could offer a "duplicate this rule" button and deliberately does not.
-What would *not* be a loosening is a condition **tree**, which is a second document format
-inside a field. **No arithmetic beyond set and add** — `addVar{by: -1}` is subtraction, and
-multiply, min and clamp are one `op` field; it is refused because the request after multiply
-is `score = score + lives`, which is a second operand *naming a variable*, which is an
-expression tree and therefore code in the document. **String variables** were the third, and
-they are the one entry on this list that has shipped — in iteration 29, with the `setText`
-they were being sequenced behind; see above for what that cost and what it left. **No collision
-callback parameters** (which object hit which), and this one is mechanical as well as
-principled: the emitted callback takes zero parameters, which is assignable to
-`ArcadePhysicsCallback` with nothing to annotate, and the moment it wants two it needs two
-types the shared `create()` body has nowhere to put. **No rule inside a prefab** — a rule
-names top-level scene nodes only, so a definition's children are unreachable, and the shape it
-would take later is a per-*instance* rule, which is the override model prefabs already refuse.
-**No tap on a group, an instance, a tilemap or an emitter** — the instance one is the loosening
-(the factory would `setSize` from `getBounds()` before returning); the other three are Phaser's
-limits or the document's rather than deferred work, and each is said in the panel. **Camera
-effects** were the third entry here and **shipped in iteration 31** — and this is the rare
-case where a prediction was right to the word: "a pure loosening: five actions and no format
-change" is exactly what it was, five union members, five reader cases, five panel cases and
-five one-line emits, with no table, no gate, no helper and no schema bump. What it did not
-name is the one thing that made it cheaper still, and it is the sentence worth carrying
-forward: these are the first actions that **name nothing the document holds**, so three
-reference-walking functions inherited the right answer with no edit and nothing in the
-reader can cost a rule. See "Doing something at a moment" above, including `rotateTo`,
-`onComplete` and `force`, which stayed refused. **Nothing pauses and
-nothing stops** — `timer{loop: false}` is the whole of "once", and a rule that switches another
-rule off is a rule about rules.
-
-*And the things this feature exists to refuse.* **No condition on a live object property** —
-see Rules above; a variable is the one quantity that survives `scene.start`, validates against
-a table and is one shape across the whole union, where `x` on a tilemap and `width` on a sprite
-are different questions. **No per-object custom code** — a field holding JavaScript is a
-document that cannot be validated, cannot be escaped and cannot be drawn: the emit-zone
-argument at its purest, and the gradient fill's. **No `onComplete`, and nothing that waits** —
-a rule that fires when a tween finishes is a *sequence*, which is `tweens.chain`'s refusal one
-iteration on and the same sentence; `startTween` is allowed precisely because it names a moment
-and not an outcome. And **no "while" trigger**, which is the sharpest one: every trigger here
-is a moment Phaser already delivers, and a condition watched continuously is the first that
-would have to be polled — which is the first that needs an emitted `update()`, which is exactly
-where this iteration's line falls. **That paragraph gave two examples and only one of them was
-right, which iteration 33 found out — and it is worth leaving both here rather than quietly
-correcting one.** "While…" is still refused, for the reason above and unchanged. *"When the
-score passes ten"* is not: `changedata-<key>` is a moment Phaser delivers of its own accord,
-and iteration 30's labels had been listening to it for two iterations by the time anybody
-noticed. It shipped as the `varChange` trigger with no polling, no `update()` and no schema
-bump — see "Watching a number" above. The lesson is not about this trigger: it is that the
-line falls where the *loader and the event list* put it, and this file had guessed from what
-a feature sounded like, which is what it tells every reader not to do.
-
-*Not on either list:* relative variable targets are not refused, they are `addVar`; a rule has
-no `enabled` flag, because deleting it is one press and a disabled rule is a document saying two
-things; and `overlap` is not a hole at all, since a collide rule inherits `SceneCollider.kind`
-and the distinction was a parameter this feature never had to invent.
-
-Tweens shipped in iteration 27 with six deliberate holes. **One tween per node** — a
-second on the same object means a second *duration*, which is a list; that is a pure
-loosening later (`tween?: NodeTween` becomes `tweens?: NodeTween[]` and the emit becomes a
-loop), and what it actually costs is an inspector that has to say which of several is being
-edited. **No chain and no timeline** — one tween after another is a *sequence of events*,
-which is the line iteration 20 drew and this iteration is careful to stay on the near side
-of: `tweens.chain` is exactly the shape a behaviour model would take, and it is one.
-**Nothing starts a tween but the scene starting** — `paused: true` plus a handle is a
-trigger, which is the collider callback's refusal one feature over. **No callbacks** —
-`onComplete` is code in the document, the emit-zone argument and the gradient fill's.
-**Only the six transform-and-alpha properties**, because a seventh would be the first that
-is not on every node: a tint, a tile sprite's offset and a text object's font size are all
-per-type, so `to` would stop being one shape across the union and `TWEEN_PHASER_KEY` would
-need a per-type answer. And **no per-property duration or ease** — Phaser takes
-`x: { value, duration, ease }`, which is a timeline written sideways and the first hole
-again. Note what is *not* on this list: relative targets are refused rather than deferred
-(see Tweens above), and `hold` is absent for `useAdvancedWrap`'s reason — it is visible
-only on a tween that already yoyos and costs more to explain than it gives.
-
-Web fonts shipped in iteration 23 with four deliberate holes. **No `descriptors`** — the
-loader takes `{ weight, style }` and would let a real bold face be registered under the
-same family, but the editor's Bold and Italic are two booleans and the browser synthesises
-from the one face it has. Doing it properly is not a field: it is a *pairing* model, two or
-more asset rows that together mean one family, with a UI saying which is the italic of
-which. **No Google Fonts and no loading by URL** — a network dependency in a document whose
-whole premise is that `JSON.stringify(project)` is a complete save, and a project that
-stops rendering when a CDN does is exactly what embedding the bytes is for. **No
-subsetting**, which would need a parser per format in the allowlist and is the thing that
-would actually make a CJK face fit under the cap. And **no font in the export's own
-`<style>`** — not deferred at all, but the thing the feature refuses: Phaser's loader
-builds the `FontFace`, so there is nothing for CSS to do and adding it would put a family
-name and a data URL into the one half of that output the escaping does not cover.
-
-Typography shipped in iteration 22 with six deliberate holes, and the first of them — **no
-web-font loading** — is the one that closed, in iteration 23. It is worth reading what this
-paragraph used to say beside what the work turned out to be, because half of the prediction
-was wrong and it was the expensive half. It said loading a font would mean "the asset table
-again for a second kind of asset with its own mime allowlist and its own size cap, plus a
-`document.fonts.load` that has to finish before `create()` — a boot-order question this
-exporter has never had to answer, and the one hole here that is an iteration rather than a
-field." The first half was exactly right. The second half described a problem that does not
-exist: Phaser 4 ships `this.load.font`, so the boot-order question is answered by the
-`preload()` this exporter has emitted since images existed. See Web fonts above — and note
-that the prediction was made from Phaser 3 memory, which is the thing CLAUDE.md tells every
-reader not to do. **No BitmapText**, which is a second node type with a `.fnt` and its
-own parser: the texture-atlas argument, and it does not become smaller by sitting next to a
-`Text`. **No background colour behind the text** — a coloured box behind something is a
-rectangle, which this editor has had since iteration 1 and which has a draw order of its
-own; the field would be a second answer to "what is behind this object" that no other type
-gets. **No gradient or texture fill** — `color` can be a `CanvasGradient`, which is a
-runtime object the document has nowhere to put: the emit-zone argument. **No rich text or
-per-run styling**, which is markup inside a field and therefore a second document format.
-And **no `useAdvancedWrap` toggle** — the difference only shows on CJK and on unbroken
-URLs, so it is a field that costs more to explain than it gives. Note what is *not* on this
-list: `padding` is absent because it is derived rather than deferred, and per-side padding
-is not a loosening but a way to get it wrong.
-
-On-screen controls shipped in iteration 21 with three deliberate holes. **The layout is
-fixed** — a D-pad in one corner and a jump button in the other, sized against the scene
-rectangle and not placeable. Making one draggable is not a loosening but the screen-space
-rectangle this iteration refused: a new geometry kind with its own hit area, drag gesture,
-snap targets and inspector rows, which is an iteration rather than a field. **No analogue
-stick and no swipe**, both of which are a *magnitude* where every direction here is a
-boolean the keyboard already made — reading one would mean `setVelocityX` taking a
-fraction of the walk speed, which is a change to what `speed` means. And **the buttons'
-appearance is the export's**, white at a quarter alpha with an arrow in the middle: the one
-piece of styling this exporter chooses, chosen to be the line a reader will most easily
-change. A skin picker in the editor would be a second answer to a question the generated
-code already answers legibly.
-
-Collisions and controls shipped in iteration 20 with four deliberate holes, one of which
-iteration 21 then closed. **Nothing happens when two things touch** — no collider callback, no destroy-on-overlap, no scene
-transition. That is not deferred work but the line the whole iteration is drawn against:
-which pairs interact is a standing fact and what follows a touch is a sequence of events,
-so the export hands over the overlap and the line inside it stays the user's. A rule table
-of triggers and actions is the shape a later iteration would take, and it is a behaviour
-model rather than more of this one. **No touch or on-screen controls** was the second, and
-it is the one that closed — see Touch controls above, including where its prediction of "a
-third `scheme`" turned out to be the wrong shape. **No collision groups and no
-`setCollisionBetween` ranges**: a group is a second way of naming a set of objects that the
-scene tree already names one at a time, and a range is `collides` written shorter. **And no
-per-tile properties beyond solid** — a tile is a wall or it is not, and anything finer (ice,
-a one-way platform, damage) is the beginning of the behaviour model the first hole refuses.
-
-Texture atlases shipped in iteration 24, and it is worth reading what this paragraph used
-to say beside what the work turned out to be, because half the prediction was right and the
-expensive half was wrong in a new way. It said an atlas was "`generateFrameNames` and a
-second parser rather than more of this one". The second parser is real and is `atlas.ts`,
-which is most of the iteration's core. `generateFrameNames` is the half that was wrong, and
-not for the reason the fonts prediction was wrong — there the answer turned out to be
-easier, here it turned out to be *unusable*: Phaser's runtime concatenates a name happily
-and its own type declares `frames?: boolean | number[]`, so the exported `.ts` does not
-compile under `--strict` and the shared `create()` body has nowhere to put a cast. See
-Texture atlases above. Five deliberate holes were left. **No multi-page atlas** — a
-multipack is *n* images and one JSON naming each page, and the whole feature rests on a cut
-being a property of one set of bytes; a page set is a second kind of asset row rather than
-a field, and it is refused at the picker with a message instead of silently dropping pages.
-**No rotated frames**, refused at import rather than forwarded, and this is the hole that
-was nearly a field: rotation is pure pass-through to Phaser's parser and would have cost
-six lines, but it is *off by default* in every packer, it interacts with `frameSizeOf`, a
-panel's insets and a tile sprite's pattern, and it is invisible on any symmetric fixture —
-so it would have been a field carried on trust and wrong on somebody's real sheet.
-`useAdvancedWrap`'s refusal with a sharper edge: not merely unexplained, unverified.
-**No `scale9Borders` and no `anchor`/`pivot`** — the first would be a second answer to
-`NineSliceProps`' four insets, which iteration 19 deliberately put on the *node* because one
-64px texture is a dialog frame with 16px corners and a health bar with 4px ones; the second
-is a second answer to the origin every object here already centres. **No atlas authoring and
-no renaming** — the editor cuts a grid because a grid is four numbers, while an arbitrary
-rect set is a packer, and a name is the link the document holds, so renaming one here would
-break every node that named the old string (`FontAsset.family`'s refusal exactly). **And no
-Starling, Unity or `.atlasXML` forms** — a parser per format is the `.tmj` argument at a
-smaller scale, and JSON Hash plus JSON Array is what the tool people actually use writes.
-
-Nine-slice panels and tile sprites shipped in iteration 19 with four deliberate holes.
-**No `tileX`/`tileY` on a panel** — Phaser 4 can repeat a nine-slice's scalable regions
-instead of stretching them, which is two booleans and would be a pure loosening except for
-one thing: both are `readonly` and constructor-only, so they would have to join
-`shapeOf`'s signature and rebuild the object, and a seamless-texture caveat is a thing to
-explain in a panel that currently needs none. **No scroll speed on a tile sprite** — a
-background that drifts is `tilePositionX += delta` in the game's own `update()`, which is
-behaviour over time and the `scene.start` argument; the document says where the pattern
-starts, which is the part that is layout. **That refusal stands, and iteration 39 is the
-reason it is worth re-reading**: a tile sprite that *drifts* still needs the `update()` this
-vocabulary cannot emit, while a tile sprite that moves at a different rate to the camera —
-which is what "parallax background layer" in the README always meant — turned out to be a
-`scrollFactor` and a standing fact. The two were one sentence in iteration 25 and are two
-different things. **Neither type animates**, which is not deferred
-work at all: a `NineSlice` and a `TileSprite` carry no AnimationState, so this is Phaser's
-limit rather than this editor's. And **no per-corner insets beyond the four** — a nine-slice
-*is* four numbers, and anything finer is a second image.
-
-Cameras shipped in iteration 18 with five deliberate holes. **No second camera** —
-`cameras.add` is a list of cameras with viewports of their own, plus an ignore list saying
-which objects each one draws, and a minimap is two of those decisions rather than more of
-this one. **No rotation, fade, flash, shake, pan or `zoomTo`** — every one is a thing the
-camera does *over time*, which is game logic and the `scene.start` argument; the handle
-they would act on is `this.cameras.main`, which the user already has. Four of those six
-**shipped in iteration 31**, and the sentence above is the reason rather than a thing it
-overturned: what changed is that iteration 28 gave the document somewhere to put game
-logic, so "a thing that happens at a moment" stopped being a thing with no home. `rotateTo`
-is the one that stayed refused on its own merits, and the sixth — see "Doing something at a
-moment" above. **No follow offset
-and no dead zone**, which are a pure loosening later: two numbers and a `setFollowOffset`,
-two more and a `setDeadzone`, with nothing about the format or the drawing that has to
-change first. **No camera gesture on the canvas** — see Cameras above for why a frame whose
-inside is the whole scene cannot simply be made grabbable, and why an edge band is the
-shape a later iteration would take. And **no looking through the camera**, which is not
-deferred work but the thing the whole feature refuses: moving the editor's own view is what
-"drawn, never applied" rules out, and a "set the camera from my view" button is the same
-coupling written backwards.
-
-Audio shipped in iteration 17 with four deliberate holes. **No audio sprites** — Phaser's
-`load.audioSprite` takes a JSON of named `{ start, duration }` markers, which is a second
-sub-format inside the document with its own parser, picker and validator: the `.tmj`
-argument at a smaller scale, and the same one that keeps texture atlases out. **No `rate`,
-`detune`, `seek`, `delay`, `pan` or `mute`** — every one is a per-*play* adjustment a
-hand-written line makes on the handle this feature exists to hand it, where `loop` and
-`volume` are standing facts about how a scene uses a sound. A pure loosening later, and one
-that costs a field each and nothing else. **No spatial audio**, which would give a sound a
-position and therefore a node type, and is the thing the whole "no boxless node" argument
-above refuses. **And no stopping a sound on scene shutdown**: the handle is registered in
-`create()` and what happens to it afterwards is game logic, which is why the emitted block
-carries no `shutdown()` of its own — the one place this feature could have written the
-user's line for them and deliberately does not.
-
-Physics shipped in iteration 16 with five deliberate holes, one of which
-iteration 20 then closed. **No simulation in the
-editor** — the argument is the whole of the Physics section above, and it is the one hole
-here that is not a loosening: running the world rewrites the document, so "add a play
-button" is not a smaller version of this, it is a different editor. **No colliders**, which
-is the one that closed: `SceneCollider` is that line now, and what stayed refused is the
-*callback* — see Behaviour above for where the line moved to and why. **No circular
-bodies** —
-`setCircle(radius, offsetX, offsetY)` defaults its offsets to the body's *current* offset
-rather than to centred, so a bare `setCircle(r)` parks the circle in the corner of a
-non-square object; getting it right means a radius and two offsets, and the radius is a
-second answer to the object's own size (the "a sprite has no width or height" argument).
-For a `text` node it is worse than awkward: text measures against the font at runtime and
-the document does not know its size, so the editor's outline and the exported call could
-compute different circles, in the one place where being wrong is invisible until something
-fails to collide. It is a pure loosening later — one prop and three emitted arguments.
-**No Matter physics** was the fourth, and it is the one iteration 26 closed — see Matter
-above, and note that the reason it closed is not that the argument was wrong. It was
-right: Matter *is* a second engine with a second body model. What changed is that the one
-thing it buys turned out to be the one thing Arcade genuinely cannot do at all, which is a
-collision shape that turns with its object. **Circular bodies shipped in iteration 44** —
-see "Round bodies" above; the radius stayed derived, which answered the objection here
-rather than overruling it. And **no body on a node inside a group or a
-prefab**, which is *not* deferred work: an axis-aligned body cannot express a rotated
-parent's frame at all, so it is a limit of Arcade's body model rather than of this editor
-— and Matter inherits it here for a different reason, since a Container child's `x`/`y`
-are its parent's coordinates whatever is simulating them.
-
-Particles shipped in iteration 15 with four deliberate holes, and **one of them was the
-sentence iteration 38 was found in** — worth reading before the rest, because the argument
-was not wrong, it was *early*. That iteration refused a timed burst and an `emitting` prop
-alike as "behaviour over time is game logic, the `scene.start` argument again", thirteen
-iterations before there was anywhere to put a line of game logic; rules arrived in 28 and
-nothing went back for it. **The timed burst has now shipped**, as three `RuleAction`
-members — and the `emitting` prop has **not**, because the exporter derives one from
-whether a rule starts the emitter, which is what keeps the original sentence true rather
-than overturning it. See "Making one throw" above. What is left of that iteration's four:
-**No emit or death zones** —
-a zone is a geometry object, i.e. a second sub-format inside the document with its own
-parser, picker and validator, which is the `.tmj` argument at a smaller scale. **No
-`stopAfter`, and no `advance` or `duration` on a start** — the first is still behaviour over
-time with no moment to hang it on, and the last two are a fast-forward and a stop-after in
-disguise. The follow target that used to lead this sentence shipped in iteration 45: split
-from the list, it was a standing fact declared once at boot. See "Trails". **No per-particle animation**: `ParticlesProps` would grow an
-`animationId` and `collectAnimations` a branch, which is a pure loosening later rather than
-a format break, and the editor's whole clip story is built around a Sprite's
-`AnimationState`. **No multi-frame particles**: a `frames` array would be the second
-array-valued prop in the schema and the second `cloneWithNewIds` special case, for a look a
-single frame mostly covers.
-
-Tilemaps shipped in iteration 14 with three deliberate holes, two of which have since
-closed: **one layer per map**, **no per-tile collision**, and **no Tiled import**. The
-first closed in iteration 25, and it is worth reading the prediction beside the work,
-because it was half right and wrong in an interesting direction. It said `TilemapProps`
-"would grow a list of layers where it has one `data`, and the exporter a `createLayer` per
-entry" — both exactly right, and the second is the half that turned out to cost *nothing*:
-`buildTilemapHelper` already builds one map with one layer and returns it, which is one
-document layer, so the emitted helper was not touched by a character. What it got wrong was
-"each one is its own `putTileAt` diff", which read as a warning and is simply true and
-cheap: the diff was already per array, so it became a loop over an array of arrays. The
-real cost was the two things the prediction did not name — where `collides` lives (see
-Tilemap layers above, and note that iteration 20 had already written the sentence that
-settles it), and the renderer needing a Container where the exporter wanted siblings. What
-is left: **no per-layer tileset**, refused for the reason a sprite has no width — the tile
-size is derived from the tileset, so two layers of one map could disagree about how big a
-cell is. **No per-layer alpha**, which is a field and would be a second answer to the
-node's own. **No scroll factor and no parallax** — and this one was *half wrong*, which
-iteration 39 found and closed; the sentence is kept as written because the correction is
-worth more than the tidy version. It said: "a layer that drifts is behaviour over time, and
-a layer that moves at a different rate to the camera is a second camera's question." The
-first clause is right and stands. The second is not: a thing that moves at a different rate
-to the camera is `setScrollFactor`, a standing fact declared once at boot, and it shipped as
-a **node**-level field — see "Parallax and pinning" above. What is still refused for a
-*layer* is the same thing refused for an `fx` and a `blendMode`: a scroll factor is on a
-node, and a layer is not one, so a parallax stack is several tilemap nodes rather than
-several layers of one. And **no layer inside a layer**, which is not a thing Phaser has. The second hole is the one iteration 20 closed,
-and it is worth reading what it used to say —
-"`setCollision([1, 2, 3])` is a line the user writes, and a per-tile flag in the schema is
-the beginning of a behaviour model" — beside where the line actually landed: which tiles are
-solid turned out to be a standing fact about the world, and what a solid tile *does* to
-whatever hits it is still nowhere in this schema. See Behaviour above. Tiled import is not a
-loosening at all — a
-`.tmj` carries named tilesets, object layers, per-tile properties and orientations this
-schema has nowhere to put, so it is a second document format rather than more of this one.
-
-Prefabs shipped in iteration 12, with two deliberate holes left in them: **a definition
-may not contain an instance**, and there are no **per-instance overrides**. The first is
-the cycle argument (see "Prefabs" above) and is a pure loosening later —
-`Prefab.children` is already `GameObjectNode[]`, so nesting is a validation change plus a
-topological order in the exporter, not a format break. The second is a whole override
-model, a three-way merge on every definition edit, and a UI for showing and reverting
-overrides; "detach and edit" covers the case it would serve, and covers it without any of
-that.
-
-Alignment and distribution shipped in iteration 6, snapping in iteration 7, equal spacing
-and the grid in iteration 8, the rotate gesture with rotation snapping in iteration 9,
-persistent guides in iteration 10, sprite sheets with animations in iteration 11, prefabs
-in iteration 12, multiple scenes in iteration 13, tilemaps in iteration 14, particles in
-iteration 15, physics bodies in iteration 16, the scene camera in iteration 18, and
-nine-slice panels with tile sprites in iteration 19. The
-boxes the geometry family needs are in `src/core/bounds.ts`,
-which any further geometry tool can read. That family is complete in the sense that
-mattered — the user can now author a line of their own — and what is left of it is more of
-the same shape: another line or gap fed to `snapMove`, or another kind of agreement on the
-end of `snapRotation`'s chain. Guides at an angle are the one that is not, since a diagonal
-guide has no per-axis offset and would need `snapMove`'s whole per-axis structure
-rethought.
+When one of these boundaries is deliberately loosened, update this section with the new
+invariant and update the product plan separately with the user-facing status. Re-check old
+limitations against the current schema before repeating them: several previously documented
+constraints became false after references, rules, masks, and scroll factors were added.
