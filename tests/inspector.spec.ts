@@ -278,10 +278,11 @@ test('an unfinished object warns on the head of the section that fixes it', asyn
 /**
  * The broken case, and the path from the report to the field.
  *
- * A dangling image is a file the editor cannot write, so it is written by hand;
- * Play refuses it and lists the issue, and pressing the issue has to land on
- * the section that holds the image picker — which, before issues named real
- * section titles, it opened nothing at all.
+ * A dangling image is a file the editor cannot write, so it is written by hand.
+ * It is a warning rather than a block, since the export leaves the reference
+ * out, so Save lists it rather than Play refusing it. Pressing the issue has to
+ * land on the section that holds the image picker — which, before issues named
+ * real section titles, it opened nothing at all.
  */
 test('a broken reference marks its head, and the issue opens that section', async ({
   editor,
@@ -300,12 +301,12 @@ test('a broken reference marks its head, and the issue opens that section', asyn
   await editor.openFile(path);
   await editor.selectInTree('Sprite');
   await editor.openPanel('inspect');
-  await expect(summaryOf(editor, 'Image')).toContainText('Asset reference "gone" is missing.');
-  await expect(summaryOf(editor, 'Image')).toHaveClass(/section__summary--invalid/);
+  await expect(summaryOf(editor, 'Image')).toContainText('Asset reference "gone" is missing');
+  await expect(summaryOf(editor, 'Image')).toHaveClass(/section__summary--warning/);
 
   await editor.deselect();
   await editor.closePanels();
-  await editor.page.getByRole('button', { name: 'Play game' }).click();
+  await editor.saveToFile();
   const report = editor.page.getByRole('complementary', { name: 'Validation issues' });
   await report.getByRole('button', { name: /Asset reference "gone" is missing/ }).click();
   await editor.settle();
