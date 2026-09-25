@@ -419,7 +419,7 @@ export function hostileProject(): Project {
         ],
       },
     ],
-    // Three variables, and each is here for its own reason.
+    // Five variables, and each is here for its own reason.
     //
     // The first carries hostile free text, which reaches the output in three
     // places `variableKeyOf` and `str()` sit between: an object-literal *key*
@@ -440,12 +440,19 @@ export function hostileProject(): Project {
     // value in `VARIABLES`, a `registry.set` argument, a condition's right-hand
     // side and a `setText` argument. It is also the only place the widened
     // `Record<string, number | string>` signature meets a string under
-    // `tsc --strict`.
+    // `tsc --strict`. It is also remembered, so the saved-variable helper's
+    // widened signature and its load of a stored string meet the compiler too.
+    //
+    // The fifth is remembered and has a hostile **id**. An id never reached the
+    // output until a remembered variable's storage key was derived from it, and
+    // `parseVariables` accepts any non-empty string as one, so it is untrusted
+    // text in the `SAVED_VARIABLES` table and in the runnable page's script.
     variables: [
       { id: 'var-1', name: `score ${breakout}`, value: 0 },
       { id: 'var-2', name: 'lives', value: 3 },
       { id: 'var-3', name: 'Lives', value: 99 },
-      { id: 'var-4', name: 'message', value: `hi ${breakout}` },
+      { id: 'var-4', name: 'message', value: `hi ${breakout}`, persist: true as const },
+      { id: `var-5 ${breakout}`, name: 'best', value: 0, persist: true as const },
     ],
     activeSceneId: 'scene-1',
     scenes: [
@@ -688,6 +695,11 @@ export function hostileProject(): Project {
                 duration: 987,
                 ease: 'Expo.easeOut' as const,
               },
+              // Back to the starting value for both remembered variables: a
+              // `registry.set` of a number and one of a hostile string, each
+              // under the registry key the table gave it. Untriggered, for
+              // `NO_MOTION`'s reason.
+              { kind: 'resetPersisted' as const },
               { kind: 'startScene' as const, sceneId: 'scene-2' },
               { kind: 'restartScene' as const },
             ],

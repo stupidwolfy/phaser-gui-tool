@@ -192,8 +192,17 @@
  * an *offset* from its target, so a v15 build draws and exports the emitter at
  * that offset — a few pixels from the scene's corner — with no `startFollow`,
  * which is a wrong picture rather than a missing one.
+ *
+ * **v17 is a remembered variable, and it is the v14 case again: the
+ * silent-data-loss half, with no crash half.** `ProjectVariable.persist` lives
+ * in a project table, and `parseVariables` rebuilds that table field by field,
+ * so a v16 build drops the flag on open and re-saves a game that has quietly
+ * stopped remembering anyone's best score. Nothing on screen would say so: the
+ * variable keeps its name, its id and its value. A v16 build also drops the
+ * `resetPersisted` action through `ruleActionsOf`'s `default: break`, which on
+ * its own would only be an old build doing less.
  */
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -4010,7 +4019,24 @@ export type RuleAction =
   | { kind: 'cameraZoom'; zoom: number; duration: number; ease: TweenEase }
   /** The value is in the variable's own kind; `addVar` below stays arithmetic. */
   | { kind: 'setVar'; variableId: string; value: VariableValue }
-  | { kind: 'addVar'; variableId: string; by: number };
+  | { kind: 'addVar'; variableId: string; by: number }
+  /**
+   * Put every remembered variable back to the value it starts at: a "reset
+   * progress" button.
+   *
+   * It names nothing, like `restartScene`, so it cannot dangle and `ruleNames`,
+   * `ruleUsesVariable` and `remapActionRefs` need nothing. It emits one
+   * `registry.set` per remembered variable, and the save listener each one
+   * already has stores the starting value, so the next boot starts from it.
+   * That is also why it fires any `varChange` rule watching one of them, just
+   * as a `setVar` would.
+   *
+   * With no variable remembered it would run perfectly and do nothing, which is
+   * the failure this file records most often. So the reader drops it then, and
+   * the file keeps it: `setVelocity` on a body switched off, one table over.
+   * Ticking a variable again brings it back.
+   */
+  | { kind: 'resetPersisted' };
 
 /** What Phaser's own camera effects default to, and what a repair falls back to. */
 const CAMERA_EFFECT_MS = {
@@ -4078,6 +4104,8 @@ export const RULE_ACTION_KINDS: readonly RuleAction['kind'][] = [
   'cameraZoom',
   'setVar',
   'addVar',
+  // With the variable verbs, since it is one: it writes every remembered one.
+  'resetPersisted',
   'startScene',
   'restartScene',
 ];
@@ -4423,6 +4451,13 @@ function ruleActionsOf(
     switch (row.kind) {
       case 'restartScene':
         actions.push({ kind: 'restartScene' });
+        break;
+
+      case 'resetPersisted':
+        // Costs the action, never the rule, when nothing is remembered: it
+        // names nothing, so dropping it narrows what the rule says and cannot
+        // reopen a gate. The document keeps it; see the union member.
+        if (hasPersistedVariables(project)) actions.push({ kind: 'resetPersisted' });
         break;
 
       case 'startScene': {
@@ -4984,6 +5019,34 @@ export interface ProjectVariable {
   name: string;
   /** The value the game starts with, set once rather than once per scene. */
   value: VariableValue;
+  /**
+   * Whether the exported game keeps this value in the player's browser between
+   * plays: a best score, the levels unlocked, a tutorial already seen.
+   *
+   * `true` or absent, never `false`. One spelling of "off", which is why the
+   * store writes it through `setVariablePersist` rather than `updateVariable`:
+   * a spread patch can set a key and never remove one.
+   *
+   * The storage key is derived at export from the variable's **id**, never
+   * stored and never from a name. Renaming the variable or the project then
+   * keeps every player's save across a re-export, and two projects served from
+   * one origin cannot share one by accident. See `savedVariableKeyOf`.
+   *
+   * The editor never reads it. A bound label draws the value the variable
+   * *starts at*, which is the frame a new player's game opens on, and Play runs
+   * in a sandbox with no storage, so it starts fresh every time.
+   */
+  persist?: true;
+}
+
+/**
+ * Whether any variable in the project is remembered between plays.
+ *
+ * Answers a boolean, so unlike most readers in this file it is safe inside a
+ * zustand selector: it builds no fresh object for a snapshot to compare.
+ */
+export function hasPersistedVariables(project: Project): boolean {
+  return project.variables.some((variable) => variable.persist === true);
 }
 
 /** What a variable, a condition's comparand and a `setVar`'s target all hold. */

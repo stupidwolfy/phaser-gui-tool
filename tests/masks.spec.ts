@@ -200,7 +200,7 @@ test('a mask survives a save and an open', async ({ editor }, testInfo) => {
   // v14 build's `effectsOf` drops the unknown kind and draws the object
   // unmasked. An old build doing less, not a file breaking. Asserted so that a
   // future bump is a deliberate act.
-  expect(saved.schemaVersion).toBe(16);
+  expect(saved.schemaVersion).toBe(17);
 
   const effect = saved.scenes[0].children[0].fx[0];
   expect(effect.kind).toBe('mask');

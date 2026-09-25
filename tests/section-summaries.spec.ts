@@ -141,3 +141,12 @@ test('a field path names the section that renders its control', () => {
   expect(inspectorSectionFor('instance', 'props.prefabId')).toBe('Prefab');
   expect(inspectorSectionFor('rectangle', 'transform.x')).toBe('Transform');
 });
+
+test('variables say how many the game remembers, and only when some are', () => {
+  expect(summary.variablesSummary([])).toEqual({ text: 'None', state: 'default' });
+  expect(summary.variablesSummary([{}, {}])).toEqual({ text: '2 variables', state: 'configured' });
+  expect(summary.variablesSummary([{ persist: true }, {}])).toEqual({
+    text: '2 variables · 1 remembered',
+    state: 'configured',
+  });
+});

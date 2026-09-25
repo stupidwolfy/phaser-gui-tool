@@ -201,6 +201,13 @@ on a desktop.
   changes in the game whenever the number does, with no rule needed to rewrite it. *Decimal
   places* and *Pad to width* say how the number reads, so a score shows `0007` rather than
   `7`. The editor draws the value the variable starts at, which is the frame the game opens on
+- **Remember something between plays**: tick *remembered between plays* on a variable and the
+  exported game keeps it in the player's browser, so a best score, the levels unlocked or a
+  tutorial already seen is still there after a reload. The rule action *Reset remembered
+  variables* puts every remembered one back to what it starts at, which is a "reset progress"
+  button. **Play game always starts fresh**: it runs sandboxed, with nowhere to store anything,
+  so try this in a downloaded `.html` instead. Games served from one site keep their saves
+  apart, and renaming a variable keeps players' saves
 - Duplicate, copy and paste objects, keeping their styling
 - Change draw order with the inspector's Arrange buttons, or by dragging rows in the
   scene tree (the first row is the object furthest back; inside a group, the same applies

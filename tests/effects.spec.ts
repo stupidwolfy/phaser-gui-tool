@@ -214,7 +214,7 @@ test('effects survive a save and an open, in order, and bump nothing', async ({
   const parsed = JSON.parse(saved.contents);
   // The guides case, twelfth time: an optional field on a node rides in on
   // `scenes`, which `parseProject` passes through verbatim, so no bump.
-  expect(parsed.schemaVersion).toBe(16);
+  expect(parsed.schemaVersion).toBe(17);
 
   const node = parsed.scenes[0].children.find(
     (child: { name: string }) => child.name === 'Rectangle',

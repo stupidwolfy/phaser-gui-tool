@@ -703,6 +703,47 @@ missing-frame, large-clip performance, generated-code, and cross-mode runtime te
 edit short and 500-frame clips using mouse, keyboard, and touch; test reduced motion; compare
 event timing in Preview motion, Play game, and an exported bundle.
 
+### 18. Saved game data
+
+**Priority:** P2
+**Status:** In progress
+
+**Status note (2026-09-25).** A variable can be marked *remembered between plays*. The exported
+game then loads it from the player's `localStorage` at boot and saves it on every change, and
+the rule action *Reset remembered variables* sets every remembered variable back to its
+starting value. Schema v17. Covered by `tests/saved-variables.spec.ts`, a reload test in
+`tests/export.spec.ts` and a sandbox test in `tests/play.spec.ts`. The manual review below has
+not been recorded.
+
+**User problem.** Every value a game counts resets on a reload, so an exported game cannot keep
+a best score, unlocked levels or a "tutorial seen" flag. The [UX review](./UX_REVIEW.md) lists
+this as missing core feature 8, "Data persistence."
+
+**Proposed scope.**
+
+- [x] Mark a variable as remembered. The exported game loads it at boot and saves it on change,
+  keyed by the variable's id so a rename keeps players' saves.
+- [x] A rule action that resets every remembered variable to its starting value.
+- [x] State in the editor that Play game starts fresh, because its sandbox has no storage.
+- [ ] Save slots or a named save/load action.
+
+**Relevant modules.** `src/core/schema.ts`, `src/core/store.ts`, `src/io/fileIO.ts`,
+`src/io/exportPhaser.ts`, `src/ui/Inspector.tsx`, and `src/ui/sectionSummaries.ts`.
+
+**Dependencies.** Variables and rules; the Play sandbox policy.
+
+**Acceptance criteria.**
+
+- [x] A remembered variable keeps its value across a reload of an exported page, and a reset
+  restores the starting value on the next load.
+- [x] A stored value of the wrong kind, or no storage at all (Play, private windows), falls back
+  to the starting value without an error.
+- [x] Projects with no remembered variable export exactly what they did before.
+
+**Required validation.** Automated: document round trip, hand-edited flags, emitted text, a
+reload/reset runtime test and a sandboxed Play run. Manual: a best-score game exported,
+hosted and reloaded on desktop and mobile browsers, including a private window.
+
 ## Cross-phase release gates
 
 These gates apply to every initiative; they are deliverables only when a release candidate is

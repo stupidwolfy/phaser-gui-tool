@@ -1479,6 +1479,107 @@ test('the exported page shows a number it was told to count', async ({
   await run.close();
 });
 
+test('the exported page remembers a variable across a reload, and forgets it on a reset', async ({
+  editor,
+  page,
+}, testInfo) => {
+  // **The positive claim for remembered variables, and the only place it can
+  // be made.** The editor never reads `persist` and Play has no storage, so a
+  // page served over HTTP is the one place a value can outlive a reload. The
+  // runtime is also the only thing that knows the load waits for `has(key)`:
+  // a reload is a new game with an empty registry.
+  await editor.clearScene();
+  // Added first, so `Show or hide an object` names it by default.
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Prize');
+  await editor.setField('X', 480);
+  await editor.setField('Y', 270);
+  await editor.setField('Width', 300);
+  await editor.setField('Height', 300);
+  await editor.deselect();
+  await editor.panel('scene').getByRole('button', { name: 'Hide Prize', exact: true }).click();
+  // Always drawn, so "the prize is not there" is a reading of a game that has
+  // drawn a frame rather than of a canvas that has not started.
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Anchor');
+  await editor.setField('X', 120);
+  await editor.setField('Y', 120);
+  await editor.deselect();
+
+  await editor.addVariable();
+  await editor.setVariable(1, 'Visits', 0);
+  await editor.setVariablePersist(1, true);
+
+  // Rule 1 reads the count the page started with; rule 2 then adds this visit.
+  // So the prize shows on every load after the first.
+  const shown = await editor.addRule();
+  await editor.setRuleTrigger(shown, 1, 'the scene starts');
+  await editor.openRule(shown);
+  await editor.panel('inspect').getByTitle('Add a check to rule 1').click();
+  await editor.setChoice('Rule 1 check 1 is', 'is at least');
+  await editor.setField('Rule 1 check 1 value', 1);
+  await editor.setChoice('Rule 1 do 1', 'Show or hide an object');
+  await editor.setChoice('Rule 1 do 1 object', 'Prize');
+  await editor.setChoice('Rule 1 do 1 to', 'Show');
+
+  const counted = await editor.addRule();
+  await editor.setRuleTrigger(counted, 2, 'the scene starts');
+  await editor.openRule(counted);
+  await editor.setChoice('Rule 2 do 1', 'Add to a variable');
+
+  const reset = await editor.addRule();
+  await editor.setRuleTrigger(reset, 3, 'a key is pressed');
+  await editor.setChoice('Rule 3 key', 'R');
+  await editor.setChoice('Rule 3 do 1', 'Reset remembered variables');
+
+  const exported = await editor.exportCode('html');
+  expect(exported.contents).toContain('initVariables(this, VARIABLES, SAVED_VARIABLES);');
+  const run = await runExportedPage(
+    page.context(),
+    testInfo.outputPath('remember'),
+    exported.contents,
+  );
+  const reading = async (fill: string) =>
+    (await findColor(run.page, await run.page.locator('canvas').screenshot(), fill)).count;
+  // `reaches` answers with its last reading rather than throwing, so every
+  // claim below is an `expect` on what it answered.
+  const drawn = async () => {
+    expect(await reaches(() => reading(ELLIPSE_FILL), (count) => count > 100)).toBeGreaterThan(100);
+  };
+  const reload = async () => {
+    await run.page.reload();
+    await expect(run.page.locator('canvas')).toBeVisible();
+    await drawn();
+  };
+
+  // The first visit: nothing stored, so the count starts at 0 and the prize
+  // stays hidden. Read once the anchor is drawn, so the zero is a real frame.
+  await drawn();
+  expect(await reading(RECT_FILL)).toBe(0);
+
+  // The second visit: the 1 the first one stored is loaded before rule 1 reads
+  // it. Without the save, or without the load, this stays at zero.
+  await reload();
+  expect(await reaches(() => reading(RECT_FILL), (count) => count > 200)).toBeGreaterThan(200);
+  const stored = await run.page.evaluate(() =>
+    Object.keys(window.localStorage).filter((key) => key.startsWith('saved-variable:')),
+  );
+  expect(stored).toHaveLength(1);
+
+  // R puts the count back to 0 and the save listener stores that, so the next
+  // visit is a first visit again.
+  await run.page.locator('canvas').click();
+  await run.page.keyboard.press('r');
+  await expect
+    .poll(() => run.page.evaluate((key) => window.localStorage.getItem(key), stored[0]))
+    .toBe('0');
+  await reload();
+  expect(await reading(RECT_FILL)).toBe(0);
+  expect(run.errors).toEqual([]);
+
+  await run.close();
+});
+
 test('the exported page keeps a label following a variable', async ({
   editor,
   page,

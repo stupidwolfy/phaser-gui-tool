@@ -548,6 +548,12 @@ export interface EditorState {
    * it reaches further than the row — see the implementation.
    */
   setVariableKind: (id: string, kind: VariableKind) => void;
+  /**
+   * Whether the exported game remembers a variable between plays. Not an
+   * `updateVariable` patch, because that spreads and `{ persist: false }` would
+   * stay in the document as a second spelling of "off".
+   */
+  setVariablePersist: (id: string, persist: boolean) => void;
   /** Removes a variable. */
   removeVariable: (id: string) => void;
 
@@ -2592,6 +2598,27 @@ export const useEditorStore = create<EditorState>((set, get) => {
               if (migrated.do.length > 0) next.push(migrated);
             }
             return touched ? { ...scene, rules: next } : scene;
+          }),
+        };
+      }),
+
+    // Nothing else moves with it. A `resetPersisted` action left with nothing
+    // to reset stays in the file and the reader drops it until a variable is
+    // remembered again, which is `setNodePhysics(id, null)` beside a push.
+    setVariablePersist: (id, persist) =>
+      editProject((project) => {
+        const variable = findVariable(project, id);
+        if (variable === undefined || (variable.persist === true) === persist) return project;
+        return {
+          ...project,
+          variables: project.variables.map((entry) => {
+            if (entry.id !== id) return entry;
+            if (persist) return { ...entry, persist: true };
+            // `delete`, never `persist: undefined`: the key would survive in
+            // memory and vanish through `JSON.stringify`.
+            const next = { ...entry };
+            delete next.persist;
+            return next;
           }),
         };
       }),

@@ -3963,6 +3963,63 @@ object reads*.
   looping timer adds to the variable, and the caption has to grow twice on its own — which is
   the one thing a set-once emit cannot fake.
 
+### Remembering one: saved variables
+
+`ProjectVariable.persist?: true` makes the exported game keep a variable in the player's
+`localStorage`: it loads the value when the game starts and saves it whenever it changes. The
+rule action `resetPersisted` sets every remembered variable back to its starting value. Until
+this, every value reset on a reload, so a game could not keep a best score.
+
+- **Iteration 28's line does not move.** The save rides on `changedata-<key>`, the moment labels
+  and `varChange` rules already use, so `update()` gains nothing. `EditorScene.ts` is untouched:
+  a bound label still draws the starting value, which is what a new player's game opens on.
+- **`true` or absent, never `false`.** `setVariablePersist` deletes the key, because
+  `updateVariable` spreads and would leave a second spelling of "off". `parseVariables` carries
+  only `=== true`.
+- **The storage key is derived, from the id.** `savedVariableKeyOf` answers
+  `saved-variable:<id>` at export and nothing stores it. Renaming the variable or the project
+  keeps every player's save across a re-export, and UUIDs keep two games on one origin apart. A
+  Save-As copy keeps the ids and so shares keys; the printed `SAVED_VARIABLES` table's comment
+  says so, since that is where a developer would change one. This is the first place a variable
+  id reaches the output, so the hostile project gives one a hostile id.
+- **The helper grows a second body rather than always taking the table.** With nothing
+  remembered, `initVariables` and its call are byte for byte what they were. With something
+  remembered it takes `SAVED_VARIABLES` as a third argument, and:
+  - it loads and subscribes inside the existing `has(key)` guard, so once per game. A restart
+    neither reloads a stale value over the live one nor stacks listeners. There is no SHUTDOWN
+    unsubscribe, because the listener holds only the game's registry.
+  - a stored value counts only if it is the variable's own kind (a finite number or a string).
+    Otherwise it falls back to the starting value, rather than handing conditions a mismatch
+    `rulesOf` would refuse.
+  - every storage access is in a `try`. Play's iframe is an opaque origin, where reading
+    `window.localStorage` throws; uncaught, `create()` throws before any object is added.
+- **Play starts fresh every time, and that is the sandbox working rather than a gap to close.**
+  The panel says so under the checkbox. Weakening the sandbox to give Play storage would hand
+  the game the editor's own origin, autosaved draft included.
+- **`resetPersisted` emits one `registry.set` per remembered variable**, the line `setVar`
+  emits, so the save listeners store the starting values and a `varChange` rule on one fires
+  as it would for a `setVar`. No helper, so no identifier moves. It names nothing, so the
+  reference-walking functions need no edit. With nothing remembered it would do nothing, so the
+  reader drops it and the picker withholds it: `setVelocity` on a body switched off. The file
+  keeps it, and ticking a variable brings it back.
+- **`SCHEMA_VERSION` bumped to 17, on the silent-data-loss half: the v14 case.**
+  `parseVariables` rebuilds the table field by field, so a v16 build drops `persist` and
+  re-saves a game that has quietly stopped remembering.
+- **The suite.** `saved-variables.spec.ts` carries the document, the panel and the emitted
+  text. `export.spec.ts` carries the runtime claim on a page served over HTTP: hidden on the
+  first load, shown after a reload, hidden again after the reset and a reload. `play.spec.ts`
+  runs the same shape in the sandbox. Removing the `try` and removing the load were each
+  confirmed red.
+- **`reaches` answers with its last reading and never throws.** A claim is the `expect` on
+  what it returns. The first version of the reload test awaited `reaches` alone and passed with
+  the load deleted.
+
+**What stays refused.** **No per-variable storage key field**: derived is enough, and the
+printed table is the escape hatch. **No save slots and no "forget" that removes a key**: a
+reset stores the starting value, which reads the same on the next boot. **No remembering
+anything but a variable**: an object's position or a scene reached is game state with no
+declared shape, and a variable is the one quantity here that has one.
+
 ## Touch controls
 
 `NodeControls.touch` is a boolean beside `scheme`, and the exported game draws a D-pad and
@@ -6229,6 +6286,9 @@ tests/
                             of it, and does not move when the camera does
   labels.spec.ts            a caption that follows a variable, formatted, and a
                             binding that falls back when the variable is gone
+  saved-variables.spec.ts   a variable remembered between plays: a flag that is
+                            true or absent, a table keyed by id, a guarded load,
+                            and a reset offered only while something is remembered
   inspector.spec.ts         the properties panel's sections: closed by default,
                             remembered, persisted, and never in the document
   audio.spec.ts             a sound imported, registered, saved, reopened and exported

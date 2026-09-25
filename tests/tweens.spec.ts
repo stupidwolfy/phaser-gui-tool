@@ -186,7 +186,7 @@ test('a tween survives a save and an open', async ({ editor }, testInfo) => {
   // in on `scenes` — which `parseProject` passes through verbatim — and an
   // older build neither drops it nor crashes on it. Asserted here so a future
   // bump is a deliberate act rather than a thing that happened.
-  expect(document.schemaVersion).toBe(16);
+  expect(document.schemaVersion).toBe(17);
 
   const stored = document.scenes[0].children[0].tween;
   expect(stored.to.x).toBe(TARGET_X);

@@ -1544,6 +1544,29 @@ export class EditorPage {
   }
 
   /**
+   * Ticks or unticks "remembered between plays" on a declared variable.
+   *
+   * `check`/`uncheck` rather than `click`, because they scroll the box into
+   * view themselves and a variables section with a few rows puts it off the
+   * bottom of a phone's sheet — `setPhysics`' reason.
+   */
+  async setVariablePersist(index: number, on: boolean): Promise<void> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    const box = this.checkbox(`Variable ${index} remembered between plays`);
+    if (on) await box.check();
+    else await box.uncheck();
+    await this.settle();
+  }
+
+  /** Whether the panel shows a declared variable as remembered. */
+  async variablePersisted(index: number): Promise<boolean> {
+    await this.deselect();
+    await this.openPanel('inspect');
+    return this.checkbox(`Variable ${index} remembered between plays`).isChecked();
+  }
+
+  /**
    * What the panel says a variable reads as in exported code.
    *
    * By index, like every other variable field, because the text of this row
@@ -1710,12 +1733,26 @@ export class EditorPage {
     await this.settle();
   }
 
-  /** Exports generated code and returns it. */
+  /**
+   * Exports generated code and returns it.
+   *
+   * By accessible name, which on desktop is the toolbar button's `aria-label`
+   * rather than its `.ts` / `.js` / `.html` text, and on mobile is the File
+   * sheet button's own text.
+   */
   async exportCode(kind: 'ts' | 'js' | 'html'): Promise<{ name: string; contents: string }> {
     await this.openPanel('file');
     const label = this.isMobile
-      ? { ts: 'Scene class (.ts)', js: 'Scene class (.js)', html: 'Runnable page (.html)' }[kind]
-      : `.${kind}`;
+      ? {
+          ts: 'Scene class (.ts)',
+          js: 'Scene class (.js)',
+          html: 'Playable game page (.html)',
+        }[kind]
+      : {
+          ts: 'Export TypeScript scene',
+          js: 'Export JavaScript scene',
+          html: 'Export runnable HTML page',
+        }[kind];
     const download = this.page.waitForEvent('download');
     await this.panel('file').getByRole('button', { name: label, exact: true }).click();
     const file = await download;
