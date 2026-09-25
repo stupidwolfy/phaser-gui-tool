@@ -46,7 +46,7 @@ test('a registered sound survives a save and an open', async ({ editor }, testIn
 
   // Asserted in the artefact so that a future bump is a deliberate act, the way
   // `guides.spec`, `scenes.spec` and `physics.spec` each assert their own.
-  expect(parsed.schemaVersion).toBe(16);
+  expect(parsed.schemaVersion).toBe(17);
   expect(parsed.audio).toHaveLength(1);
   expect(parsed.audio[0].dataUrl).toBeUndefined();
   expect(parsed.audio[0].path).toMatch(/^assets\/audio\/[0-9a-f]+\.wav$/);

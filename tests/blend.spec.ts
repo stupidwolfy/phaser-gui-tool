@@ -129,7 +129,7 @@ test('a blend mode survives a save and an open', async ({ editor }, testInfo) =>
   // bump on its own — and the particles migration does not either, because an
   // old build coerces the missing key to NORMAL rather than throwing and
   // carries the node-level field back out untouched on a re-save.
-  expect(parsed.schemaVersion).toBe(16);
+  expect(parsed.schemaVersion).toBe(17);
   expect(parsed.scenes[0].children[1].blendMode).toBe('MULTIPLY');
 
   const path = testInfo.outputPath('blend.phaser.json');

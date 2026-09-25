@@ -163,3 +163,67 @@ for (const variant of VARIANTS) {
     await server.close();
   });
 }
+
+/**
+ * The remembered-variable helper under `tsc --strict`, built straight from the
+ * exporter rather than through the editor.
+ *
+ * The hostile variant above carries a remembered text variable and a remembered
+ * variable with a hostile id for exactly this, but the hostile project also
+ * holds deliberate dangling references that `validateProject` now counts as
+ * blocking, so the editor refuses to export it. Until that is settled this is
+ * the only place the widened, three-argument `initVariables` meets the
+ * compiler: a text variable (so the `number | string` signature), a number
+ * variable, an id carrying the script breakout, and a reset action.
+ */
+test('the remembered-variable helper compiles under --strict and escapes a hostile id', async ({}, testInfo) => {
+  const { newProject } = await import('../src/core/defaults');
+  const { generateRunnableHtml, generateScene } = await import('../src/io/exportPhaser');
+  const breakout = '</script><script>window.__pwned = "yes";</script>';
+  const project = newProject('Remembered');
+  project.variables = [
+    { id: 'plain', name: 'score', value: 5 },
+    { id: 'text', name: 'message', value: `hi ${breakout}`, persist: true },
+    { id: `var-5 ${breakout}`, name: 'best', value: 0, persist: true },
+  ];
+  project.scenes[0].rules = [
+    {
+      id: 'reset',
+      name: 'Reset',
+      when: { kind: 'keyDown', key: 'R' },
+      conditions: [],
+      do: [{ kind: 'resetPersisted' }],
+    },
+  ];
+
+  const directory = testInfo.outputPath('remembered');
+  await fs.mkdir(directory, { recursive: true });
+  const ts = generateScene(project, 'ts');
+  expect(ts).toContain('initVariables(this, VARIABLES, SAVED_VARIABLES);');
+  expect(ts).toContain('values: Record<string, number | string>,');
+  await fs.writeFile(join(directory, 'Scene.ts'), ts, 'utf8');
+  await fs.writeFile(
+    join(directory, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022',
+        lib: ['ES2022', 'DOM'],
+        module: 'ESNext',
+        moduleResolution: 'bundler',
+        strict: true,
+        noEmit: true,
+        skipLibCheck: true,
+        types: [],
+      },
+      include: ['Scene.ts'],
+    }),
+    'utf8',
+  );
+  await compile(['tsc', '-p', join(directory, 'tsconfig.json')]);
+
+  // The page composes its script and escapes it once: the id reaches the
+  // output only as a string literal, with its `</script>` escaped.
+  const html = generateRunnableHtml(project);
+  expect(html).toContain('saved-variable:var-5 <\\/script>');
+  expect(html).not.toContain('</script><script>window.__pwned');
+});

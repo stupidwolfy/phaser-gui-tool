@@ -588,6 +588,9 @@ function parseVariables(raw: unknown): ProjectVariable[] {
           : Number.isFinite(number)
             ? number
             : 0,
+      // Only `true` is carried, so the document keeps one spelling of "off".
+      // Anything else a hand edit left here reads as not remembered.
+      ...(variable.persist === true ? { persist: true as const } : {}),
     });
   }
   return table;

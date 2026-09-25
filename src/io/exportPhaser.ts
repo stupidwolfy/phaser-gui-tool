@@ -765,6 +765,53 @@ function textedVariables(used: Map<string, UsedVariable>): boolean {
   return [...used.values()].some(({ variable }) => typeof variable.value === 'string');
 }
 
+/** The variables the game remembers between plays, in table order. */
+function persistedVariables(used: Map<string, UsedVariable>): UsedVariable[] {
+  return [...used.values()].filter(({ variable }) => variable.persist === true);
+}
+
+/**
+ * The `localStorage` key one remembered variable is kept under.
+ *
+ * Derived here and never stored, `audioKeyOf`'s treatment: nothing in the
+ * document names it. From the **id** rather than any name, so renaming the
+ * variable or the project keeps every player's save across a re-export, and a
+ * UUID keeps two games served from one origin (every `user.github.io` page is
+ * one) from reading each other's. A copy made with Save As keeps the ids, so it
+ * shares the keys too; the table's own comment says so, since that is the one
+ * case a developer may need to change a key by hand.
+ */
+function savedVariableKeyOf(variable: ProjectVariable): string {
+  return `saved-variable:${variable.id}`;
+}
+
+/**
+ * The `SAVED_VARIABLES` table: registry key to storage key, for the variables
+ * the game remembers. Printed rather than derived in the emitted code so the
+ * one thing a developer might need to change is one object to edit. Gated on
+ * something being remembered, so every project before this feature exports
+ * byte for byte what it did.
+ *
+ * The id is free text on open (`parseVariables` takes any non-empty string), so
+ * this is the first place a variable id reaches the output. `str()` quotes it,
+ * and the runnable page escapes its whole script once at the end.
+ */
+function buildSavedTable(used: Map<string, UsedVariable>, indent: string): string {
+  const lines = [
+    '/**',
+    ' * The variables the game remembers between plays, and the key each one is kept',
+    " * under in the player's browser (localStorage). A copy of the project keeps these",
+    ' * keys, so two games served from one site share their saves until a key changes.',
+    ' */',
+    'const SAVED_VARIABLES = {',
+    ...persistedVariables(used).map(
+      ({ variable, key }) => `  ${str(key)}: ${str(savedVariableKeyOf(variable))},`,
+    ),
+    '};',
+  ];
+  return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+}
+
 /**
  * The one function every scene declares its variables through.
  *
@@ -791,22 +838,95 @@ function textedVariables(used: Map<string, UsedVariable>): boolean {
  * variable could hold text exports the line it always exported. It is not a
  * question of what compiles — the wider type accepts both — but of a diff
  * nobody asked for.
+ *
+ * **When a variable is remembered the helper takes a third argument**, the
+ * `SAVED_VARIABLES` table, and the rule above is why it is a second body rather
+ * than one that always takes it. Four things in that body are load-bearing:
+ *
+ * - **It loads and subscribes inside the `has` guard**, so it happens once per
+ *   game. A restart or a change of scene neither reloads a stale value from
+ *   storage over the live one nor stacks a second listener. There is no
+ *   SHUTDOWN unsubscribe, unlike `bindLabel`'s: this listener holds no scene
+ *   object, only the game's own registry, and lives exactly as long as it.
+ * - **A stored value counts only if it is the variable's own kind** (a finite
+ *   number, or a string). A save written before the variable changed kind would
+ *   otherwise put text where every condition expects a number, which is the
+ *   mismatch `rulesOf` refuses. It falls back to the starting value instead.
+ * - **Every storage access is in a `try`.** Play runs this page in a sandboxed
+ *   iframe with an opaque origin, where merely reading `window.localStorage`
+ *   throws, and a private window or a site with storage blocked can throw on a
+ *   write. Uncaught, that is a `create()` that throws before a single object is
+ *   added. Caught, the game runs with values that last one run.
+ * - **It saves on `changedata-<key>`**, the moment `bindLabel` and `onVar`
+ *   already ride, so `update()` still gains nothing. The first write emits
+ *   `setdata` rather than `changedata`, so the value just loaded is not
+ *   written straight back.
+ *
+ * The body is plain JavaScript that also type-checks under `--strict`:
+ * `JSON.parse` answers `any`, so assigning its result needs no cast.
  */
 function buildVariableHelper(
   fn: string,
   language: SceneLanguage,
   indent: string,
   texted: boolean,
+  persisted: boolean,
 ): string {
   const typed = language === 'ts';
   const type = texted ? 'Record<string, number | string>' : 'Record<string, number>';
+  if (!persisted) {
+    const signature = typed
+      ? `function ${fn}(scene: Phaser.Scene, values: ${type}): void {`
+      : `function ${fn}(scene, values) {`;
+    const lines = [
+      signature,
+      '  for (const key of Object.keys(values)) {',
+      '    if (!scene.registry.has(key)) scene.registry.set(key, values[key]);',
+      '  }',
+      '}',
+    ];
+    return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
+  }
   const signature = typed
-    ? `function ${fn}(scene: Phaser.Scene, values: ${type}): void {`
-    : `function ${fn}(scene, values) {`;
+    ? `function ${fn}(\n` +
+      '  scene: Phaser.Scene,\n' +
+      `  values: ${type},\n` +
+      '  saved: Record<string, string>,\n' +
+      '): void {'
+    : `function ${fn}(scene, values, saved) {`;
   const lines = [
-    signature,
+    ...signature.split('\n'),
+    '  const registry = scene.registry;',
     '  for (const key of Object.keys(values)) {',
-    '    if (!scene.registry.has(key)) scene.registry.set(key, values[key]);',
+    '    if (registry.has(key)) continue;',
+    '    const fallback = values[key];',
+    '    const storageKey = saved[key];',
+    '    if (storageKey === undefined) {',
+    '      registry.set(key, fallback);',
+    '      continue;',
+    '    }',
+    '    let value = fallback;',
+    '    try {',
+    '      const stored = window.localStorage.getItem(storageKey);',
+    '      const parsed = stored === null ? null : JSON.parse(stored);',
+    '      if (',
+    '        typeof parsed === typeof fallback &&',
+    "        (typeof parsed !== 'number' || Number.isFinite(parsed))",
+    '      ) {',
+    '        value = parsed;',
+    '      }',
+    '    } catch {',
+    '      // No storage here (a sandboxed frame, a private window, a blocked site),',
+    '      // so the game starts from the value it was given.',
+    '    }',
+    '    registry.set(key, value);',
+    "    registry.events.on('changedata-' + key, () => {",
+    '      try {',
+    '        window.localStorage.setItem(storageKey, JSON.stringify(registry.get(key)));',
+    '      } catch {',
+    '        // Nowhere to keep it, so it lasts as long as the page does.',
+    '      }',
+    '    });',
     '  }',
     '}',
   ];
@@ -4091,6 +4211,16 @@ function ruleActionLines(
       // about what a variable that has never been written holds.
       return key === undefined ? [] : [`this.registry.inc(${str(key)}, ${num(action.by)});`];
     }
+
+    case 'resetPersisted':
+      // One `set` per remembered variable, back to what it starts at, which is
+      // exactly the line a `setVar` emits. The save listener `initVariables`
+      // put on each one stores the value, so the next boot starts from it. No
+      // helper, so nothing is drawn from the module's identifier set.
+      return persistedVariables(ctx.variables).map(
+        ({ variable, key }) =>
+          `this.registry.set(${str(key)}, ${variableLiteral(variable.value)});`,
+      );
   }
 }
 
@@ -4422,7 +4552,13 @@ function buildCreateBody(
   // exports byte for byte what it always did.
   if (ctx.variables.size > 0) {
     if (lines.at(-1) !== '') lines.push('');
-    lines.push(`${ctx.initVariablesFn}(this, VARIABLES);`);
+    // The third argument only when something is remembered, so every project
+    // before that feature emits the line it always did.
+    lines.push(
+      persistedVariables(ctx.variables).length > 0
+        ? `${ctx.initVariablesFn}(this, VARIABLES, SAVED_VARIABLES);`
+        : `${ctx.initVariablesFn}(this, VARIABLES);`,
+    );
   }
 
   const { lines: soundLines, handles: soundHandles } = buildSoundLines(
@@ -5125,10 +5261,14 @@ export function generateScene(project: Project, language: SceneLanguage = 'ts'):
   // only reader, and splitting them puts a `for` loop a screen away from the
   // object it walks.
   const texted = textedVariables(ctx.variables);
+  // The saved table beside the one it keys into, and gated on something being
+  // remembered: the byte-for-byte rule every table above it follows.
+  const persisted = persistedVariables(ctx.variables).length > 0;
   const variables =
     ctx.variables.size > 0
       ? `\n${buildVariableTable(ctx.variables, '')}\n` +
-        `\n${buildVariableHelper(ctx.initVariablesFn, language, '', texted)}\n`
+        (persisted ? `\n${buildSavedTable(ctx.variables, '')}\n` : '') +
+        `\n${buildVariableHelper(ctx.initVariablesFn, language, '', texted, persisted)}\n`
       : '';
   // Same rule again: no tilemaps, no table and no helper, so every project that
   // predates them exports byte for byte what it always did.
@@ -5236,10 +5376,12 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
   const fonts =
     ctx.fonts.size > 0 ? `${buildFontTable(ctx.fonts, '      ')}\n\n` : '';
   const texted = textedVariables(ctx.variables);
+  const persisted = persistedVariables(ctx.variables).length > 0;
   const variables =
     ctx.variables.size > 0
       ? `${buildVariableTable(ctx.variables, '      ')}\n\n` +
-        `${buildVariableHelper(ctx.initVariablesFn, 'js', '      ', texted)}\n\n`
+        (persisted ? `${buildSavedTable(ctx.variables, '      ')}\n\n` : '') +
+        `${buildVariableHelper(ctx.initVariablesFn, 'js', '      ', texted, persisted)}\n\n`
       : '';
   const tiles =
     ctx.tilemaps.size > 0

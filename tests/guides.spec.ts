@@ -284,7 +284,7 @@ test('guides survive a save and an open, on a version they did not bump', async 
   // a new node type an older build cannot construct. `project.fonts` is the
   // first case again, and the sharpest: text that loses its font goes on
   // drawing, in a face nobody chose.
-  expect(file.schemaVersion).toBe(16);
+  expect(file.schemaVersion).toBe(17);
   expect(file.scenes[0].guides).toEqual([
     { id: expect.any(String), axis: 'x', position: GUIDE_X },
     { id: expect.any(String), axis: 'y', position: 200 },

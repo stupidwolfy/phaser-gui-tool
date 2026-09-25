@@ -91,7 +91,7 @@ test('following leaves the emitter where it is drawn, and makes its position an 
   expect(byName.get('Smoke')?.transform).toMatchObject({ x: 400, y: 0 });
   // 16 because of this field: an older build would draw and export the emitter
   // at its bare offset, beside the scene's corner.
-  expect(project.schemaVersion).toBe(16);
+  expect(project.schemaVersion).toBe(17);
 
   // Choosing nothing adds the target back, so stopping does not move it either.
   await editor.selectInTree('Smoke');

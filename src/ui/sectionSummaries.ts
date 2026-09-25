@@ -10,6 +10,7 @@ import {
   type NodeTween,
   type PhysicsBody,
   type PhysicsEngine,
+  type ProjectVariable,
   type SceneCamera,
   type ScenePhysics,
   type ScrollFactor,
@@ -336,6 +337,20 @@ export function snappingSummary(objects: boolean, grid: boolean, gridSize: numbe
 
 export function countSummary(count: number, one: string): SectionSummary {
   return count === 0 ? quiet('None') : set(plural(count, one));
+}
+
+/**
+ * The variables, and how many of them the game remembers between plays. The
+ * second half is said only when it is not zero, so a project that remembers
+ * nothing reads exactly as it did before.
+ */
+export function variablesSummary(
+  variables: readonly Pick<ProjectVariable, 'persist'>[],
+): SectionSummary {
+  if (variables.length === 0) return quiet('None');
+  const remembered = variables.filter((variable) => variable.persist === true).length;
+  const all = plural(variables.length, 'variable');
+  return set(remembered > 0 ? `${all} · ${remembered} remembered` : all);
 }
 
 /**

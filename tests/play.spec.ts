@@ -29,6 +29,8 @@ import { reaches } from './helpers/poll';
 
 /** The default rectangle fill, from `src/core/defaults.ts`. */
 const FILL = '#4f8cff';
+/** The default ellipse fill, from `src/core/defaults.ts`. */
+const ELLIPSE_FILL = '#ffb84f';
 
 /** Where the faller starts: high in the scene, with room to fall. */
 const TOP = { x: SCENE.width / 2, y: 90 };
@@ -183,6 +185,69 @@ test('Restart is a new game, not a resumed one', async ({ editor }) => {
     (blob) => blob.count > 0 && blob.y - again.y > FELL * scale,
   );
   expect(twice.y - again.y).toBeGreaterThan(FELL * scale);
+
+  await editor.stopPlay();
+});
+
+test('a remembered variable runs in Play, and Play starts it fresh every time', async ({
+  editor,
+}) => {
+  // Play's frame is `sandbox="allow-scripts"`, an opaque origin, where merely
+  // reading `window.localStorage` throws. The exported load and save are both
+  // inside a `try`, and this is the only place in the suite that runs them
+  // somewhere storage is refused: without the `catch`, `initVariables` throws
+  // in `create()`'s prologue and nothing is drawn at all.
+  await editor.clearScene();
+  // Added first, so `Show or hide an object` names it by default.
+  await editor.addObject('Rectangle');
+  await editor.setField('Name', 'Prize');
+  await editor.setField('X', SCENE.width / 2);
+  await editor.setField('Y', SCENE.height / 2);
+  await editor.setField('Width', 300);
+  await editor.setField('Height', 300);
+  await editor.deselect();
+  await editor.openPanel('scene');
+  await editor.panel('scene').getByRole('button', { name: 'Hide Prize', exact: true }).click();
+  // Always drawn, so every reading below is of a game that booted.
+  await editor.addObject('Ellipse');
+  await editor.setField('Name', 'Anchor');
+  await editor.setField('X', 150);
+  await editor.setField('Y', 150);
+  await editor.setField('Width', 160);
+  await editor.setField('Height', 160);
+  await editor.deselect();
+
+  await editor.addVariable();
+  await editor.setVariable(1, 'Visits', 0);
+  await editor.setVariablePersist(1, true);
+  const shown = await editor.addRule();
+  await editor.setRuleTrigger(shown, 1, 'the scene starts');
+  await editor.openRule(shown);
+  await editor.panel('inspect').getByTitle('Add a check to rule 1').click();
+  await editor.setChoice('Rule 1 check 1 is', 'is at least');
+  await editor.setField('Rule 1 check 1 value', 1);
+  await editor.setChoice('Rule 1 do 1', 'Show or hide an object');
+  await editor.setChoice('Rule 1 do 1 object', 'Prize');
+  await editor.setChoice('Rule 1 do 1 to', 'Show');
+  const counted = await editor.addRule();
+  await editor.setRuleTrigger(counted, 2, 'the scene starts');
+  await editor.openRule(counted);
+  await editor.setChoice('Rule 2 do 1', 'Add to a variable');
+  await editor.deselect();
+  await editor.closePanels();
+
+  await editor.play();
+  const booted = await reaches(() => editor.findInPlay(ELLIPSE_FILL), (blob) => blob.count > 0);
+  expect(booted.count).toBeGreaterThan(0);
+  expect((await editor.findInPlay(FILL)).count).toBe(0);
+
+  // A downloaded export would show the prize now: the first run stored a 1.
+  // Play has nowhere to store it, and Restart is a new realm, so it starts
+  // fresh. The panel says so beside the checkbox.
+  await editor.restartPlay();
+  const again = await reaches(() => editor.findInPlay(ELLIPSE_FILL), (blob) => blob.count > 0);
+  expect(again.count).toBeGreaterThan(0);
+  expect((await editor.findInPlay(FILL)).count).toBe(0);
 
   await editor.stopPlay();
 });

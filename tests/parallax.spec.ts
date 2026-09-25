@@ -107,7 +107,7 @@ test('a scroll factor survives a save and an open', async ({ editor }, testInfo)
   // does not bump on its own. An older build draws the object at its document
   // position, emits no setter and carries the field back out untouched: an old
   // build doing less, not a file breaking.
-  expect(parsed.schemaVersion).toBe(16);
+  expect(parsed.schemaVersion).toBe(17);
   expect(parsed.scenes[0].children[0].scrollFactor).toEqual({ x: 0, y: 0.5 });
 
   const path = testInfo.outputPath('parallax.phaser.json');

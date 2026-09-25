@@ -49,6 +49,7 @@ import {
   frameGridOf,
   frameNamesOf,
   guidesOf,
+  hasPersistedVariables,
   isDefaultCamera,
   labelFormatOf,
   labelOf,
@@ -482,6 +483,7 @@ function VariablesSection() {
   const addVariable = useEditorStore((s) => s.addVariable);
   const updateVariable = useEditorStore((s) => s.updateVariable);
   const setVariableKind = useEditorStore((s) => s.setVariableKind);
+  const setVariablePersist = useEditorStore((s) => s.setVariablePersist);
   const removeVariable = useEditorStore((s) => s.removeVariable);
 
   // The exporter's own answer rather than a second walk, so the key a row shows
@@ -491,7 +493,7 @@ function VariablesSection() {
   const keys = variableKeysOf(project);
 
   return (
-    <Section title="Variables" summary={summary.countSummary(variables.length, 'variable')}>
+    <Section title="Variables" summary={summary.variablesSummary(variables)}>
 
       {variables.length === 0 ? (
         <p className="hint">
@@ -553,6 +555,15 @@ function VariablesSection() {
                 ✕
               </button>
             </div>
+            {/* A row of its own: at 390px a checkbox beside two fields
+                truncates both. Through `setVariablePersist`, never
+                `updateVariable`, so unticking removes the key rather than
+                leaving `persist: false` in the file. */}
+            <CheckboxField
+              label={`Variable ${index + 1} remembered between plays`}
+              value={variable.persist === true}
+              onChange={(persist) => setVariablePersist(variable.id, persist)}
+            />
             {/* By title as well as text, the way an audio row is found: the
                 text is the derived key, which is the very thing a caller is
                 trying to read, so it cannot also be what locates the row. */}
@@ -576,6 +587,17 @@ function VariablesSection() {
         <code>this.registry.get(&apos;name&apos;)</code>, or show one to the player with a
         rule that sets an object&apos;s text.
       </p>
+      {/* Only once something is remembered, because it is the thing a user
+          will trip on: the one place the feature cannot be seen working is
+          the one place in the editor that runs the game. */}
+      {variables.some((variable) => variable.persist === true) ? (
+        <p className="hint">
+          A remembered variable is kept in the player&apos;s browser and loaded the
+          next time the exported game starts, so a best score outlives a reload. Play
+          game always starts fresh: it runs sandboxed, with no storage. A rule can put
+          every remembered variable back with Reset remembered variables.
+        </p>
+      ) : null}
     </Section>
   );
 }
@@ -621,6 +643,7 @@ const ACTION_LABEL: Record<RuleAction['kind'], string> = {
   cameraZoom: 'Zoom the camera',
   setVar: 'Set a variable',
   addVar: 'Add to a variable',
+  resetPersisted: 'Reset remembered variables',
   startScene: 'Go to a scene',
   restartScene: 'Restart this scene',
 };
@@ -982,11 +1005,13 @@ function RuleCard({ rule, index }: { rule: SceneRule; index: number }) {
                 // there would be a sentence nobody can ever read.
                 //
                 // The three particles verbs are withheld the same way and for
-                // the same reason, which makes this the second and last use of
-                // the mechanism rather than a precedent to reach for: it is
-                // right here only because `defaultAction` has nothing to seed
-                // these with when the scene holds no emitter.
+                // the same reason. So is `resetPersisted`, which the reader
+                // drops while nothing is remembered. That is the whole test for
+                // reaching for this mechanism rather than a precedent: withhold
+                // a kind only when the reader would drop it on the next read and
+                // `defaultAction` has nothing to seed it with.
                 options={RULE_ACTION_KINDS.filter((kind) => {
+                  if (kind === 'resetPersisted') return hasPersistedVariables(project);
                   if (kind === 'setVelocity') {
                     return scene.children.some(
                       (node) => physicsOf(node, true)?.kind === 'dynamic',
@@ -1274,6 +1299,10 @@ function defaultAction(
         ? { kind: 'startScene', sceneId: other.id }
         : { kind: 'restartScene' };
     }
+    case 'resetPersisted':
+      // Names nothing, so there is nothing to seed. The picker offers it only
+      // while a variable is remembered, which is when the reader keeps it.
+      return { kind: 'resetPersisted' };
     default:
       return { kind: 'restartScene' };
   }
@@ -2006,6 +2035,20 @@ function ActionFields({
           onChange={(sceneId) => onChange({ ...action, sceneId })}
         />
       );
+
+    case 'resetPersisted': {
+      // No fields, and a sentence naming what it touches rather than nothing:
+      // "reset" alone does not say which variables, and the answer changes as
+      // boxes are ticked in the Variables section.
+      const names = project.variables
+        .filter((variable) => variable.persist === true)
+        .map((variable) => variable.name);
+      return (
+        <p className="hint">
+          Sets {names.join(', ')} back to the value each starts at, and remembers that.
+        </p>
+      );
+    }
 
     default:
       return null;

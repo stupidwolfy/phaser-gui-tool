@@ -226,7 +226,7 @@ test('a body and the scene gravity survive a save and an open, at schema 12', as
   // predates it opens this file and draws it identically. It reads 16 because
   // other features bumped it — a round body among them, the first physics field
   // to, because an old build's field-by-field `physicsOf` loses it.
-  expect(project.schemaVersion).toBe(16);
+  expect(project.schemaVersion).toBe(17);
   // The engine rides here beside the gravity, and an Arcade scene says so
   // explicitly once anything has written the field — which is what makes
   // "absent means Arcade" a rule about *older files* rather than about this one.
@@ -351,7 +351,7 @@ test('a round body survives a save and an open', async ({ editor }, testInfo) =>
   // At least 15 because of this field (16 since particle trails): an older build
   // rebuilds a body field by field and would draw, export and — on the next
   // edit — save this circle as a box.
-  expect(project.schemaVersion).toBe(16);
+  expect(project.schemaVersion).toBe(17);
   expect(project.scenes[0].children[0].physics.shape).toBe('circle');
 
   const path = testInfo.outputPath('round.phaser.json');
