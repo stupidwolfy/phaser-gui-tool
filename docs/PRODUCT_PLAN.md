@@ -238,6 +238,14 @@ does not currently run after every edit or on every load, and issue navigation r
 path but no inspector control consumes it to focus the smallest editable target. The full issue
 matrix, integration coverage, and manual fixture/responsiveness review also remain outstanding.
 
+**Policy note (2026-09-25).** An issue blocks Play and export only when the output would be
+invalid: a newer schema, no scenes, a duplicate id, a non-finite number, or a scene with no size.
+Dangling references (asset, animation, prefab, object, variable) and malformed colours are
+warnings. The readers already drop a reference that names nothing, and the exporter repairs a
+colour to a default, so the game still runs. They are still listed and still lead to their field.
+On phones the issue list now sits above the tab bar and above any open sheet, rather than over
+them.
+
 **User problem.** Invalid references and incomplete configuration can surface late during
 Play or export, while feedback is distributed across controls and lacks a consistent severity
 or recovery path.

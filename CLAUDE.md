@@ -4010,12 +4010,8 @@ this, every value reset on a reload, so a game could not keep a best score.
   first load, shown after a reload, hidden again after the reset and a reload. `play.spec.ts`
   runs the same shape in the sandbox. Removing the `try` and removing the load were each
   confirmed red. `export-toolchain.spec.ts` compiles the three-argument helper under
-  `tsc --strict` straight from `generateScene`. The hostile project carries the same
-  fixtures, but `validateProject` counts its deliberate dangling references as blocking, so
-  the editor currently refuses to export it and the hostile variants cannot reach the helper.
-- **`reaches` answers with its last reading and never throws.** A claim is the `expect` on
-  what it returns. The first version of the reload test awaited `reaches` alone and passed with
-  the load deleted.
+  `tsc --strict` straight from `generateScene`, and the hostile project carries a remembered
+  text variable and a remembered variable with a hostile id through both toolchains.
 
 **What stays refused.** **No per-variable storage key field**: derived is enough, and the
 printed table is the escape hatch. **No save slots and no "forget" that removes a key**: a
@@ -5621,6 +5617,16 @@ A collapsed section says what it holds on its head: `Physics` reads `Off` or
   shows those whose `inspectorSection` is its title, and they override the summary. So a
   head reports exactly the issue Play and export report, and no section decides for itself
   what counts as broken.
+- **An issue blocks Play and export only when the output would be invalid.** A newer schema,
+  no scenes, a duplicate id, a non-finite number and a scene with no size block. A dangling
+  reference and a malformed colour warn: the readers already drop a reference that names
+  nothing and the exporter repairs a colour, so the game runs. That is the older rule that one
+  unreadable reference must not cost the user the rest of their work. The hostile project
+  carries both on purpose, and while they blocked, every hostile export test failed.
+- **On a phone the issue list sits above the tab bar and above an open sheet.** `IssueSummary`
+  renders after Layout's `.app`, so `.app--mobile ~ .issues` and
+  `.app--mobile.has-sheet ~ .issues` place it with no JS. Fixed at the bottom it covered the
+  tab bar, and nothing on the page could be reached until it was dismissed.
 - **`inspectorSection` names real titles now, through `src/core/sections.ts`.** Before this,
   every prop issue said `'Properties'`, which is no section, so pressing an issue opened
   nothing.
@@ -6508,6 +6514,11 @@ Traps, each of which produced a confident wrong answer at some point:
   test can actually make is "it reaches a frame it did not start on", polled — a statement
   about time passing, not a single screenshot. Asserting a specific frame at a specific
   moment is a test that fails on a loaded machine.
+- **`reaches` answers with its last reading and never throws.** A claim is the `expect` on
+  what it returns. Three export tests awaited it bare and passed whatever happened, and one of
+  them was hiding a broken fixture: its prize was at alpha 0, which `setVisible(true)` cannot
+  show. The first version of the saved-variables reload test did the same and passed with the
+  load deleted.
 - **A page coordinate worked out while a sheet is open points somewhere else once it
   closes.** A sheet shortens the canvas and the camera re-fits, so the zoom `sceneToScreen`
   read is no longer the zoom the tap lands under. It cost both mobile paint tests on the
