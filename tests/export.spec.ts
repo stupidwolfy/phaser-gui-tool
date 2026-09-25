@@ -866,22 +866,34 @@ test('a round body glances off a round bumper that a box would rest on', async (
   await editor.setField('Bounce Y', 0.3);
   await editor.addColliderOnNode('Bumper');
 
-  async function settle(name: string) {
+  type Reading = { ball: Awaited<ReturnType<typeof findColor>>; bumper: Awaited<ReturnType<typeof findColor>> };
+
+  // Where it came to rest rather than whether it has stopped, the rule the
+  // landing tests above follow for their reason. The claim is polled rather
+  // than read once after a fixed wait: on a loaded machine the physics steps
+  // slower than the wall clock, so two seconds was sometimes not yet enough
+  // for the ball to have glanced past the bumper.
+  async function settle(name: string, claim: (reading: Reading) => boolean) {
     const exported = await editor.exportCode('html');
     const run = await runExportedPage(page.context(), testInfo.outputPath(name), exported.contents);
-    // Where it came to rest rather than whether it has stopped, the rule the
-    // landing tests above follow for their reason.
     await run.page.waitForTimeout(2000);
-    const shot = await run.page.locator('canvas').screenshot();
-    const ball = await findColor(run.page, shot, ELLIPSE_FILL);
-    const bumper = await findColor(run.page, shot, RECT_FILL);
-    expect(ball.count).toBeGreaterThan(50);
+    const reading = await reaches(async () => {
+      const shot = await run.page.locator('canvas').screenshot();
+      return {
+        ball: await findColor(run.page, shot, ELLIPSE_FILL),
+        bumper: await findColor(run.page, shot, RECT_FILL),
+      };
+    }, (value) => value.ball.count > 50 && claim(value));
+    expect(reading.ball.count).toBeGreaterThan(50);
     expect(run.errors).toEqual([]);
     await run.close();
-    return { ball, bumper, exported };
+    return { ...reading, exported };
   }
 
-  const round = await settle('glance-circle');
+  const round = await settle(
+    'glance-circle',
+    ({ ball, bumper }) => ball.y > bumper.y && ball.x < bumper.x,
+  );
   expect(round.exported.contents).toContain('fitBodyToCircle(bumper);');
   expect(round.exported.contents).toContain('fitBodyToCircle(ball);');
   expect(round.ball.y).toBeGreaterThan(round.bumper.y);
@@ -891,7 +903,7 @@ test('a round body glances off a round bumper that a box would rest on', async (
   await editor.setChoice('Body shape', 'Box');
   await editor.selectInTree('Bumper');
   await editor.setChoice('Body shape', 'Box');
-  const boxes = await settle('glance-box');
+  const boxes = await settle('glance-box', ({ ball, bumper }) => ball.y < bumper.y);
   expect(boxes.exported.contents).not.toContain('fitBodyToCircle');
   expect(boxes.ball.y).toBeLessThan(boxes.bumper.y);
 });
@@ -1184,10 +1196,13 @@ test('the exported page destroys what a tap rule names', async ({
   };
   await run.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 
-  await reaches(
+  // `reaches` answers with its last reading rather than throwing, so the claim
+  // is the `expect` on what it answered.
+  const left = await reaches(
     async () => (await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL)).count,
     (count) => count < 20,
   );
+  expect(left).toBeLessThan(20);
   expect(run.errors).toEqual([]);
 
   await run.close();
@@ -1302,13 +1317,17 @@ test('a Matter collision runs its rule, whichever way round the pair arrives', a
   await editor.setChoice('Body', 'Static — never moves');
   await editor.deselect();
 
-  await editor.setGravity(0, 900);
+  // A slow, long fall, so the faller is still on screen when the first
+  // screenshot comes back. At 900 and a 240-unit drop it landed in about 0.7s,
+  // which a loaded machine could spend booting the page, and the "it was drawn
+  // before it landed" reading below then found nothing. Here it takes ~1.9s.
+  await editor.setGravity(0, 200);
   await editor.setSceneEngine('matter');
 
   await editor.addObject('Ellipse');
   await editor.setField('Name', 'Faller');
   await editor.setField('X', 480);
-  await editor.setField('Y', 180);
+  await editor.setField('Y', 60);
   await editor.setField('Width', 80);
   await editor.setField('Height', 80);
   await editor.setPhysics(true);
@@ -1350,12 +1369,13 @@ test('a Matter collision runs its rule, whichever way round the pair arrives', a
 
   // It falls, it lands, and landing is what removes it. Backwards, the handler
   // never fires and the ellipse simply sits on the floor for ever.
-  await reaches(
+  const left = await reaches(
     async () =>
       (await findColor(run.page, await run.page.locator('canvas').screenshot(), ELLIPSE_FILL))
         .count,
     (count) => count < 20,
   );
+  expect(left).toBeLessThan(20);
   expect(run.errors).toEqual([]);
 
   await run.close();
@@ -1382,9 +1402,10 @@ test('the exported page keeps a variable across a change of scene', async ({
   await editor.setField('Y', 270);
   await editor.setField('Width', 300);
   await editor.setField('Height', 300);
-  await editor.selectInTree('Prize');
-  await editor.setField('Alpha', 0);
+  // Hidden rather than at alpha 0: the rule below shows it with `setVisible`,
+  // which does nothing for an object that is visible and fully transparent.
   await editor.deselect();
+  await editor.panel('scene').getByRole('button', { name: 'Hide Prize', exact: true }).click();
 
   const second = await editor.addRule();
   await editor.setRuleTrigger(second, 1, 'the scene starts');
@@ -1411,10 +1432,11 @@ test('the exported page keeps a variable across a change of scene', async ({
   // The prize is drawn at full alpha only if the second scene's condition read
   // a score the first scene set — which only survives `scene.start` because it
   // lives in the game-wide registry.
-  await reaches(
+  const shown = await reaches(
     async () => (await findColor(run.page, await run.page.locator('canvas').screenshot(), RECT_FILL)).count,
     (count) => count > 200,
   );
+  expect(shown).toBeGreaterThan(200);
   expect(run.errors).toEqual([]);
 
   await run.close();

@@ -169,12 +169,11 @@ for (const variant of VARIANTS) {
  * exporter rather than through the editor.
  *
  * The hostile variant above carries a remembered text variable and a remembered
- * variable with a hostile id for exactly this, but the hostile project also
- * holds deliberate dangling references that `validateProject` now counts as
- * blocking, so the editor refuses to export it. Until that is settled this is
- * the only place the widened, three-argument `initVariables` meets the
- * compiler: a text variable (so the `number | string` signature), a number
- * variable, an id carrying the script breakout, and a reset action.
+ * variable with a hostile id too. This one is small and needs no editor, so it
+ * says in isolation what the hostile run says among a hundred other things: the
+ * widened, three-argument `initVariables` compiles, with a text variable (so the
+ * `number | string` signature), a number variable, an id carrying the script
+ * breakout, and a reset action.
  */
 test('the remembered-variable helper compiles under --strict and escapes a hostile id', async ({}, testInfo) => {
   const { newProject } = await import('../src/core/defaults');
