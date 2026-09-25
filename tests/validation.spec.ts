@@ -67,3 +67,34 @@ test('every node issue names a section the inspector actually renders', () => {
   // summary opened nothing.
   expect(issues.some((issue) => issue.inspectorSection === 'Properties')).toBe(false);
 });
+
+test('dangling references and malformed colours warn, and do not block', () => {
+  // The exporter already copes with both: a reader drops a reference that names
+  // nothing, and a colour is repaired to a default. So the output is valid, and
+  // an issue blocks only when the output would not be.
+  const project = newProject();
+  const text = project.scenes[0].children.find((node) => node.type === 'text')!;
+  const rectangle = project.scenes[0].children.find((node) => node.type === 'rectangle')!;
+  (rectangle.props as { fill: string }).fill = 'not a colour';
+  project.scenes[0].backgroundColor = 'red; } body { color: red';
+  project.scenes[0].children.push(
+    { id: 'sprite', name: 'Sprite', type: 'sprite', visible: true, transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 }, props: { assetId: 'gone', alpha: 1, tint: '#ffffff', flipX: false, flipY: false, frame: 0, animationId: null }, children: [] },
+    { ...text, id: 'caption', props: { ...(text.props as object), label: { variableId: 'nope', decimals: -1, pad: 0 } } as never },
+  );
+
+  const issues = validateProject(project);
+  for (const code of ['reference.asset-missing', 'reference.variable-missing', 'value.color-malformed']) {
+    const found = issues.filter((issue) => issue.code === code);
+    expect(found.length, code).toBeGreaterThan(0);
+    for (const issue of found) {
+      expect(issue.severity).toBe('warning');
+      expect(issue.blocksExport).toBe(false);
+    }
+  }
+
+  expect(() => generateScene(project, 'ts')).not.toThrow();
+  expect(() => generateRunnableHtml(project)).not.toThrow();
+  useEditorStore.getState().loadProject(project, null);
+  useEditorStore.getState().setPlayGameRunning(true);
+  expect(useEditorStore.getState().playGameRunning).toBe(true);
+});
