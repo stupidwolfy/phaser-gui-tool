@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   countPrefabSpawns,
   countPrefabUses,
@@ -40,6 +40,7 @@ import {
   MAX_SCROLL_FACTOR,
   BLEND_MODES,
   effectsOf,
+  findAnimation,
   findAsset,
   findAudio,
   findParent,
@@ -90,7 +91,10 @@ import { FontPicker } from './FontPicker';
 import { SolidPalette, TilePalette } from './TilePalette';
 import { AnimationEditor } from './AnimationEditor';
 import { prefabRemovalSummary } from './SceneTree';
-import { Section, SectionsToggle } from './Section';
+import { Section, SectionIssuesContext, SectionsToggle } from './Section';
+import * as summary from './sectionSummaries';
+import { SECTION_TITLE } from '../core/sections';
+import { validateProject } from '../core/validation';
 import { CheckboxField, ColorField, NumberField, SelectField, TextField } from './fields';
 
 /**
@@ -110,15 +114,38 @@ export function Inspector() {
     }
     previousKey.current = selectionKey;
   }, [selectionKey]);
+
+  // One validation pass per document change, shared by every section on the
+  // panel, so a collapsed head reports exactly the issue Play and export would.
+  // Memoised on the project's identity, which `editProject` keeps stable for
+  // anything that is not an edit — a selection, a drag frame the store has not
+  // committed, a section toggle.
+  const project = useEditorStore((s) => s.project);
+  const allIssues = useMemo(() => validateProject(project), [project]);
+  const activeSceneId = project.activeSceneId;
+  const issues = useMemo(() => {
+    if (nodes.length === 0) {
+      return allIssues.filter((issue) => issue.sceneId === activeSceneId && !issue.objectId);
+    }
+    const ids = new Set(nodes.map((node) => node.id));
+    return allIssues.filter(
+      (issue) => issue.objectId !== undefined && ids.has(issue.objectId) && issue.sceneId === activeSceneId,
+    );
+    // `selectionKey` stands for `nodes`, whose array is rebuilt on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allIssues, activeSceneId, selectionKey]);
+
   return (
     <div className="inspector-focus" ref={panelRef} tabIndex={-1} aria-label="Properties inspector">
-      {nodes.length > 1 ? (
-        <SelectionInspector nodes={nodes} />
-      ) : nodes.length === 1 ? (
-        <NodeInspector node={nodes[0]} />
-      ) : (
-        <SceneInspector />
-      )}
+      <SectionIssuesContext.Provider value={issues}>
+        {nodes.length > 1 ? (
+          <SelectionInspector nodes={nodes} />
+        ) : nodes.length === 1 ? (
+          <NodeInspector node={nodes[0]} />
+        ) : (
+          <SceneInspector />
+        )}
+      </SectionIssuesContext.Provider>
     </div>
   );
 }
@@ -161,7 +188,7 @@ function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
 
       <p className="hint">Drag any one of them on the canvas to move them together.</p>
 
-      <Section title="Selection">
+      <Section title="Selection" summary={summary.selectionSummary(nodes)}>
         <div className="arrange-row">
           <button className="btn btn--add" onClick={groupSelection}>
             Group
@@ -189,7 +216,7 @@ function SelectionInspector({ nodes }: { nodes: GameObjectNode[] }) {
 
       <AlignSection count={nodes.length} />
 
-      <Section title="Objects">
+      <Section title="Objects" summary={summary.objectsSummary(nodes)}>
         <ul className="tree">
           {nodes.map((node) => (
             <li key={node.id} className="tree__group">
@@ -464,7 +491,7 @@ function VariablesSection() {
   const keys = variableKeysOf(project);
 
   return (
-    <Section title="Variables">
+    <Section title="Variables" summary={summary.countSummary(variables.length, 'variable')}>
 
       {variables.length === 0 ? (
         <p className="hint">
@@ -659,7 +686,7 @@ function RulesSection() {
   const tappable = scene.children.filter((node) => canBeTapped(node.type));
 
   return (
-    <Section title="Rules">
+    <Section title="Rules" summary={summary.rulesSummary(rules.length)}>
 
       {rules.length === 0 ? (
         <p className="hint">Nothing happens on its own yet.</p>
@@ -712,7 +739,7 @@ function NodeRulesSection({ node }: { node: GameObjectNode }) {
   // silently absent, which is the failure this file records twice.
   if (!topLevel) {
     return (
-      <Section title="Rules">
+      <Section title="Rules" summary={summary.rulesSummary(0)}>
         <p className="hint">
           Rules name objects at the top level of the scene. Drag this one out of its
           group to give it one.
@@ -722,7 +749,7 @@ function NodeRulesSection({ node }: { node: GameObjectNode }) {
   }
 
   return (
-    <Section title="Rules">
+    <Section title="Rules" summary={summary.rulesSummary(rules.length)}>
 
       {rules.length === 0 ? (
         <p className="hint">Nothing happens to this object on its own yet.</p>
@@ -2013,9 +2040,15 @@ function CameraSection() {
   // scroll to somewhere nothing is. The same rule an Arcade body follows, and
   // the same `true` the exporter and the renderer pass.
   const targets = scene.children;
+  const followed = camera.followId
+    ? (targets.find((child) => child.id === camera.followId) ?? null)
+    : null;
 
   return (
-    <Section title="Camera">
+    <Section
+      title="Camera"
+      summary={summary.cameraSummary(camera, followed ? followed.name || followed.type : null)}
+    >
       <div className="field-row">
         <NumberField
           label="Camera X"
@@ -2114,7 +2147,7 @@ function WorldSection() {
     updateScene({ physics: { ...gravity, ...patch } });
 
   return (
-    <Section title="Physics world">
+    <Section title="Physics world" summary={summary.worldSummary(gravity)}>
       {/* First, above the gravity, because it decides what every field under it
           means — and because it is the one setting here that changes what the
           canvas draws. Labelled "Physics engine" rather than "Engine": the
@@ -2192,7 +2225,7 @@ function CollidersSection() {
   // control that says why it cannot beats one that is not there.
   if (scenePhysicsOf(scene).engine === 'matter') {
     return (
-      <Section title="Collisions">
+      <Section title="Collisions" summary={{ text: 'Matter · automatic', state: 'default' }}>
         <p className="hint">
           This scene runs Matter, which collides every body with every other one
           on its own. There is nothing to pair up. Any rows made under Arcade
@@ -2212,7 +2245,7 @@ function CollidersSection() {
   if (candidates.length === 0) return null;
   if (candidates.length === 1) {
     return (
-      <Section title="Collisions">
+      <Section title="Collisions" summary={summary.pairsSummary(0)}>
         <p className="hint">
           Only one thing here can collide. Give a second object a body — or add
           a tilemap with solid tiles — and the pair can be made here or on
@@ -2225,7 +2258,7 @@ function CollidersSection() {
   const options = candidates.map((node) => ({ value: node.id, label: node.name }));
 
   return (
-    <Section title="Collisions">
+    <Section title="Collisions" summary={summary.pairsSummary(rows.length)}>
       {/* Every label is numbered, and that is not decoration: a second row puts
           a second field reading exactly "Collides" on the page, and the suite
           locates a field by its exact label — the trap the prefab buttons' "+ "
@@ -2314,7 +2347,10 @@ function SnappingSection() {
   const setAngleStep = useEditorStore((s) => s.setAngleStep);
 
   return (
-    <Section title="Snapping">
+    <Section
+      title="Snapping"
+      summary={summary.snappingSummary(snapEnabled, gridEnabled, gridSize)}
+    >
       <CheckboxField label="Snap to objects" value={snapEnabled} onChange={setSnapEnabled} />
       <CheckboxField label="Snap to grid" value={gridEnabled} onChange={setGridEnabled} />
       <NumberField
@@ -2368,7 +2404,7 @@ function GuidesSection() {
   const count = guides.length;
 
   return (
-    <Section title="Guides">
+    <Section title="Guides" summary={summary.countSummary(count, 'guide')}>
       {/* At the centre rather than at 0: a guide on the scene's own edge lies
           under the frame and is half off-screen at the fit zoom, which is the
           same reason a new object does not land at the origin either. */}
@@ -2532,7 +2568,10 @@ function InstanceSection({ node }: { node: GameObjectNode }) {
   const prefab = prefabs.find((entry) => entry.id === node.props.prefabId);
 
   return (
-    <Section title={SECTION_TITLE.instance}>
+    <Section
+      title={SECTION_TITLE.instance}
+      summary={summary.instanceSummary(prefab ? prefab.name : null, uses)}
+    >
       {prefab ? (
         <p className="hint">
           {uses === 1
@@ -2596,19 +2635,6 @@ function InstanceSection({ node }: { node: GameObjectNode }) {
   );
 }
 
-/** Heading for the per-type section, which is the only thing that differs. */
-const SECTION_TITLE: Record<GameObjectNode['type'], string> = {
-  rectangle: 'Shape',
-  ellipse: 'Shape',
-  text: 'Text',
-  sprite: 'Image',
-  nineslice: 'Panel',
-  tileSprite: 'Tiled image',
-  container: 'Group',
-  instance: 'Prefab',
-  tilemap: 'Tiles',
-  particles: 'Particles',
-};
 
 /** The value the parent picker uses for "not in a group at all". */
 const SCENE_PARENT = '';
@@ -2653,7 +2679,7 @@ function ParentRow({ node }: { node: GameObjectNode }) {
   ];
 
   return (
-    <Section title="Parent">
+    <Section title="Parent" summary={summary.parentSummary(parent ? parent.name : null)}>
       <SelectField
         label="Group"
         value={parent?.id ?? SCENE_PARENT}
@@ -2686,7 +2712,7 @@ function ArrangeRow({ node }: { node: GameObjectNode }) {
   const move = (to: number) => reorderNode(node.id, to);
 
   return (
-    <Section title="Arrange">
+    <Section title="Arrange" summary={summary.arrangeSummary(index, siblings.length)}>
       <div className="arrange-row">
         <button
           className="btn btn--add"
@@ -2816,11 +2842,19 @@ function NineSliceSection({
   node: Extract<GameObjectNode, { type: 'nineslice' }>;
 }) {
   const updateProps = useEditorStore((s) => s.updateProps);
+  const project = useEditorStore((s) => s.project);
   const setProp = (patch: Partial<NineSliceProps>) => updateProps(node.id, patch);
 
   return (
     <>
-      <Section title={SECTION_TITLE.nineslice}>
+      <Section
+        title={SECTION_TITLE.nineslice}
+        summary={summary.imageSummary(
+          findAsset(project, node.props.assetId),
+          node.props.assetId,
+          node.props.frame,
+        )}
+      >
         <AssetSummary assetId={node.props.assetId} kind="panel" />
         <AssetPicker
           selectedAssetId={node.props.assetId}
@@ -2829,13 +2863,16 @@ function NineSliceSection({
       </Section>
 
       {node.props.assetId && (
-        <Section title="Sprite sheet">
+        <Section
+          title="Sprite sheet"
+          summary={summary.sheetSummary(findAsset(project, node.props.assetId))}
+        >
           <SheetSection assetId={node.props.assetId} />
           <FrameField node={node} />
         </Section>
       )}
 
-      <Section title="Size">
+      <Section title="Size" summary={summary.sizeSummary(node.props)}>
         <div className="field-row">
           <NumberField
             label="Width"
@@ -2852,7 +2889,7 @@ function NineSliceSection({
         </div>
       </Section>
 
-      <Section title="Slices">
+      <Section title="Slices" summary={summary.slicesSummary(node.props)}>
         <p className="hint">
           The corners keep their size at any width; only the edges and the middle
           stretch. Leave Slice top and bottom at 0 for a bar that stretches
@@ -2888,7 +2925,7 @@ function NineSliceSection({
         </div>
       </Section>
 
-      <Section title="Appearance">
+      <Section title="Appearance" summary={summary.appearanceSummary(node.props)}>
         <ColorField label="Tint" value={node.props.tint} onChange={(tint) => setProp({ tint })} />
         <NumberField
           label="Alpha"
@@ -2919,11 +2956,19 @@ function TileSpriteSection({
   node: Extract<GameObjectNode, { type: 'tileSprite' }>;
 }) {
   const updateProps = useEditorStore((s) => s.updateProps);
+  const project = useEditorStore((s) => s.project);
   const setProp = (patch: Partial<TileSpriteProps>) => updateProps(node.id, patch);
 
   return (
     <>
-      <Section title={SECTION_TITLE.tileSprite}>
+      <Section
+        title={SECTION_TITLE.tileSprite}
+        summary={summary.imageSummary(
+          findAsset(project, node.props.assetId),
+          node.props.assetId,
+          node.props.frame,
+        )}
+      >
         <AssetSummary assetId={node.props.assetId} kind="tile" />
         <AssetPicker
           selectedAssetId={node.props.assetId}
@@ -2932,13 +2977,16 @@ function TileSpriteSection({
       </Section>
 
       {node.props.assetId && (
-        <Section title="Sprite sheet">
+        <Section
+          title="Sprite sheet"
+          summary={summary.sheetSummary(findAsset(project, node.props.assetId))}
+        >
           <SheetSection assetId={node.props.assetId} />
           <FrameField node={node} />
         </Section>
       )}
 
-      <Section title="Size">
+      <Section title="Size" summary={summary.sizeSummary(node.props)}>
         <div className="field-row">
           <NumberField
             label="Width"
@@ -2955,7 +3003,7 @@ function TileSpriteSection({
         </div>
       </Section>
 
-      <Section title="Pattern">
+      <Section title="Pattern" summary={summary.patternSummary(node.props)}>
         <p className="hint">
           The image repeats to fill the box. Tile offset scrolls it inside the
           box; tile scale changes how big one repeat is.
@@ -2988,7 +3036,7 @@ function TileSpriteSection({
         </div>
       </Section>
 
-      <Section title="Appearance">
+      <Section title="Appearance" summary={summary.appearanceSummary(node.props)}>
         <ColorField label="Tint" value={node.props.tint} onChange={(tint) => setProp({ tint })} />
         <NumberField
           label="Alpha"
@@ -3034,7 +3082,10 @@ function TextSection({ node }: { node: Extract<GameObjectNode, { type: 'text' }>
 
   return (
     <>
-      <Section title={SECTION_TITLE.text}>
+      <Section
+        title={SECTION_TITLE.text}
+        summary={summary.textSummary(node.props, label ? label.variable.name || 'a variable' : null)}
+      >
         <TextField
           label="Content"
           value={node.props.text}
@@ -3145,7 +3196,7 @@ function TextSection({ node }: { node: Extract<GameObjectNode, { type: 'text' }>
         </div>
       </Section>
 
-      <Section title="Paragraph">
+      <Section title="Paragraph" summary={summary.paragraphSummary(node.props)}>
         <p className="hint">
           Wrap width 0 means the text runs on in one line. Align only shows itself
           on text with more than one line — wrapped, or with a line break in it.
@@ -3182,7 +3233,7 @@ function TextSection({ node }: { node: Extract<GameObjectNode, { type: 'text' }>
         </div>
       </Section>
 
-      <Section title="Stroke and shadow">
+      <Section title="Stroke and shadow" summary={summary.strokeShadowSummary(node.props)}>
         <p className="hint">
           A stroke draws only while its width is above zero. Room for both is
           worked out from the numbers you set, so neither is clipped.
@@ -3248,12 +3299,20 @@ function ParticlesSection({
   node: Extract<GameObjectNode, { type: 'particles' }>;
 }) {
   const updateProps = useEditorStore((s) => s.updateProps);
+  const project = useEditorStore((s) => s.project);
   const previewMotion = useEditorStore((s) => s.previewMotion);
   const setProp = (patch: Partial<ParticlesProps>) => updateProps(node.id, patch);
 
   return (
     <>
-      <Section title={SECTION_TITLE.particles}>
+      <Section
+        title={SECTION_TITLE.particles}
+        summary={summary.imageSummary(
+          findAsset(project, node.props.assetId),
+          node.props.assetId,
+          node.props.frame,
+        )}
+      >
         <AssetSummary assetId={node.props.assetId} kind="particle" />
         <AssetPicker
           selectedAssetId={node.props.assetId}
@@ -3273,13 +3332,16 @@ function ParticlesSection({
       )}
 
       {node.props.assetId && (
-        <Section title="Sprite sheet">
+        <Section
+          title="Sprite sheet"
+          summary={summary.sheetSummary(findAsset(project, node.props.assetId))}
+        >
           <SheetSection assetId={node.props.assetId} />
           <FrameField node={node} />
         </Section>
       )}
 
-      <Section title="Emission">
+      <Section title="Emission" summary={summary.emissionSummary(node.props)}>
         <NumberField
           label="Lifespan"
           value={node.props.lifespan}
@@ -3347,7 +3409,7 @@ function ParticlesSection({
         </div>
       </Section>
 
-      <Section title="Particle">
+      <Section title="Particle" summary={summary.particleSummary(node.props)}>
         {/* Phaser's own names, and deliberately not "Scale"/"Alpha": the
             transform's Scale X/Y and the object's own Alpha are a few rows up
             this same panel, and two fields differing by one word is ambiguous to
@@ -3393,7 +3455,7 @@ function ParticlesSection({
         />
       </Section>
 
-      <Section title="Appearance">
+      <Section title="Appearance" summary={summary.appearanceSummary({ alpha: node.props.alpha })}>
         <NumberField
           label="Alpha"
           value={node.props.alpha}
@@ -3431,7 +3493,7 @@ function FollowSection({ node }: { node: Extract<GameObjectNode, { type: 'partic
 
   if (!topLevel) {
     return (
-      <Section title="Follow">
+      <Section title="Follow" summary={summary.followSummary(node.props.followId, null)}>
         <p className="hint">
           Only an emitter placed directly in the scene can follow something — move
           it out of its group to leave a trail.
@@ -3449,7 +3511,7 @@ function FollowSection({ node }: { node: Extract<GameObjectNode, { type: 'partic
   const transformed = rotation % 360 !== 0 || scaleX !== 1 || scaleY !== 1;
 
   return (
-    <Section title="Follow">
+    <Section title="Follow" summary={summary.followSummary(node.props.followId, following)}>
       <SelectField
         label="Emitter follows"
         value={node.props.followId ?? ''}
@@ -3605,7 +3667,10 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
 
   return (
     <>
-      <Section title={SECTION_TITLE.tilemap}>
+      <Section
+        title={SECTION_TITLE.tilemap}
+        summary={summary.tilesetSummary(node.props.assetId ? map.asset : undefined, map.tileCount)}
+      >
         <AssetSummary assetId={node.props.assetId} kind="tileset" />
         <AssetPicker
           selectedAssetId={node.props.assetId}
@@ -3614,12 +3679,15 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
       </Section>
 
       {node.props.assetId && (
-        <Section title="Tileset">
+        <Section title="Tileset" summary={summary.sheetSummary(map.asset)}>
           <SheetSection assetId={node.props.assetId} />
         </Section>
       )}
 
-      <Section title="Grid">
+      <Section
+        title="Grid"
+        summary={summary.gridSummary(map.columns, map.rows, map.tileWidth, map.tileHeight)}
+      >
         <div className="field-row">
           <NumberField
             label="Columns"
@@ -3641,11 +3709,14 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
         </p>
       </Section>
 
-      <Section title="Layers">
+      <Section
+        title="Layers"
+        summary={summary.layersSummary(map.layers.map((entry) => entry.name))}
+      >
         <LayerList nodeId={node.id} map={map} />
       </Section>
 
-      <Section title="Brush">
+      <Section title="Brush" summary={summary.brushSummary(erasing, brushTile, layer.name)}>
         <TilePalette assetId={node.props.assetId} />
         <p className="hint">Painting on {layer.name}.</p>
 
@@ -3671,7 +3742,7 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
           collision is `setCollision([...])`, which is about which *tiles* are
           solid rather than about a box round the layer. Naming it Physics would
           say the map has the thing it deliberately has not got. */}
-      <Section title="Collision">
+      <Section title="Collision" summary={summary.solidSummary(layer.collides.length)}>
         <SolidPalette
           nodeId={node.id}
           layerId={layer.id}
@@ -3692,7 +3763,7 @@ function TilemapSection({ node }: { node: Extract<GameObjectNode, { type: 'tilem
           is the panel that is off screen for as long as this one is showing. */}
       <NodeCollisionsSection node={node} />
 
-      <Section title="Appearance">
+      <Section title="Appearance" summary={summary.appearanceSummary({ alpha: node.props.alpha })}>
         <NumberField
           label="Alpha"
           value={node.props.alpha}
@@ -3714,6 +3785,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
   const scaleNode = useEditorStore((s) => s.scaleNode);
   const lockAspect = useEditorStore((s) => s.lockAspect);
   const setLockAspect = useEditorStore((s) => s.setLockAspect);
+  const project = useEditorStore((s) => s.project);
 
   const setProp = (patch: Record<string, unknown>) => updateProps(node.id, patch);
 
@@ -3750,7 +3822,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
           under the heading `SECTION_TITLE` already gives it. */}
       {node.type !== 'instance' && <NodePrefabSection node={node} />}
 
-      <Section title="Transform">
+      <Section title="Transform" summary={summary.transformSummary(node.transform)}>
         <div className="field-row">
           <NumberField
             label="X"
@@ -3801,7 +3873,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
           The union in schema.ts narrows node.props per branch, so adding a node
           type later turns every missed case here into a compile error too. */}
       {(node.type === 'rectangle' || node.type === 'ellipse') && (
-        <Section title={SECTION_TITLE[node.type]}>
+        <Section title={SECTION_TITLE[node.type]} summary={summary.shapeSummary(node.props)}>
           <div className="field-row">
             <NumberField
               label="Width"
@@ -3834,7 +3906,14 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
 
       {node.type === 'sprite' && (
         <>
-          <Section title={SECTION_TITLE.sprite}>
+          <Section
+            title={SECTION_TITLE.sprite}
+            summary={summary.imageSummary(
+              findAsset(project, node.props.assetId),
+              node.props.assetId,
+              node.props.frame,
+            )}
+          >
             <AssetSummary assetId={node.props.assetId} />
             <AssetPicker
               selectedAssetId={node.props.assetId}
@@ -3844,12 +3923,22 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
 
           {node.props.assetId && (
             <>
-              <Section title="Sprite sheet">
+              <Section
+                title="Sprite sheet"
+                summary={summary.sheetSummary(findAsset(project, node.props.assetId))}
+              >
                 <SheetSection assetId={node.props.assetId} />
                 <FrameField node={node} />
               </Section>
 
-              <Section title="Animation">
+              <Section
+                title="Animation"
+                summary={summary.animationSummary(
+                  node.props.animationId
+                    ? (findAnimation(project, node.props.animationId)?.name ?? null)
+                    : null,
+                )}
+              >
                 <AnimationEditor
                   nodeId={node.id}
                   assetId={node.props.assetId}
@@ -3860,7 +3949,7 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
             </>
           )}
 
-          <Section title="Appearance">
+          <Section title="Appearance" summary={summary.appearanceSummary(node.props)}>
             <ColorField
               label="Tint"
               value={node.props.tint}
@@ -3897,7 +3986,10 @@ function NodeInspector({ node }: { node: GameObjectNode }) {
       {node.type === 'particles' && <ParticlesSection node={node} />}
 
       {node.type === 'container' && (
-        <Section title={SECTION_TITLE.container}>
+        <Section
+          title={SECTION_TITLE.container}
+          summary={summary.groupSummary(node.children.length)}
+        >
           <p className="hint">
             {node.children.length === 0
               ? 'Empty. Drag objects onto this row in the scene tree, or set their Parent to this group.'
@@ -3974,7 +4066,10 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
 
   if (!topLevel) {
     return (
-      <Section title="Physics">
+      <Section
+        title="Physics"
+        summary={summary.physicsSummary(null, engine, false, node.physics !== undefined)}
+      >
           <p className="hint">
             {node.physics
               ? 'This object has a body, but it is inside a group, so nothing draws it and the export leaves it out. Move it back to the top level of the scene and it comes back exactly as you left it.'
@@ -3986,7 +4081,7 @@ function PhysicsSection({ node }: { node: GameObjectNode }) {
 
     return (
       <>
-        <Section title="Physics">
+        <Section title="Physics" summary={summary.physicsSummary(body, engine, true, body !== null)}>
           <CheckboxField
             label="Physics body"
           value={body !== null}
@@ -4251,7 +4346,7 @@ function NodeCollisionsSection({ node }: { node: GameObjectNode }) {
   // control that says why it cannot beats one that is not there.
   if (scenePhysicsOf(scene).engine === 'matter') {
     return (
-      <Section title="Collides with">
+      <Section title="Collides with" summary={{ text: 'Matter · automatic', state: 'default' }}>
         <p className="hint">
           This scene runs Matter, which collides every body with every other one
           on its own. There is nothing to pair up. Any rows made under Arcade
@@ -4277,7 +4372,7 @@ function NodeCollisionsSection({ node }: { node: GameObjectNode }) {
        a tilemap this renders directly under that one. Three headings, one word
        apart, would read as three features. It is also a storage key now — the
        open sections are remembered by title — so the three stay three. */
-    <Section title="Collides with">
+    <Section title="Collides with" summary={summary.pairsSummary(rows.length)}>
       {rows.map((row, index) => {
         // Which side this node sits on decides which field the picker writes.
         // Read once, so the value shown and the value written cannot disagree.
@@ -4384,7 +4479,7 @@ function ControlsSection({ node }: { node: GameObjectNode }) {
   const controls = controlsOf(node, true);
 
   return (
-    <Section title="Controls">
+    <Section title="Controls" summary={summary.controlsSummary(controls)}>
       <CheckboxField
         label="Player controls"
         value={controls !== null}
@@ -4697,7 +4792,7 @@ function BlendSection({ node }: { node: GameObjectNode }) {
   const setNodeBlendMode = useEditorStore((s) => s.setNodeBlendMode);
 
   return (
-    <Section title="Blend">
+    <Section title="Blend" summary={summary.blendSummary(blendModeOf(node))}>
       <SelectField
         // "Blend mode", never the bare "Blend" the particles panel used to
         // carry and never "Mode": the suite matches a label exactly, and this
@@ -4756,7 +4851,7 @@ function ScrollSection({ node }: { node: GameObjectNode }) {
   // paragraph, and it cost this feature's spec a run.
   if (!topLevel) {
     return (
-      <Section title="Scroll">
+      <Section title="Scroll" summary={summary.scrollSummary(factor)}>
         <p className="hint">
           Only an object the scene holds directly can have a scroll factor. Put one on the
           group instead, and everything inside it moves together.
@@ -4766,7 +4861,7 @@ function ScrollSection({ node }: { node: GameObjectNode }) {
   }
 
   return (
-    <Section title="Scroll">
+    <Section title="Scroll" summary={summary.scrollSummary(factor)}>
       <div className="field-row">
         <NumberField
           // "Scroll factor X", never a bare "X": the Transform section a few
@@ -4819,7 +4914,7 @@ function EffectsSection({ node }: { node: GameObjectNode }) {
   const full = effects.length >= MAX_EFFECTS;
 
   return (
-    <Section title="Effects">
+    <Section title="Effects" summary={summary.effectsSummary(effects)}>
       {effects.length === 0 ? (
         // A sentence rather than an empty picker — `AlignSection`'s rule, that
         // a control saying why beats one that is not there.
@@ -4918,7 +5013,7 @@ function TweenSection({ node }: { node: GameObjectNode }) {
   ];
 
   return (
-    <Section title="Tween">
+    <Section title="Tween" summary={summary.tweenSummary(tween)}>
       <CheckboxField
         label="Tween this object"
         value={tween !== null}

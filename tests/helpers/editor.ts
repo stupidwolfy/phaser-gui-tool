@@ -229,7 +229,9 @@ export class EditorPage {
     if (!this.isMobile) return;
     const open = this.page.locator('.sheet.is-open');
     while ((await open.count()) > 0) {
-      await open.first().getByRole('button', { name: 'Close panel' }).click();
+      // `Close <title> panel`: named by the sheet it closes, so that a screen
+      // reader hears which of the three it is.
+      await open.first().getByRole('button', { name: /^Close .+ panel$/ }).click();
       await expect(open).toHaveCount(0);
     }
     await this.settle();
@@ -341,7 +343,17 @@ export class EditorPage {
 
   async selectInTree(name: string): Promise<void> {
     await this.openPanel('scene');
-    await this.panel('scene').getByRole('button', { name, exact: true }).click();
+    // By the row's name text rather than its accessible name, which is
+    // `<name>, <type>` so a screen reader says what kind of object it is.
+    // A selected row's name carries a CSS ` (selected)` suffix, which Playwright
+    // reads as text; it is allowed here so a selected row can still be found.
+    const exact = new RegExp(
+      `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( \\(selected\\))?$`,
+    );
+    await this.panel('scene')
+      .locator('.tree__label[data-tree-object]')
+      .filter({ has: this.page.locator('.tree__name', { hasText: exact }) })
+      .click();
     await this.settle();
   }
 
@@ -396,7 +408,9 @@ export class EditorPage {
    */
   async setMultiSelect(on: boolean): Promise<void> {
     await this.openPanel('scene');
-    const button = this.panel('scene').getByRole('button', { name: 'Multi', exact: true });
+    // `Multi ✓` while on: the active state's tick is CSS content, and Chromium
+    // counts generated content towards an accessible name.
+    const button = this.panel('scene').getByRole('button', { name: /^Multi( ✓)?$/ });
     if (((await button.getAttribute('aria-pressed')) === 'true') !== on) await button.click();
     await this.settle();
   }
@@ -1400,7 +1414,7 @@ export class EditorPage {
     // The toolbar button rather than Ctrl+Z, because it is the only one of the
     // two a phone has.
     await this.closePanels();
-    await this.page.getByRole('button', { name: '↶' }).click();
+    await this.page.getByRole('button', { name: 'Undo', exact: true }).click();
     await this.settle();
   }
 

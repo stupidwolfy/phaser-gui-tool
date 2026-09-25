@@ -5536,6 +5536,53 @@ which on a phone is a 55vh sheet of unbroken scroll.
   between two collapsed bars. It is about the emitter as a whole, so it is in the per-type
   section's lead-in now.
 
+
+### Summaries on collapsed heads
+
+A collapsed section says what it holds on its head: `Physics` reads `Off` or
+`Dynamic · box`, `Effects` reads `None` or `Glow, Blur`.
+
+- **Shown only while collapsed.** An open section shows the fields themselves. A summary
+  that rewrote itself as they were typed into would move every control below the head, so
+  hiding it on open meets "no shifting while editing" by construction.
+- **The name is the title; the summary is the description.** The head carries
+  `aria-label={title}` and `aria-describedby` points at the summary. The mobile tab bar's
+  exact names, `EditorPage.sectionHead` and `physics.spec.ts`' exact-text count all depend on
+  the name staying the title. `.section__title` is still its own text node.
+- **Formatters are pure, in `src/ui/sectionSummaries.ts`.** Each takes what the section
+  already read through the document's readers (`physicsOf`, `tweenOf`, `effectsOf`, …), so
+  it cannot disagree with the fields about what the document says. Many build a fresh
+  object, so never call one inside a zustand selector: the `tileMapOf` trap.
+- **Three states come from callers: `default`, `configured` and `mixed`.** `mixed` means a
+  set that disagrees, or a setting stored but not in force (a body on a nested node, a
+  follow on a turned emitter). Each state has a glyph and a hidden word as well as a colour.
+- **`warning` and `invalid` come only from `validateProject`.** `Inspector` validates once
+  per project identity and provides the issues through `SectionIssuesContext`. `Section`
+  shows those whose `inspectorSection` is its title, and they override the summary. So a
+  head reports exactly the issue Play and export report, and no section decides for itself
+  what counts as broken.
+- **`inspectorSection` names real titles now, through `src/core/sections.ts`.** Before this,
+  every prop issue said `'Properties'`, which is no section, so pressing an issue opened
+  nothing.
+  - `SECTION_TITLE` moved there from `Inspector.tsx`, because core has to name a section and
+    must not import from `ui/`.
+  - `inspectorSectionFor(type, path)` is a hand-matched map from a prop to the section that
+    renders its field. Moving a field between sections means moving its row there too; a
+    miss only opens the neighbouring section.
+- **`validationFocusSection`** is set by `focusValidationIssue`. The matching `Section`
+  scrolls itself into view, focuses its head and clears the field. The head rather than a
+  field, because a dangling id has no input of its own.
+- **Adding a section:** pass `summary=` with one of the formatters, or add one. A section
+  without a summary still works; its head simply says nothing while collapsed. `Align` and
+  `NodePrefabSection`'s `Prefab` deliberately have none, because they hold actions rather
+  than state.
+- **Test-helper locators after the accessibility pass.** Tree rows are named
+  `<name>, <type>`, a selected row's name carries a CSS ` (selected)` suffix, an active
+  toggle a CSS ` ✓`, sheets close through `Close <title> panel`, and undo is `Undo`.
+  Chromium counts generated content towards an accessible name. `selectInTree`,
+  `setMultiSelect`, `closePanels` and `undo` in `tests/helpers/editor.ts` match those
+  shapes; an exact bare name no longer finds them.
+
 ## Selection
 
 `selectedIds: string[]` is the selection, in the order it was picked; the **last** entry

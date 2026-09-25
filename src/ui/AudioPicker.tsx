@@ -5,6 +5,7 @@ import { findAudio, soundsOf, type AudioAsset, type SceneSound } from '../core/s
 import { audioKeyOf } from '../io/exportPhaser';
 import { pickAudioFile } from '../io/fileIO';
 import { Section } from './Section';
+import { countSummary } from './sectionSummaries';
 import { CheckboxField, NumberField, SelectField } from './fields';
 
 /**
@@ -76,7 +77,7 @@ export function AudioSection() {
 
   return (
     <>
-      <Section title="Audio">
+      <Section title="Audio" summary={countSummary(audio.length, 'sound file')}>
 
         <button
           className="btn btn--block"
@@ -220,7 +221,7 @@ function SceneSoundsSection() {
   if (sounds.length === 0) return null;
 
   return (
-    <Section title="In this scene">
+    <Section title="In this scene" summary={countSummary(sounds.length, 'sound')}>
       {sounds.map((sound) => (
         <SceneSoundRow key={sound.id} sound={sound} />
       ))}

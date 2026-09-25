@@ -180,9 +180,9 @@ test('duplicating a selection copies all of it and selects the copies', async ({
   // move next, and the header is where that is visible.
   await expect(editor.selectionCount()).toHaveText('2 of 7');
   await expect(
-    editor.panel('scene').getByRole('button', { name: 'First copy', exact: true }),
+    editor.panel('scene').getByRole('button', { name: /^First copy, / }),
   ).toBeVisible();
   await expect(
-    editor.panel('scene').getByRole('button', { name: 'Second copy', exact: true }),
+    editor.panel('scene').getByRole('button', { name: /^Second copy, / }),
   ).toBeVisible();
 });

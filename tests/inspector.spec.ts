@@ -1,5 +1,6 @@
+import { promises as fs } from 'node:fs';
 import { expect, test } from './helpers/fixtures';
-import { SCENE } from './helpers/editor';
+import { SCENE, type EditorPage } from './helpers/editor';
 
 /**
  * The properties panel's collapsible sections.
@@ -153,4 +154,180 @@ test('a section head is a 44px touch target', async ({ editor, isMobile }) => {
 
   const box = await editor.sectionHead('Transform').boundingBox();
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+});
+
+// -- summaries on collapsed heads ------------------------------------------
+
+/** What a collapsed head says about its section, or nothing while it is open. */
+const summaryOf = (editor: EditorPage, title: string) =>
+  editor.sectionHead(title).locator('.section__summary');
+
+/** Closes the validation report, which floats over the mobile tab bar. */
+async function dismissReport(editor: EditorPage): Promise<void> {
+  const dismiss = editor.page.getByRole('button', { name: 'Dismiss validation issues' });
+  if ((await dismiss.count()) > 0) await dismiss.click();
+}
+
+/** Presses a toolbar button by its accessible name, with every sheet closed. */
+async function toolbar(editor: EditorPage, name: 'Undo' | 'Redo'): Promise<void> {
+  await editor.closePanels();
+  await editor.page.getByRole('button', { name, exact: true }).click();
+  await editor.settle();
+  await editor.openPanel('inspect');
+}
+
+test('a collapsed head says what its section holds, and follows undo and redo', async ({
+  editor,
+}) => {
+  await editor.addObject('Rectangle');
+  await editor.openPanel('inspect');
+
+  await expect(summaryOf(editor, 'Physics')).toHaveText('Off');
+  await expect(summaryOf(editor, 'Physics')).toHaveClass(/section__summary--default/);
+
+  // Open, the fields say it and the head does not: a summary that changed as
+  // the fields under it were edited would move every control below the head.
+  await editor.toggleSection('Physics');
+  await expect(summaryOf(editor, 'Physics')).toHaveCount(0);
+  await editor.setPhysics(true);
+  await editor.toggleSection('Physics');
+
+  await expect(summaryOf(editor, 'Physics')).toContainText('Dynamic · box');
+  await expect(summaryOf(editor, 'Physics')).toHaveClass(/section__summary--configured/);
+
+  await toolbar(editor, 'Undo');
+  await expect(summaryOf(editor, 'Physics')).toHaveText('Off');
+  await toolbar(editor, 'Redo');
+  await expect(summaryOf(editor, 'Physics')).toContainText('Dynamic · box');
+});
+
+test('a summary follows the selection to another object', async ({ editor }) => {
+  await editor.addObject('Rectangle');
+  await editor.toggleSection('Physics');
+  await editor.setPhysics(true);
+  await editor.toggleSection('Physics');
+  await editor.closePanels();
+  await editor.addObject('Ellipse');
+  await editor.openPanel('inspect');
+
+  await expect(summaryOf(editor, 'Physics')).toHaveText('Off');
+
+  await editor.selectInTree('Rectangle');
+  await editor.openPanel('inspect');
+  await expect(summaryOf(editor, 'Physics')).toContainText('Dynamic · box');
+});
+
+test('the effects head lists what is drawn over the object', async ({ editor }) => {
+  await editor.addObject('Rectangle');
+  await editor.openPanel('inspect');
+  await expect(summaryOf(editor, 'Effects')).toHaveText('None');
+
+  await editor.toggleSection('Effects');
+  await editor.panel('inspect').getByRole('button', { name: '+ Add an effect' }).click();
+  await editor.settle();
+  await editor.toggleSection('Effects');
+
+  await expect(summaryOf(editor, 'Effects')).toContainText('Glow');
+});
+
+/**
+ * The name stays the title, and the summary is the description.
+ *
+ * The mobile tab bar and every exact-name locator in the suite depend on the
+ * first half; a screen reader hearing "Physics, Configured: Dynamic · box"
+ * rather than only "Physics" is the second.
+ */
+test('a head is named by its title and described by its summary', async ({ editor }) => {
+  await editor.addObject('Rectangle');
+  await editor.toggleSection('Physics');
+  await editor.setPhysics(true);
+  await editor.toggleSection('Physics');
+
+  const head = editor.panel('inspect').getByRole('button', { name: 'Physics', exact: true });
+  await expect(head).toHaveCount(1);
+  await expect(head).toHaveAccessibleDescription('Configured: Dynamic · box');
+});
+
+test('a selection that disagrees says so rather than picking one answer', async ({ editor }) => {
+  await editor.addObject('Rectangle');
+  await editor.closePanels();
+  await editor.addObject('Ellipse');
+  await editor.panel('scene').getByRole('button', { name: 'Hide Ellipse', exact: true }).click();
+  await editor.settle();
+
+  await editor.setMultiSelect(true);
+  await editor.selectInTree('Rectangle');
+  await editor.setMultiSelect(false);
+  await editor.openPanel('inspect');
+
+  await expect(summaryOf(editor, 'Selection')).toContainText('1 of 2 hidden');
+  await expect(summaryOf(editor, 'Selection')).toHaveClass(/section__summary--mixed/);
+  await expect(summaryOf(editor, 'Objects')).toContainText('Rectangle, Ellipse');
+});
+
+test('an unfinished object warns on the head of the section that fixes it', async ({ editor }) => {
+  await editor.addObject('Image');
+  await editor.openPanel('inspect');
+
+  // Validation's own message, not a second wording of it: the head reports the
+  // issue Play and export report.
+  await expect(summaryOf(editor, 'Image')).toContainText('No image asset is selected.');
+  await expect(summaryOf(editor, 'Image')).toHaveClass(/section__summary--warning/);
+});
+
+/**
+ * The broken case, and the path from the report to the field.
+ *
+ * A dangling image is a file the editor cannot write, so it is written by hand;
+ * Play refuses it and lists the issue, and pressing the issue has to land on
+ * the section that holds the image picker — which, before issues named real
+ * section titles, it opened nothing at all.
+ */
+test('a broken reference marks its head, and the issue opens that section', async ({
+  editor,
+}, testInfo) => {
+  await editor.addObject('Image');
+  const saved = JSON.parse((await editor.saveToFile()).contents);
+  // Saving reports the image-less sprite as a warning, and the report sits
+  // over the mobile tab bar.
+  await dismissReport(editor);
+  const scene = saved.scenes.find((entry: { id: string }) => entry.id === saved.activeSceneId);
+  const sprite = scene.children.find((node: { type: string }) => node.type === 'sprite');
+  sprite.props.assetId = 'gone';
+  const path = testInfo.outputPath('dangling.phaser.json');
+  await fs.writeFile(path, JSON.stringify(saved), 'utf8');
+
+  await editor.openFile(path);
+  await editor.selectInTree('Sprite');
+  await editor.openPanel('inspect');
+  await expect(summaryOf(editor, 'Image')).toContainText('Asset reference "gone" is missing.');
+  await expect(summaryOf(editor, 'Image')).toHaveClass(/section__summary--invalid/);
+
+  await editor.deselect();
+  await editor.closePanels();
+  await editor.page.getByRole('button', { name: 'Play game' }).click();
+  const report = editor.page.getByRole('complementary', { name: 'Validation issues' });
+  await report.getByRole('button', { name: /Asset reference "gone" is missing/ }).click();
+  await editor.settle();
+  await dismissReport(editor);
+
+  await editor.openPanel('inspect');
+  expect(await editor.sectionIsOpen('Image')).toBe(true);
+  // Revealed, not merely opened: the head the issue named is the one on screen.
+  await expect(editor.sectionHead('Image')).toBeInViewport();
+});
+
+test('a long summary never grows the head or the panel', async ({ editor }) => {
+  await editor.addObject('Text');
+  await editor.toggleSection('Text');
+  await editor.setField('Content', 'A caption far too long for any head to hold on one line');
+  await editor.toggleSection('Text');
+
+  await expect(summaryOf(editor, 'Text')).toContainText('“A caption far too long');
+  const box = await editor.sectionHead('Text').boundingBox();
+  expect(box?.height ?? 0).toBeLessThanOrEqual(46);
+
+  const panel = editor.panel('inspect').locator('.panel').first();
+  const overflow = await panel.evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
 });

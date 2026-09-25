@@ -264,7 +264,7 @@ test('the overlay covers the editor and carries the only way out', async ({
 
   await editor.openPanel('scene');
   await expect(
-    editor.panel('scene').getByRole('button', { name: 'Rectangle', exact: true }),
+    editor.panel('scene').getByRole('button', { name: /^Rectangle, / }),
   ).toBeVisible();
 });
 
