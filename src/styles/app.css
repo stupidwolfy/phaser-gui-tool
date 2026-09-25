@@ -1440,6 +1440,20 @@ select {
   background: var(--panel, #20232a);
   box-shadow: 0 .5rem 2rem #0008;
 }
+/*
+ * On a phone the tab bar and the sheets are how anybody gets anywhere, so a
+ * status surface must never sit on them: the panel floats above the tab bar,
+ * and above an open sheet, in the canvas band that is left. The sheet reserves
+ * its own space, as it already does for the canvas. It renders after Layout's
+ * `.app`, which is what lets a sibling selector read the layout's state.
+ */
+.app--mobile ~ .issues {
+  bottom: calc(var(--tabbar-h) + 8px);
+}
+.app--mobile.has-sheet ~ .issues {
+  bottom: calc(var(--tabbar-h) + var(--sheet-h) + 8px);
+  max-height: calc(100dvh - var(--toolbar-h) - var(--tabbar-h) - var(--sheet-h) - 16px);
+}
 .issues__header { display: flex; align-items: center; justify-content: space-between; }
 .issues ul { margin: .5rem 0 0; padding: 0; list-style: none; }
 .issues li button { width: 100%; padding: .4rem; border: 0; color: inherit; background: none; text-align: left; cursor: pointer; }
