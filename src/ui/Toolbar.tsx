@@ -10,6 +10,7 @@ export interface ToolbarActions {
   onExportSceneTs: () => void;
   onExportSceneJs: () => void;
   onExportHtml: () => void;
+  onHelp: () => void;
 }
 
 /**
@@ -239,6 +240,9 @@ export function Toolbar({
       </div>
 
       <div className="toolbar__group">
+        <button className="btn" onClick={actions.onHelp} title="Help" aria-label="Help" aria-haspopup="dialog">
+          ?
+        </button>
         {!compact && (
           <>
             <button className="btn" onClick={actions.onNew} title="New project">
