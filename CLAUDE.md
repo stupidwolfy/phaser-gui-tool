@@ -4009,7 +4009,10 @@ this, every value reset on a reload, so a game could not keep a best score.
   text. `export.spec.ts` carries the runtime claim on a page served over HTTP: hidden on the
   first load, shown after a reload, hidden again after the reset and a reload. `play.spec.ts`
   runs the same shape in the sandbox. Removing the `try` and removing the load were each
-  confirmed red.
+  confirmed red. `export-toolchain.spec.ts` compiles the three-argument helper under
+  `tsc --strict` straight from `generateScene`. The hostile project carries the same
+  fixtures, but `validateProject` counts its deliberate dangling references as blocking, so
+  the editor currently refuses to export it and the hostile variants cannot reach the helper.
 - **`reaches` answers with its last reading and never throws.** A claim is the `expect` on
   what it returns. The first version of the reload test awaited `reaches` alone and passed with
   the load deleted.
