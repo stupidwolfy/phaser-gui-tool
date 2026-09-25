@@ -16,6 +16,7 @@
   --accent: #4f8cff;
   --accent-solid: #286bd6;
   --danger: #ff6b6b;
+  --warning: #f2c14e;
   --radius: 8px;
   --toolbar-h: 52px;
   --tabbar-h: 58px;
@@ -418,6 +419,70 @@ select {
 
 .section__chevron {
   margin-left: auto;
+  flex: none;
+}
+
+/* The title never shrinks; the summary beside it takes what is left and
+   ellipsises, so a long caption or asset name cannot grow the head past its
+   44px or push the panel into a sideways scroll at 390px. */
+.section__title {
+  flex: none;
+}
+
+/*
+ * What a collapsed section holds, on its head.
+ *
+ * Not uppercase and not tracked: the title is the heading's voice, and this is
+ * a value — `Dynamic · box`, `#4f8cff` — which uppercasing would change the
+ * meaning of. Dim by default so that a panel of untouched sections reads as
+ * quiet, and every non-default state carries a glyph as well as a colour.
+ */
+.section__summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-dim);
+}
+
+.section__state {
+  margin-right: 4px;
+}
+
+.section__summary--configured {
+  color: var(--text);
+}
+
+.section__summary--configured .section__state {
+  color: var(--accent);
+}
+
+.section__summary--mixed {
+  color: var(--text);
+  font-style: italic;
+}
+
+.section__summary--warning {
+  color: var(--warning);
+}
+
+.section__summary--invalid {
+  color: var(--danger);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Rotated rather than swapped for a second glyph: one element that turns reads

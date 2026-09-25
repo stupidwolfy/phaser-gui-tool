@@ -1,3 +1,4 @@
+import { inspectorSectionFor } from './sections';
 import { SCHEMA_VERSION, type GameObjectNode, type Project, type SceneDoc, type ValidationIssue } from './schema';
 export type { ValidationIssue } from './schema';
 
@@ -59,7 +60,7 @@ export function validateProject(project: Project): ValidationIssue[] {
   const walk = (nodes: readonly GameObjectNode[], scene: SceneDoc | undefined, base: string) => {
     const nodeIds = new Set<string>();
     const collect = (items: readonly GameObjectNode[], path: string) => items.forEach((node, index) => {
-      if (nodeIds.has(node.id)) add({ code: 'name.duplicate-id', severity: 'error', message: `Duplicate object id "${node.id}".`, sceneId: scene?.id, objectId: node.id, fieldPath: `${path}.${index}.id`, inspectorSection: 'Properties', blocksExport: true });
+      if (nodeIds.has(node.id)) add({ code: 'name.duplicate-id', severity: 'error', message: `Duplicate object id "${node.id}".`, sceneId: scene?.id, objectId: node.id, fieldPath: `${path}.${index}.id`, blocksExport: true });
       nodeIds.add(node.id);
       if ('children' in node) collect(node.children, `${path}.${index}.children`);
     });
@@ -67,15 +68,15 @@ export function validateProject(project: Project): ValidationIssue[] {
     const visit = (items: readonly GameObjectNode[], path: string) => items.forEach((node, index) => {
       const at = `${path}.${index}`;
       const common = { sceneId: scene?.id, objectId: node.id };
-      for (const [key, value] of Object.entries(node.transform)) if (typeof value !== 'number' || !Number.isFinite(value)) add({ code: 'value.not-finite', severity: 'error', message: `${key} must be a finite number.`, ...common, fieldPath: `${at}.transform.${key}`, inspectorSection: 'Transform', blocksExport: true });
+      for (const [key, value] of Object.entries(node.transform)) if (typeof value !== 'number' || !Number.isFinite(value)) add({ code: 'value.not-finite', severity: 'error', message: `${key} must be a finite number.`, ...common, fieldPath: `${at}.transform.${key}`, inspectorSection: inspectorSectionFor(node.type, `transform.${key}`), blocksExport: true });
       const props = node.props as unknown as Record<string, unknown>;
       for (const [key, value] of Object.entries(props)) {
-        if (typeof value === 'number' && !Number.isFinite(value)) add({ code: 'value.not-finite', severity: 'error', message: `${key} must be a finite number.`, ...common, fieldPath: `${at}.props.${key}`, inspectorSection: 'Properties', blocksExport: true });
-        if ((key === 'fill' || key === 'tint' || key.endsWith('Color')) && typeof value === 'string' && !HEX.test(value)) add({ code: 'value.color-malformed', severity: 'error', message: `${key} must be a six-digit hex colour.`, ...common, fieldPath: `${at}.props.${key}`, inspectorSection: 'Properties', blocksExport: true });
+        if (typeof value === 'number' && !Number.isFinite(value)) add({ code: 'value.not-finite', severity: 'error', message: `${key} must be a finite number.`, ...common, fieldPath: `${at}.props.${key}`, inspectorSection: inspectorSectionFor(node.type, `props.${key}`), blocksExport: true });
+        if ((key === 'fill' || key === 'tint' || key.endsWith('Color')) && typeof value === 'string' && !HEX.test(value)) add({ code: 'value.color-malformed', severity: 'error', message: `${key} must be a six-digit hex colour.`, ...common, fieldPath: `${at}.props.${key}`, inspectorSection: inspectorSectionFor(node.type, `props.${key}`), blocksExport: true });
       }
-      const ref = (id: unknown, exists: boolean, code: string, field: string, label: string) => { if (typeof id === 'string' && id && !exists) add({ code, severity: 'error', message: `${label} reference "${id}" is missing.`, ...common, fieldPath: `${at}.${field}`, inspectorSection: 'Properties', blocksExport: true }); };
+      const ref = (id: unknown, exists: boolean, code: string, field: string, label: string) => { if (typeof id === 'string' && id && !exists) add({ code, severity: 'error', message: `${label} reference "${id}" is missing.`, ...common, fieldPath: `${at}.${field}`, inspectorSection: inspectorSectionFor(node.type, field), blocksExport: true }); };
       if ('assetId' in props) ref(props.assetId, assets.has(String(props.assetId)), 'reference.asset-missing', 'props.assetId', 'Asset');
-      if ('assetId' in props && props.assetId === null) add({ code: 'config.asset-unset', severity: 'warning', message: 'No image asset is selected.', ...common, fieldPath: `${at}.props.assetId`, inspectorSection: 'Properties', blocksExport: false });
+      if ('assetId' in props && props.assetId === null) add({ code: 'config.asset-unset', severity: 'warning', message: 'No image asset is selected.', ...common, fieldPath: `${at}.props.assetId`, inspectorSection: inspectorSectionFor(node.type, 'props.assetId'), blocksExport: false });
       if ('animationId' in props) ref(props.animationId, animations.has(String(props.animationId)), 'reference.animation-missing', 'props.animationId', 'Animation');
       if ('prefabId' in props) ref(props.prefabId, prefabs.has(String(props.prefabId)), 'reference.prefab-missing', 'props.prefabId', 'Prefab');
       if ('followId' in props) ref(props.followId, nodeIds.has(String(props.followId)), 'reference.object-missing', 'props.followId', 'Object');

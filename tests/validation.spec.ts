@@ -48,3 +48,22 @@ test('warnings do not block Play or export', () => {
   useEditorStore.getState().setPlayGameRunning(true);
   expect(useEditorStore.getState().playGameRunning).toBe(true);
 });
+
+test('every node issue names a section the inspector actually renders', () => {
+  const project = newProject();
+  project.variables = [];
+  project.scenes[0].children.push(
+    { id: 'sprite', name: 'Sprite', type: 'sprite', visible: true, transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 }, props: { assetId: 'gone', alpha: 1, tint: '#ffffff', flipX: false, flipY: false, frame: 0, animationId: null }, children: [] },
+    { id: 'caption', name: 'Caption', type: 'text', visible: true, transform: { x: 0, y: Number.NaN, rotation: 0, scaleX: 1, scaleY: 1 }, props: { ...(project.scenes[0].children.find((node) => node.type === 'text')!.props as object), label: { variableId: 'nope', decimals: -1, pad: 0 } } as never, children: [] },
+  );
+  const issues = validateProject(project);
+  const section = (objectId: string, code: string) =>
+    issues.find((issue) => issue.objectId === objectId && issue.code === code)?.inspectorSection;
+
+  expect(section('sprite', 'reference.asset-missing')).toBe('Image');
+  expect(section('caption', 'reference.variable-missing')).toBe('Text');
+  expect(section('caption', 'value.not-finite')).toBe('Transform');
+  // The old catch-all named no section at all, so an issue pressed in the
+  // summary opened nothing.
+  expect(issues.some((issue) => issue.inspectorSection === 'Properties')).toBe(false);
+});

@@ -180,19 +180,33 @@ zoom. Manual: mouse, trackpad, touch, keyboard, 200% browser zoom, and small-scr
 ### 5. Inspector summaries and progressive disclosure
 
 **Priority:** P1
-**Status:** Proposed
+**Status:** In progress
+
+**Status note (2026-09-25).** Every inspector section that holds state now shows a one-line
+summary on its head while collapsed (`src/ui/sectionSummaries.ts`, `src/ui/Section.tsx`). The
+summary distinguishes default, configured and mixed states with a glyph and hidden text as
+well as colour. Warning and error states come from `validateProject` through the issue's
+`inspectorSection`, which now names real section titles (`src/core/sections.ts`), so pressing
+an issue opens, scrolls to and focuses the section that holds the field. This is covered by
+`tests/section-summaries.spec.ts`, `tests/validation.spec.ts` and `tests/inspector.spec.ts`
+in the desktop and mobile projects. Not yet done:
+- Focus lands on the section head, not on the smallest field.
+- The multi-selection summary covers visibility and types, not every shared property.
+- The manual five-object scan, screen-reader check and colour-vision check have not been
+  recorded.
 
 **User problem.** Collapsed inspector sections hide whether a feature is configured, forcing
 users to open many sections to understand an object or scene.
 
 **Proposed scope.**
 
-- [ ] Show concise, read-only summaries on collapsed sections (for example, physics mode,
+- [x] Show concise, read-only summaries on collapsed sections (for example, physics mode,
   image/frame, active effects, tween destination, and rule count).
 - [ ] Give incomplete or invalid configuration a consistent warning summary and direct path
-  to the field.
+  to the field. *(The warning summary and the path to the section are done; focus on the
+  field itself is not.)*
 - [ ] Provide a useful multi-selection summary without pretending conflicting values agree.
-- [ ] Preserve section expansion preferences and avoid shifting controls while values edit.
+- [x] Preserve section expansion preferences and avoid shifting controls while values edit.
 
 **Relevant modules.** `src/ui/Inspector.tsx`, `src/ui/Section.tsx`,
 `src/ui/fields.tsx`, `src/core/schema.ts`, and `src/core/store.ts`.
@@ -205,7 +219,7 @@ status treatment.
 - [ ] Every configurable inspector section communicates empty/default, configured, mixed,
   and invalid states without requiring expansion.
 - [ ] Selecting a warning focuses or reveals its responsible field.
-- [ ] Summaries update immediately after undo, redo, selection change, and field edit.
+- [x] Summaries update immediately after undo, redo, selection change, and field edit.
 
 **Required validation.** Automated: summary formatter unit tests and Playwright coverage for
 single/multi-selection, errors, undo/redo, persistence, and overflow. Manual: scan five

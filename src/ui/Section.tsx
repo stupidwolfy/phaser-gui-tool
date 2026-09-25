@@ -1,5 +1,57 @@
-import { useId, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, type ReactNode } from 'react';
 import { useEditorStore } from '../core/store';
+import type { ValidationIssue } from '../core/validation';
+import type { SectionSummary } from './sectionSummaries';
+
+/**
+ * The validation issues about whatever the inspector is currently showing.
+ *
+ * Provided once by `Inspector` from `validateProject`, and read by every
+ * `Section` for the issues whose `inspectorSection` is its own title — so the
+ * warning a collapsed head shows is the same issue Play and export report, by
+ * the same code, and no section decides for itself what counts as broken.
+ */
+export const SectionIssuesContext = createContext<readonly ValidationIssue[]>([]);
+
+type ShownState = SectionSummary['state'] | 'warning' | 'invalid';
+
+const STATE_GLYPH: Record<ShownState, string> = {
+  default: '',
+  configured: '●',
+  mixed: '◐',
+  warning: '▲',
+  invalid: '●',
+};
+
+/** Said in words as well as in a glyph and a colour, for a screen reader. */
+const STATE_WORD: Record<ShownState, string> = {
+  default: '',
+  configured: 'Configured: ',
+  mixed: 'Mixed: ',
+  warning: 'Warning: ',
+  invalid: 'Error: ',
+};
+
+/**
+ * What a collapsed head says: the caller's summary, unless validation has
+ * something to say about this section, which always wins — an error over a
+ * warning, and either over a summary.
+ */
+function shownSummary(
+  summary: SectionSummary | null | undefined,
+  issues: readonly ValidationIssue[],
+): { text: string; state: ShownState } | null {
+  const errors = issues.filter((issue) => issue.severity === 'error');
+  const worst = errors.length > 0 ? errors : issues;
+  if (worst.length > 0) {
+    const more = worst.length > 1 ? ` (+${worst.length - 1})` : '';
+    return {
+      text: `${worst[0].message}${more}`,
+      state: errors.length > 0 ? 'invalid' : 'warning',
+    };
+  }
+  return summary ?? null;
+}
 
 /**
  * One collapsible section of the inspector.
@@ -36,23 +88,75 @@ import { useEditorStore } from '../core/store';
  * so this holds today; a toggle driven from anywhere that does not (a keyboard
  * shortcut, say) has to blur the panel itself.
  */
-export function Section({ title, children }: { title: string; children: ReactNode }) {
+export function Section({
+  title,
+  summary,
+  children,
+}: {
+  title: string;
+  /**
+   * What the section holds, said on its head while it is collapsed. Shown only
+   * collapsed: an open section shows the fields themselves, and a summary that
+   * changed as they were typed into would move every control below the head.
+   */
+  summary?: SectionSummary | null;
+  children: ReactNode;
+}) {
   const bodyId = useId();
+  const summaryId = useId();
+  const headRef = useRef<HTMLButtonElement>(null);
   const open = useEditorStore(
     (s) => s.sectionOverrides[title] ?? s.sectionsOpenByDefault,
   );
   const toggleSection = useEditorStore((s) => s.toggleSection);
+  const focusSection = useEditorStore((s) => s.validationFocusSection);
+  const clearFocusSection = useEditorStore((s) => s.clearValidationFocusSection);
+  const allIssues = useContext(SectionIssuesContext);
+  const issues = allIssues.filter((issue) => issue.inspectorSection === title);
+  const shown = open ? null : shownSummary(summary, issues);
+
+  // An issue pressed in the issue summary opens this section through the
+  // store; this is the half that brings it on screen. The head takes focus
+  // rather than a field inside it, because the field an issue names is not
+  // always one a control edits (a dangling id has no input of its own).
+  useEffect(() => {
+    if (focusSection !== title || !open) return;
+    headRef.current?.scrollIntoView({ block: 'nearest' });
+    headRef.current?.focus();
+    clearFocusSection();
+  }, [focusSection, open, title, clearFocusSection]);
 
   return (
     <section className={`section ${open ? 'is-open' : ''}`}>
       <button
+        ref={headRef}
         type="button"
         className="section__head"
+        // The name is the title and nothing else, and the summary is its
+        // description. Folded into the name, a summary would change what every
+        // exact-name locator — and a screen reader's list of headings — calls
+        // this control each time a value changed.
+        aria-label={title}
+        aria-describedby={shown ? summaryId : undefined}
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => toggleSection(title)}
       >
         <span className="section__title">{title}</span>
+        {shown && (
+          <span
+            id={summaryId}
+            className={`section__summary section__summary--${shown.state}`}
+          >
+            {STATE_GLYPH[shown.state] && (
+              <span className="section__state" aria-hidden="true">
+                {STATE_GLYPH[shown.state]}
+              </span>
+            )}
+            <span className="visually-hidden">{STATE_WORD[shown.state]}</span>
+            {shown.text}
+          </span>
+        )}
         {/* Its own element, and aria-hidden: the title has to stay a text node
             of its own or an exact-text locator stops matching the heading —
             which is what `physics.spec.ts` asserts a missing section with. */}

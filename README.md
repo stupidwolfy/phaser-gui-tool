@@ -224,6 +224,10 @@ on a desktop.
 - The properties panel is a stack of collapsible sections, closed until you open
   them. What you open stays open — across objects, and the next time you visit
 - One button in the panel header opens or closes them all
+- A closed section says what it holds on its heading (`Physics · Dynamic · box`,
+  `Effects · Glow, Blur`, `Tween · x, alpha · 1000ms`), so you can read an object's setup
+  without opening anything. A heading marked ▲ or ● in red has a problem; opening it shows
+  the field to fix. Pressing a problem in the validation list takes you to that section
 
 ### Keyboard
 

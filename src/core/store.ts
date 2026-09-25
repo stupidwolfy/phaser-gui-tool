@@ -294,6 +294,12 @@ export interface EditorState {
   validationIssues: ValidationIssue[];
   /** Field requested by the issue summary; inspectors may use it as a focus target. */
   validationFocusPath: string | null;
+  /**
+   * The inspector section an issue asked to be revealed, until that section has
+   * scrolled itself into view and taken focus. Editor state, never saved.
+   */
+  validationFocusSection: string | null;
+  clearValidationFocusSection: () => void;
   setPlayGameRunning: (running: boolean) => void;
   showValidationIssues: (issues: ValidationIssue[]) => void;
   focusValidationIssue: (issue: ValidationIssue) => void;
@@ -1951,6 +1957,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     playGameRunning: false,
     validationIssues: [],
     validationFocusPath: null,
+    validationFocusSection: null,
     sectionsOpenByDefault: false,
     sectionOverrides: {},
     paintingId: null,
@@ -1993,12 +2000,14 @@ export const useEditorStore = create<EditorState>((set, get) => {
       });
     },
     showValidationIssues: (validationIssues) => set({ validationIssues }),
+    clearValidationFocusSection: () => set({ validationFocusSection: null }),
     focusValidationIssue: (issue) => set((state) => ({
       project: issue.sceneId && state.project.scenes.some((scene) => scene.id === issue.sceneId)
         ? { ...state.project, activeSceneId: issue.sceneId }
         : state.project,
       selectedIds: issue.objectId ? [issue.objectId] : [],
       validationFocusPath: issue.fieldPath,
+      validationFocusSection: issue.inspectorSection ?? null,
       ...(issue.inspectorSection
         ? { sectionOverrides: { ...state.sectionOverrides, [issue.inspectorSection]: true } }
         : {}),
