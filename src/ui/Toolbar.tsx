@@ -6,7 +6,6 @@ export interface ToolbarActions {
   onOpen: () => void;
   onSave: () => void;
   onSaveAs: () => void;
-  onFit: () => void;
   onExportSceneTs: () => void;
   onExportSceneJs: () => void;
   onExportHtml: () => void;
@@ -171,9 +170,6 @@ export function Toolbar({
         </button>
         <button className="btn" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
           ↷
-        </button>
-        <button className="btn" onClick={actions.onFit} title="Fit scene to view" aria-label="Fit scene to view">
-          ⤢
         </button>
         {/* In the toolbar rather than the tree or the inspector because it is
             the one group that survives the compact layout: snapping changes what

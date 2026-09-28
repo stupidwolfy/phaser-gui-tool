@@ -148,17 +148,29 @@ tweens, particles, rules, and physics.
 ### 4. Explicit zoom controls
 
 **Priority:** P1
-**Status:** Proposed
+**Status:** In progress
+
+**Status note (2026-09-28).** A zoom bar over the bottom-right of the canvas holds Zoom out,
+the live percentage (press it for 100%), Zoom in and Fit, in both layouts; Fit moved there
+from the toolbar. Buttons and the `=`/`+`, `-`, `0` and `Shift+1` keys step along a fixed
+ladder from 10% to 400% about the middle of the view. `EditorScene.update()` publishes the
+camera's zoom every frame it changes, so wheel, pinch, resize re-fits and scene switches keep
+the percentage in step, and a hidden status line announces it. `src/editor/zoom.ts` holds the
+limits and the ladder. `tests/zoom.spec.ts` covers steps, limits, 100%, Fit, keys (and keys
+while typing), wheel sync, placement, and separation from the game camera and the saved
+bytes, on desktop and mobile. There is no unit-test runner, so the step arithmetic is
+covered through the UI rather than in isolation. The manual trackpad, real-touch, 200%
+browser-zoom and screen-reader checks have not been recorded, so this is not yet Implemented.
 
 **User problem.** Pan, wheel, and pinch gestures are not self-evident, and Fit alone does not
 show the current zoom or provide predictable incremental control.
 
 **Proposed scope.**
 
-- [ ] Add Zoom out, current percentage, Zoom in, and Fit controls near the viewport.
-- [ ] Define bounded zoom steps and add documented keyboard shortcuts.
-- [ ] Keep wheel/pinch behavior and synchronize every input with the displayed percentage.
-- [ ] Preserve the point of interest where practical and expose Reset to 100%.
+- [x] Add Zoom out, current percentage, Zoom in, and Fit controls near the viewport.
+- [x] Define bounded zoom steps and add documented keyboard shortcuts.
+- [x] Keep wheel/pinch behavior and synchronize every input with the displayed percentage.
+- [x] Preserve the point of interest where practical and expose Reset to 100%.
 
 **Relevant modules.** `src/editor/Viewport.tsx`, `src/editor/phaser/EditorScene.ts`,
 `src/ui/Toolbar.tsx`, `src/ui/Layout.tsx`, and `src/styles/app.css`.
@@ -168,10 +180,10 @@ rules for touch-target size and names.
 
 **Acceptance criteria.**
 
-- [ ] Users can reach minimum, maximum, 100%, and Fit without a precision gesture.
+- [x] Users can reach minimum, maximum, 100%, and Fit without a precision gesture.
 - [ ] The percentage always matches the editor camera and is announced meaningfully to
   assistive technology.
-- [ ] Zoom controls do not change the project's game-camera settings or authored data.
+- [x] Zoom controls do not change the project's game-camera settings or authored data.
 
 **Required validation.** Automated: unit tests for clamping/steps and Playwright tests for
 buttons, shortcuts, Fit, percentage synchronization, resize, and separation from game-camera

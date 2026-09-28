@@ -54,8 +54,20 @@ export function Viewport({ onReady }: { onReady?: (game: Phaser.Game) => void })
   );
 }
 
-/** Re-frames the scene in the viewport. Used by the "Fit" toolbar button. */
+/** Re-frames the scene in the viewport. Used by the zoom bar's Fit button. */
 export function fitView(game: Phaser.Game | null): void {
   if (!game) return;
   getEditorScene(game)?.zoomToFit();
+}
+
+/** One stop in or out along `ZOOM_STEPS`, about the middle of the view. */
+export function zoomView(game: Phaser.Game | null, dir: 1 | -1): void {
+  if (!game) return;
+  getEditorScene(game)?.zoomStep(dir);
+}
+
+/** 100%: one scene unit is one screen pixel. */
+export function resetZoom(game: Phaser.Game | null): void {
+  if (!game) return;
+  getEditorScene(game)?.zoomToActual();
 }

@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { MAX_ZOOM, MIN_ZOOM, nextZoomStep, publishViewZoom } from '../zoom';
 import {
   activeScene,
   primaryId,
@@ -82,8 +83,6 @@ import {
  * `JSON.stringify` of the document would miss.
  */
 
-const MIN_ZOOM = 0.1;
-const MAX_ZOOM = 4;
 // Cyan rather than the UI accent blue: the accent is also the default
 // rectangle fill, which made the outline invisible on the object you had
 // just selected.
@@ -2917,6 +2916,11 @@ export class EditorScene extends Phaser.Scene {
 
   update(): void {
     this.updatePinch();
+    // Every path that moves the zoom — wheel, pinch, the zoom bar, the keys,
+    // Fit, a resize re-fit, a scene switch — is caught here, once, rather than
+    // each having to remember to report itself. `publishViewZoom` ignores an
+    // unchanged value, so an idle frame costs a comparison.
+    publishViewZoom(this.cameras.main.zoom);
     this.updateSelectionOutline();
     // `drawGuides` clears the shared Graphics; everything drawing into it has
     // to come after. The label budget is one per frame across both drawers —
@@ -2962,8 +2966,16 @@ export class EditorScene extends Phaser.Scene {
    * otherwise pinching drifts the scene away from the user's fingers.
    */
   private zoomBy(factor: number, screenX: number, screenY: number): void {
+    this.zoomAbout(this.cameras.main.zoom * factor, screenX, screenY);
+  }
+
+  /**
+   * The absolute form, so a stop lands on exactly 1 rather than on a product
+   * that rounds to 0.9999999 and reads as 100% while drawing at 99.99.
+   */
+  private zoomAbout(target: number, screenX: number, screenY: number): void {
     const camera = this.cameras.main;
-    const next = Phaser.Math.Clamp(camera.zoom * factor, MIN_ZOOM, MAX_ZOOM);
+    const next = Phaser.Math.Clamp(target, MIN_ZOOM, MAX_ZOOM);
     if (next === camera.zoom) return;
 
     const before = camera.getWorldPoint(screenX, screenY);
@@ -2972,6 +2984,25 @@ export class EditorScene extends Phaser.Scene {
     camera.scrollX += before.x - after.x;
     camera.scrollY += before.y - after.y;
     this.cameraTouched = true;
+  }
+
+  /**
+   * One stop along `ZOOM_STEPS`, about the middle of the viewport so what the
+   * user was looking at stays in front of them.
+   */
+  zoomStep(dir: 1 | -1): void {
+    this.zoomAboutCentre(nextZoomStep(this.cameras.main.zoom, dir));
+  }
+
+  /** 100%: one scene unit is one screen pixel. */
+  zoomToActual(): void {
+    this.zoomAboutCentre(1);
+  }
+
+  private zoomAboutCentre(target: number): void {
+    const camera = this.cameras.main;
+    if (camera.width === 0 || camera.height === 0) return;
+    this.zoomAbout(target, camera.width / 2, camera.height / 2);
   }
 
   /** Frames the whole scene in the viewport. Also the "reset view" action. */
