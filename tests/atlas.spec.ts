@@ -166,7 +166,7 @@ test('an atlas survives a save and an open, linking by name', async ({ editor },
   await drawn(editor, 'small');
 
   const { name, contents } = await editor.saveToFile();
-  expect(name).toMatch(/\.phaser\.json$/);
+  expect(name).toMatch(/\.phaser\.zip$/);
   const saved = JSON.parse(contents);
 
   // The literal, so a bump is a deliberate act rather than something the suite

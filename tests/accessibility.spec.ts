@@ -56,3 +56,32 @@ test('reduced motion removes meaningful transition time', async ({ editor, page 
   );
   expect(duration).toBeLessThan(0.001);
 });
+
+test('the issue list never covers the tab bar or an open sheet', async ({ editor, page, isMobile }) => {
+  test.skip(!isMobile, 'compact layout only');
+  // An emitter with no image is a warning, so saving opens the list without
+  // blocking anything.
+  await editor.clearScene();
+  await editor.addObject('Particles');
+  await editor.deselect();
+  await editor.saveToFile();
+  await editor.closePanels();
+
+  const issues = page.locator('.issues');
+  await expect(issues).toBeVisible();
+  const tabbar = await page.locator('.tabbar').boundingBox();
+  let panel = await issues.boundingBox();
+  expect(panel!.y + panel!.height).toBeLessThanOrEqual(tabbar!.y);
+
+  // A tab still takes a press, and the sheet it opens is not covered either.
+  await page.getByRole('button', { name: 'Scene', exact: true }).click();
+  const sheet = page.getByRole('dialog', { name: 'Scene' });
+  await expect(sheet).toBeVisible();
+  // Measured against where the sheet comes to rest rather than where it is:
+  // it slides in on a transform, so its top mid-slide is lower than its final
+  // one and would make this check easier than it should be.
+  const sheetBox = await sheet.boundingBox();
+  const sheetTop = tabbar!.y - sheetBox!.height;
+  panel = await issues.boundingBox();
+  expect(panel!.y + panel!.height).toBeLessThanOrEqual(sheetTop + 1);
+});
