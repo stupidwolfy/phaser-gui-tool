@@ -374,6 +374,23 @@ select {
   border-top: 1px solid var(--border);
 }
 
+.section__headRow {
+  display: flex;
+  align-items: center;
+}
+
+/* The head keeps the row, the "?" beside it only what a touch target needs. */
+.section__headRow > .section__head {
+  flex: 1;
+  min-width: 0;
+}
+
+.section__help {
+  flex: none;
+  min-width: 36px;
+  font-size: 13px;
+}
+
 .section__head {
   display: flex;
   align-items: center;
@@ -1502,5 +1519,152 @@ select {
 }
 .issues__header { display: flex; align-items: center; justify-content: space-between; }
 .issues ul { margin: .5rem 0 0; padding: 0; list-style: none; }
+.issues li { display: flex; align-items: flex-start; }
 .issues li button { width: 100%; padding: .4rem; border: 0; color: inherit; background: none; text-align: left; cursor: pointer; }
+.issues li .issues__help { width: auto; flex: none; text-align: center; }
 .issues code { opacity: .7; font-size: .75em; }
+
+/* ------------------------------------------------------------------ help -- */
+
+/* A narrow button in the brand group: on a 390px toolbar every pixel of width
+   comes out of the Save button's margin. Height keeps the 44px target. */
+.toolbar__help {
+  min-width: 32px;
+  padding: 0 8px;
+  font-weight: 700;
+}
+
+/*
+ * Fixed and above everything, Play included in z-order terms: never a slot in
+ * the layout, because resizing `.app__center` re-fits the editor's camera. The
+ * scrim is part of the overlay, not a click target — the way out is the ✕ or
+ * Escape, the rule `Sheet` keeps too.
+ */
+.help {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #000a;
+}
+
+.help__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(720px, 100%);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 .5rem 2rem #0008;
+}
+
+.help__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 4px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.help__title {
+  margin: 0;
+  font-size: 16px;
+}
+
+.help__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px;
+}
+
+.help__search {
+  width: 100%;
+  /* 16px or iOS Safari zooms the page on focus. */
+  font-size: 16px;
+}
+
+.help__results {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help__result {
+  width: 100%;
+  min-height: var(--touch);
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.help__result:hover,
+.help__result:focus-visible {
+  background: var(--bg-elevated);
+}
+
+.help__topic h3 {
+  margin: 12px 0 8px;
+  font-size: 15px;
+}
+
+.help__topic p,
+.help__topic li {
+  line-height: 1.5;
+}
+
+.help__keys {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.help__keys th,
+.help__keys td {
+  padding: 6px 4px;
+  border-top: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.help__keys kbd {
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.help__footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.help__footer a {
+  color: var(--accent);
+}
+
+@media (max-width: 600px) {
+  .help {
+    padding: 0;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .help__panel {
+    width: 100%;
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+  }
+}

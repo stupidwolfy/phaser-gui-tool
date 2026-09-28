@@ -148,6 +148,11 @@ export function Toolbar({
           ◆
         </span>
         {!compact && <span className="toolbar__title">Phaser GUI Tool</span>}
+        {/* Beside the name rather than at the far end: on a 390px toolbar the
+            far end is Save, which already only just fits, and here Help costs
+            the width of one glyph in both layouts. One press at every width is
+            the requirement, so it is never moved into the File sheet. */}
+        <HelpButton />
       </div>
 
       {!compact && <ProjectNameField />}
@@ -285,6 +290,21 @@ export function Toolbar({
         </div>
       )}
     </header>
+  );
+}
+
+function HelpButton() {
+  const openHelp = useEditorStore((s) => s.openHelp);
+  return (
+    <button
+      className="btn toolbar__help"
+      onClick={() => openHelp()}
+      title="Help (?)"
+      aria-label="Help"
+      aria-haspopup="dialog"
+    >
+      ?
+    </button>
   );
 }
 

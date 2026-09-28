@@ -243,14 +243,22 @@ on a desktop.
 
 | Keys | Does |
 | --- | --- |
+| ? | Open Help |
 | Arrow keys | Nudge 1px — hold Shift for 10px |
 | Delete / Backspace | Delete the selection |
-| Escape | Deselect |
+| Escape | Leave paint mode, otherwise deselect |
 | Ctrl/Cmd + A | Select every top-level object |
 | Ctrl/Cmd + G | Wrap the selection in a group |
 | Ctrl/Cmd + D, C, V | Duplicate, copy, paste |
 | Ctrl/Cmd + Z, Shift+Z | Undo, redo |
 | Ctrl/Cmd + S, O | Save, open |
+| = or +, - | Zoom the view in, out |
+| 0 | Zoom the view to 100% |
+| Shift + 1 | Fit the scene to the view |
+
+The **?** button beside the project name opens Help: searchable task topics, this table,
+where files go, and the version. Sections of the Properties panel that need explaining
+have a **?** of their own, and so does every row of the validation list.
 
 While the game is playing, none of these do anything: the game has the keyboard, which is
 how a driven object reads the arrow keys. Stop is the way back, and it is a button rather

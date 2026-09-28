@@ -1,10 +1,12 @@
 import { useEditorStore } from '../core/store';
+import { helpTopicForIssue } from './helpContent';
 
 /** Shared, navigable result surface for Save, Play and every export. */
 export function IssueSummary() {
   const issues = useEditorStore((state) => state.validationIssues);
   const focus = useEditorStore((state) => state.focusValidationIssue);
   const clear = useEditorStore((state) => state.showValidationIssues);
+  const openHelp = useEditorStore((state) => state.openHelp);
   if (issues.length === 0) return null;
   const errors = issues.filter((issue) => issue.severity === 'error').length;
   return (
@@ -19,6 +21,14 @@ export function IssueSummary() {
             <button onClick={() => focus(issue)}>
               <span aria-hidden="true">{issue.severity === 'error' ? '●' : '▲'}</span>{' '}
               {issue.message} <code>{issue.code}</code>
+            </button>
+            <button
+              className="icon-btn issues__help"
+              onClick={() => openHelp(helpTopicForIssue(issue))}
+              aria-label={`Help for ${issue.code}`}
+              title="What does this mean?"
+            >
+              ?
             </button>
           </li>
         ))}

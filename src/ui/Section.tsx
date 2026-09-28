@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useId, useRef, type ReactNode } f
 import { useEditorStore } from '../core/store';
 import type { ValidationIssue } from '../core/validation';
 import type { SectionSummary } from './sectionSummaries';
+import { HELP_TOPIC_FOR_SECTION } from './helpContent';
 
 /**
  * The validation issues about whatever the inspector is currently showing.
@@ -114,6 +115,8 @@ export function Section({
   const allIssues = useContext(SectionIssuesContext);
   const issues = allIssues.filter((issue) => issue.inspectorSection === title);
   const shown = open ? null : shownSummary(summary, issues);
+  const helpTopic = HELP_TOPIC_FOR_SECTION[title];
+  const openHelp = useEditorStore((s) => s.openHelp);
 
   // An issue pressed in the issue summary opens this section through the
   // store; this is the half that brings it on screen. The head takes focus
@@ -128,42 +131,58 @@ export function Section({
 
   return (
     <section className={`section ${open ? 'is-open' : ''}`}>
-      <button
-        ref={headRef}
-        type="button"
-        className="section__head"
-        // The name is the title and nothing else, and the summary is its
-        // description. Folded into the name, a summary would change what every
-        // exact-name locator — and a screen reader's list of headings — calls
-        // this control each time a value changed.
-        aria-label={title}
-        aria-describedby={shown ? summaryId : undefined}
-        aria-expanded={open}
-        aria-controls={bodyId}
-        onClick={() => toggleSection(title)}
-      >
-        <span className="section__title">{title}</span>
-        {shown && (
-          <span
-            id={summaryId}
-            className={`section__summary section__summary--${shown.state}`}
-          >
-            {STATE_GLYPH[shown.state] && (
-              <span className="section__state" aria-hidden="true">
-                {STATE_GLYPH[shown.state]}
-              </span>
-            )}
-            <span className="visually-hidden">{STATE_WORD[shown.state]}</span>
-            {shown.text}
+      <div className="section__headRow">
+        <button
+          ref={headRef}
+          type="button"
+          className="section__head"
+          // The name is the title and nothing else, and the summary is its
+          // description. Folded into the name, a summary would change what every
+          // exact-name locator — and a screen reader's list of headings — calls
+          // this control each time a value changed.
+          aria-label={title}
+          aria-describedby={shown ? summaryId : undefined}
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => toggleSection(title)}
+        >
+          <span className="section__title">{title}</span>
+          {shown && (
+            <span
+              id={summaryId}
+              className={`section__summary section__summary--${shown.state}`}
+            >
+              {STATE_GLYPH[shown.state] && (
+                <span className="section__state" aria-hidden="true">
+                  {STATE_GLYPH[shown.state]}
+                </span>
+              )}
+              <span className="visually-hidden">{STATE_WORD[shown.state]}</span>
+              {shown.text}
+            </span>
+          )}
+          {/* Its own element, and aria-hidden: the title has to stay a text node
+              of its own or an exact-text locator stops matching the heading —
+              which is what `physics.spec.ts` asserts a missing section with. */}
+          <span className="section__chevron" aria-hidden="true">
+            ▸
           </span>
+        </button>
+        {/* A sibling of the head, never inside it — a button in a button is
+            invalid — and named `Help: <title>` rather than a bare "Help", so the
+            toolbar's Help stays the only control an exact-name locator finds. */}
+        {helpTopic && (
+          <button
+            type="button"
+            className="icon-btn section__help"
+            aria-label={`Help: ${title}`}
+            title={`Help: ${title}`}
+            onClick={() => openHelp(helpTopic)}
+          >
+            ?
+          </button>
         )}
-        {/* Its own element, and aria-hidden: the title has to stay a text node
-            of its own or an exact-text locator stops matching the heading —
-            which is what `physics.spec.ts` asserts a missing section with. */}
-        <span className="section__chevron" aria-hidden="true">
-          ▸
-        </span>
-      </button>
+      </div>
       {open && (
         <div className="section__body" id={bodyId}>
           {children}

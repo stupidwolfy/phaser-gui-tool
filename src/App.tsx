@@ -13,6 +13,7 @@ import { Viewport, fitView, resetZoom, zoomView } from './editor/Viewport';
 import { ZoomBar } from './ui/ZoomBar';
 import { Inspector } from './ui/Inspector';
 import { Layout } from './ui/Layout';
+import { HelpDialog } from './ui/HelpDialog';
 import { PlayOverlay } from './ui/PlayOverlay';
 import { IssueSummary } from './ui/IssueSummary';
 import { ProjectValidationError, validateProject } from './core/validation';
@@ -179,6 +180,19 @@ export default function App() {
       // overlay's own bar is in this document, and a press on Restart leaves it
       // holding the keyboard until the next boot.
       if (store.playGameRunning) return;
+
+      // Help is modal: while it is open no key reaches the editor behind it, or
+      // an arrow pressed on a topic button would nudge an object nobody can
+      // see. The dialog handles its own Escape.
+      if (store.helpTopic !== null) return;
+
+      // `?` is Shift+/ on most layouts, so it is matched by the character, and
+      // above the modifier block only in the sense that it never carries Ctrl.
+      if (event.key === '?' && !inField && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        store.openHelp();
+        return;
+      }
 
       if (event.ctrlKey || event.metaKey) {
         const key = event.key.toLowerCase();
@@ -360,6 +374,7 @@ export default function App() {
         fileMenu={<FilePanel actions={actions} />}
       />
       <PlayOverlay />
+      <HelpDialog />
       <IssueSummary />
       {toast && (
         <div className="toast" role="status">

@@ -5502,6 +5502,37 @@ is running** — that is a rule about rules. **No `advance` or `duration` on a s
 are a fast-forward and a stop-after in disguise. And **no "while" trigger, no sequencing, no
 `onComplete`** — iteration 28's line, unmoved.
 
+## Help
+
+A **?** button beside the project name, and the `?` key outside text fields, open a modal
+Help dialog (`src/ui/HelpDialog.tsx`). It changes the document not at all, so there is no
+schema, reader or exporter work to it.
+
+- **All of its words are in `src/ui/helpContent.ts`, as plain data.** Plain strings rather
+  than JSX, so `searchHelp` can read every word and the suite can import the tables. That file
+  must stay free of JSX and of `__APP_VERSION__`, because `tsconfig.tests.json` compiles it
+  too and has neither.
+- **`SHORTCUTS` is the one list of keys.** The dialog renders it, and the README table is kept
+  to match it by hand. A key added to `App.tsx`'s `onKeyDown` belongs in `SHORTCUTS` in the
+  same change.
+- **`helpTopic` is editor state**, beside `playGameRunning`: never saved, never dirty, not
+  undoable, not persisted. It is in the store only so a section and a validation row can open
+  a topic without a callback being handed down to them. While it is non-null `App.tsx`'s key
+  handler returns early. Otherwise an arrow pressed on a topic button would nudge an object
+  behind the dialog. The dialog handles its own Escape and stops it propagating, so Escape
+  closes Help and does not also deselect.
+- **Context links are `Help: <title>` and `Help for <code>`, never a bare "Help".** The
+  toolbar's button is the only control named exactly "Help". A section's link sits *beside*
+  its head in `.section__headRow`, never inside it (a button in a button is invalid), and the
+  head keeps `aria-label={title}`. `HELP_TOPIC_FOR_SECTION` is keyed by section title, which
+  makes it one more hand-matched list: a new section that needs explaining has to be added
+  there, and a renamed title silently loses its link.
+- **A fixed overlay, never a slot in the layout**, for Play's reason: resizing `.app__center`
+  re-fits the editor's camera. Closing Help therefore leaves the selection, the open sheet
+  and the view as they were. `help.spec.ts` asserts the selection survives.
+- **The app version comes from `vite.config.ts`'s `define`**, read from `package.json`, so
+  the bundle carries one string rather than the manifest. It is declared in `src/env.d.ts`.
+
 ## The properties panel
 
 Every section of the inspector is a disclosure — `src/ui/Section.tsx` — and they ship
@@ -6340,6 +6371,8 @@ tests/
   assets.spec.ts            image import, decode-on-open, removal
   zoom.spec.ts              the editor's own zoom: steps, limits, 100%, Fit, keys, and
                             a game camera and a saved file it never touches
+  help.spec.ts              the Help dialog: one press, search, section and issue
+                            links, the shortcut table, and focus in and out
   play.spec.ts              that page run in the editor: a body that falls, and a
                             document that does not move while it does
   export.spec.ts            the runnable page, actually run
