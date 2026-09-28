@@ -1108,6 +1108,52 @@ select {
   z-index: 40;
 }
 
+/* -------------------------------------------------------------- zoombar -- */
+
+/*
+ * The editor's own zoom, over the bottom-right of the canvas. Every offset
+ * below keeps it inside the bottom band `EditorPage.shot` crops (130px), so
+ * its fills never enter a colour reading — the move bar's reason for living
+ * there too — and clear of the bars that share that band: the paint bar on
+ * the desktop, the move bar and the tab bar on a phone.
+ */
+.zoombar {
+  position: absolute;
+  right: 8px;
+  bottom: 74px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 40%);
+  z-index: 20;
+}
+
+.zoombar__btn {
+  min-width: var(--touch);
+  padding: 0;
+  border-radius: 999px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.zoombar__percent {
+  min-width: 60px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.app--mobile .zoombar {
+  bottom: calc(var(--tabbar-h) + 72px);
+}
+
+/* A sheet hides the move bar and takes the tab bar's place in the padding. */
+.app--mobile.has-sheet .zoombar {
+  bottom: calc(var(--sheet-h) + var(--tabbar-h) + 8px);
+}
+
 /* --------------------------------------------------------------- movebar -- */
 
 /*

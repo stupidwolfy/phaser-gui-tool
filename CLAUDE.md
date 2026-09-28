@@ -6016,6 +6016,38 @@ priming distance included, which is why the existing drag tests did not move.
 the move an explicit ending (✓ keep, ✗ put it back, using the `moveOrigin` snapshot the
 store takes in `select()`).
 
+## Editor zoom
+
+`src/ui/ZoomBar.tsx` sits over the bottom-right of the canvas: Zoom out, the live percentage
+(a button that resets to 100%), Zoom in and Fit. The keys are `=`/`+`, `-`, `0` and `Shift+1`.
+All of it moves the **editor's** camera, which is the user's view. The document's
+`scene.camera` is never touched, and `zoom.spec.ts` asserts that the saved bytes are unchanged.
+
+- **The zoom lives outside zustand**, in `src/editor/zoom.ts`, for the same reason
+  `bounds.ts` does. The scene re-syncs on every store change, so a zoom written to the store
+  would schedule a full sync on every wheel tick and every pinch frame.
+- **`EditorScene.update()` publishes `camera.zoom` whenever it moves.** That one line covers
+  wheel, pinch, buttons, keys, Fit, a resize re-fit and a scene switch. A new zoom path needs
+  nothing extra, and an unchanged value costs one comparison.
+- **Commands go through `gameRef`**, as Fit always has: `zoomView`, `resetZoom` and `fitView`
+  in `Viewport.tsx`. Steps follow `ZOOM_STEPS` and land on the stop beyond the current zoom,
+  so a fitted 0.83 steps to 1. They pivot on the middle of the view. `zoomAbout` takes an
+  absolute target, so 100% is exactly 1 rather than a product that reads 100% and draws at
+  99.99.
+- **Bare keys, not Ctrl+=/−.** Those belong to the browser's page zoom. The keys sit above
+  the paint-mode guard in `App.tsx`, because zooming in to paint is exactly what a painter
+  wants.
+- **The bar stays inside the bottom band `EditorPage.shot` crops** (130px), clear of the
+  paint bar on desktop and the move bar and tab bar on a phone. Its fills never enter a colour
+  reading. `zoom.spec.ts` asserts the placement, so moving the bar up breaks a test instead
+  of quietly poisoning every centroid in the suite.
+- **Fit moved here from the toolbar**, and there is exactly one button named "Fit scene to
+  view", since the suite matches names exactly. The accessible names are fixed words. The
+  live percentage is a separate hidden `role="status"`, because a name that changed on every
+  pinch frame could be held by neither a locator nor a screen reader.
+- **`EditorPage.zoom()` still assumes a fitted view.** A test that zooms has to Fit again,
+  or read the percentage, before it uses `sceneToScreen`.
+
 ## Code export
 
 `src/io/exportPhaser.ts` turns the document into real Phaser code: a Scene class in
@@ -6306,6 +6338,8 @@ tests/
                             put it, refused inside a group and repaired from a bad file
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
+  zoom.spec.ts              the editor's own zoom: steps, limits, 100%, Fit, keys, and
+                            a game camera and a saved file it never touches
   play.spec.ts              that page run in the editor: a body that falls, and a
                             document that does not move while it does
   export.spec.ts            the runnable page, actually run

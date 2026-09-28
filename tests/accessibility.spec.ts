@@ -4,7 +4,7 @@ test('editor controls expose names, selection state, and keyboard tree navigatio
   const toolbar = page.getByRole('toolbar', { name: 'Project tools' });
   await expect(toolbar).toBeVisible();
   await expect(toolbar.getByRole('button', { name: 'Undo' })).toHaveAttribute('aria-label', 'Undo');
-  await expect(toolbar.getByRole('button', { name: 'Fit scene to view' })).toHaveAttribute('aria-label');
+  await expect(page.getByRole('group', { name: 'Zoom' }).getByRole('button', { name: 'Fit scene to view' })).toHaveAttribute('aria-label');
 
   await editor.clearScene();
   await editor.addObject('Rectangle');

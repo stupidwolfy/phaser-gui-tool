@@ -9,7 +9,8 @@ import {
   generateScene,
   type SceneLanguage,
 } from './io/exportPhaser';
-import { Viewport, fitView } from './editor/Viewport';
+import { Viewport, fitView, resetZoom, zoomView } from './editor/Viewport';
+import { ZoomBar } from './ui/ZoomBar';
 import { Inspector } from './ui/Inspector';
 import { Layout } from './ui/Layout';
 import { PlayOverlay } from './ui/PlayOverlay';
@@ -228,6 +229,33 @@ export default function App() {
         return;
       }
 
+      // The editor's own view, not the document, so these sit above the paint
+      // guard: zooming in to lay a tile is exactly what a painter wants. Bare
+      // keys rather than Ctrl+=/−, which belong to the browser's page zoom —
+      // taking those would break the one zoom a low-vision user relies on.
+      if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+        if (event.key === '=' || event.key === '+') {
+          event.preventDefault();
+          zoomView(gameRef.current, 1);
+          return;
+        }
+        if (event.key === '-' || event.key === '_') {
+          event.preventDefault();
+          zoomView(gameRef.current, -1);
+          return;
+        }
+        if (event.key === '0') {
+          event.preventDefault();
+          resetZoom(gameRef.current);
+          return;
+        }
+        if (event.key === '!') {
+          event.preventDefault();
+          fitView(gameRef.current);
+          return;
+        }
+      }
+
       // Every shortcut below edits the *selection*, and while a map is being
       // painted the press that would have chosen one lays a tile instead — so
       // deleting, duplicating or nudging here would act on whatever was
@@ -305,7 +333,6 @@ export default function App() {
     onOpen: () => void handleOpen(),
     onSave: () => void handleSave(false),
     onSaveAs: () => void handleSave(true),
-    onFit: () => fitView(gameRef.current),
   };
 
   return (
@@ -314,11 +341,19 @@ export default function App() {
         isMobile={isMobile}
         toolbar={<Toolbar compact={isMobile} actions={actions} />}
         viewport={
-          <Viewport
-            onReady={(game) => {
-              gameRef.current = game;
-            }}
-          />
+          <>
+            <Viewport
+              onReady={(game) => {
+                gameRef.current = game;
+              }}
+            />
+            <ZoomBar
+              onZoomIn={() => zoomView(gameRef.current, 1)}
+              onZoomOut={() => zoomView(gameRef.current, -1)}
+              onReset={() => resetZoom(gameRef.current)}
+              onFit={() => fitView(gameRef.current)}
+            />
+          </>
         }
         tree={<SceneTree />}
         inspector={<Inspector />}

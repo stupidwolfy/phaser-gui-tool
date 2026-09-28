@@ -20,6 +20,9 @@ on a desktop.
   and inside the export, so the words come out in the face you chose on a machine that has
   never heard of it — where naming a font the browser has to already have is a coin toss
 - Select and drag objects on the canvas; pan and pinch-zoom the camera
+- Zoom from the bar in the corner of the canvas: − and +, the current percentage (press it
+  for 100%) and ⤢ to fit the scene. On a keyboard, `+`/`=` and `-` step in and out, `0` is
+  100% and `Shift+1` fits. Zooming changes only your view, never the game's camera
 - Select several objects at once — turn on **Multi** in the scene tree and tap them, or
   Shift/Ctrl-click on a desktop — then move, group, duplicate, hide or delete all of them
   in one go
