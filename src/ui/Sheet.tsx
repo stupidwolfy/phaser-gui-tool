@@ -21,11 +21,11 @@ export function Sheet({
   const titleId = useId();
   const sheetRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (open) requestAnimationFrame(() => sheetRef.current?.querySelector<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus());
+    if (open) requestAnimationFrame(() => (sheetRef.current?.querySelector<HTMLElement>('[data-dialog-initial]') ?? sheetRef.current?.querySelector<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))?.focus());
   }, [open]);
 
   const keepFocusInside = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') return onClose();
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); return onClose(); }
     if (event.key !== 'Tab') return;
     const controls = [...(sheetRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? [])];
     if (!controls.length) return;

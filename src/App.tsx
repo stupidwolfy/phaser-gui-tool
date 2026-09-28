@@ -18,6 +18,7 @@ import { ProjectValidationError, validateProject } from './core/validation';
 import { SceneTree } from './ui/SceneTree';
 import { FilePanel, Toolbar, type ToolbarActions } from './ui/Toolbar';
 import { useIsMobile } from './ui/useMediaQuery';
+import { HelpPanel, OpenHelpContext, type HelpTopicId } from './ui/HelpPanel';
 
 /** Arrow-key nudge, in scene pixels; Shift takes the coarse step. */
 const COARSE_NUDGE = 10;
@@ -33,6 +34,17 @@ export default function App() {
   const isMobile = useIsMobile();
   const gameRef = useRef<Phaser.Game | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [helpTopic, setHelpTopic] = useState<HelpTopicId | null>(null);
+  const helpInvoker = useRef<HTMLElement | null>(null);
+
+  const openHelp = useCallback((topic: HelpTopicId = 'projects') => {
+    helpInvoker.current = document.activeElement as HTMLElement | null;
+    setHelpTopic(topic);
+  }, []);
+  const closeHelp = useCallback(() => {
+    setHelpTopic(null);
+    requestAnimationFrame(() => helpInvoker.current?.focus());
+  }, []);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -306,10 +318,11 @@ export default function App() {
     onSave: () => void handleSave(false),
     onSaveAs: () => void handleSave(true),
     onFit: () => fitView(gameRef.current),
+    onHelp: () => openHelp(),
   };
 
   return (
-    <>
+    <OpenHelpContext.Provider value={openHelp}>
       <Layout
         isMobile={isMobile}
         toolbar={<Toolbar compact={isMobile} actions={actions} />}
@@ -323,6 +336,9 @@ export default function App() {
         tree={<SceneTree />}
         inspector={<Inspector />}
         fileMenu={<FilePanel actions={actions} />}
+        help={<HelpPanel initialTopic={helpTopic ?? undefined} />}
+        helpOpen={helpTopic !== null}
+        onCloseHelp={closeHelp}
       />
       <PlayOverlay />
       <IssueSummary />
@@ -331,6 +347,6 @@ export default function App() {
           {toast}
         </div>
       )}
-    </>
+    </OpenHelpContext.Provider>
   );
 }
