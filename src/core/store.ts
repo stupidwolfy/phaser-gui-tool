@@ -301,6 +301,16 @@ export interface EditorState {
   validationFocusSection: string | null;
   clearValidationFocusSection: () => void;
   setPlayGameRunning: (running: boolean) => void;
+  /**
+   * The Help dialog: `null` while it is closed, `'index'` for the topic list,
+   * or a topic id. Editor state in the `playGameRunning` family — never saved,
+   * never dirty, never undoable and not persisted — and in the store only so
+   * that a section's "?" and a validation row can open it without the toolbar
+   * handing a callback down to every panel. See "Help" in CLAUDE.md.
+   */
+  helpTopic: string | null;
+  openHelp: (topic?: string) => void;
+  closeHelp: () => void;
   showValidationIssues: (issues: ValidationIssue[]) => void;
   focusValidationIssue: (issue: ValidationIssue) => void;
 
@@ -1961,6 +1971,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     guidesVisible: true,
     previewMotion: false,
     playGameRunning: false,
+    helpTopic: null,
     validationIssues: [],
     validationFocusPath: null,
     validationFocusSection: null,
@@ -2005,6 +2016,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         previewMotion: false,
       });
     },
+    openHelp: (topic) => set({ helpTopic: topic ?? 'index' }),
+    closeHelp: () => set({ helpTopic: null }),
     showValidationIssues: (validationIssues) => set({ validationIssues }),
     clearValidationFocusSection: () => set({ validationFocusSection: null }),
     focusValidationIssue: (issue) => set((state) => ({

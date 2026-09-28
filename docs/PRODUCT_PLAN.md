@@ -72,7 +72,20 @@ script without coaching and record where they stall.
 ### 2. Help and contextual guidance
 
 **Priority:** P0
-**Status:** Proposed
+**Status:** In progress
+
+**Status note (2026-09-28).** A **?** button beside the project name opens a modal Help
+dialog in both layouts, and the `?` key opens it outside text fields. It holds sixteen
+searchable task topics, the keyboard table, file and privacy behaviour, and a footer with the
+editor version, the Phaser version it exports for, the file format, and links to the README
+and the issue tracker. Inspector sections that need explaining carry a `Help: <title>` link
+to their topic, and every validation row carries one too. The content lives in
+`src/ui/helpContent.ts`, and `SHORTCUTS` there is the table the dialog renders; the README
+table was brought back in line with it, zoom keys included. `tests/help.spec.ts` covers
+opening, focus trap, Escape, focus return, search, both kinds of context link, the shortcut
+table, the version footer and the compact layout, on desktop and mobile. The manual
+screen-reader audit and the content review against the keyboard handlers have not been
+recorded, so this is not yet Implemented.
 
 **User problem.** Labels and tooltips explain individual controls, but users cannot easily
 discover concepts, shortcuts, file behavior, or the distinction between editing and running
@@ -80,11 +93,11 @@ a game when they need that information.
 
 **Proposed scope.**
 
-- [ ] Add a persistent Help entry in desktop and compact layouts with searchable task-based
+- [x] Add a persistent Help entry in desktop and compact layouts with searchable task-based
   topics, keyboard shortcuts, file/privacy behavior, and a link to full documentation.
-- [ ] Add context links from complex inspector sections and validation messages to the
+- [x] Add context links from complex inspector sections and validation messages to the
   matching Help topic.
-- [ ] Include version, Phaser target version, and feedback links in Help.
+- [x] Include version, Phaser target version, and feedback links in Help.
 
 **Relevant modules.** `src/ui/Toolbar.tsx`, `src/ui/Layout.tsx`, `src/ui/Inspector.tsx`,
 `src/ui/Section.tsx`, `src/core/schema.ts`, and `README.md`.
@@ -93,9 +106,9 @@ a game when they need that information.
 
 **Acceptance criteria.**
 
-- [ ] Help is reachable in one action at all supported widths and can be operated and closed
+- [x] Help is reachable in one action at all supported widths and can be operated and closed
   entirely by keyboard.
-- [ ] Searching a task term such as “save,” “physics,” or “animation” returns an actionable
+- [x] Searching a task term such as “save,” “physics,” or “animation” returns an actionable
   topic and preserves the user's editor context.
 - [ ] Help content and visible keyboard shortcuts agree with implemented commands.
 
