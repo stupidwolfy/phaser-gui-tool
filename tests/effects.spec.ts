@@ -65,8 +65,16 @@ const GLOW = '#997722';
  * viewport, which leaves the poll with a single attempt and turns "slow" into
  * "absent". `expect.poll` takes its own budget rather than the test's, so this
  * has to be said separately from the `describe.configure` above.
+ *
+ * Ninety seconds, measured rather than guessed. A glow samples its texture 100
+ * times per fragment (`FilterGlow-frag.js`: ten distances by ten angles), the
+ * headless container runs that on the CPU, and the first reading also pays for
+ * compiling the shader. With a second worker busy, one such screenshot took
+ * 21.5 s on the desktop viewport. At thirty seconds the first glow reading
+ * timed out on CI, in this file's first test on one run and its second on
+ * another. It is still a poll, so a glow that draws answers as soon as it does.
  */
-const POLL = 30_000;
+const POLL = 90_000;
 
 /**
  * Small enough to keep the filtered passes cheap.

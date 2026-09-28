@@ -6519,6 +6519,14 @@ Traps, each of which produced a confident wrong answer at some point:
   them was hiding a broken fixture: its prize was at alpha 0, which `setVisible(true)` cannot
   show. The first version of the saved-variables reload test did the same and passed with the
   load deleted.
+- **A running game's clock is slower than the wall clock on a slow runner.** Phaser counts at
+  most 1/60 s per frame for the first 120 frames after a boot, and Matter caps each frame's
+  step. At ten frames a second the first two game seconds take twelve. That is why `reaches`
+  waits 30 s by default: a 4 s zoom and a 1.9 s fall both outran an 8 s budget on CI while
+  correct. Budget any wall-clock claim about a running game for a low frame rate.
+- **A live filter makes each screenshot slow, not only the first.** A glow is 100 texture
+  samples per fragment on the CPU. With a second worker busy, one desktop screenshot took
+  21.5 s. `effects.spec.ts` polls for 90 s for that reason.
 - **A page coordinate worked out while a sheet is open points somewhere else once it
   closes.** A sheet shortens the canvas and the camera re-fits, so the zoom `sceneToScreen`
   read is no longer the zoom the tap lands under. It cost both mobile paint tests on the

@@ -21,11 +21,21 @@
  * a correct implementation, which reaches it on the first or second read. A
  * wrong one never reaches it and fails on the timeout with the last reading in
  * the message.
+ *
+ * The budget is thirty seconds because the claim is about *game* time and the
+ * budget is *wall* time, and on a slow runner the two come far apart. Phaser's
+ * `TimeStep` counts at most 1/60 s per frame for the first 120 frames after a
+ * boot (its `panicMax` cool-down), and Matter's runner caps what one frame may
+ * step. So on a CI runner drawing ten frames a second, the first two seconds of
+ * a game take twelve on the clock. At eight seconds, a 4 s camera zoom and a
+ * 1.9 s Matter fall each ran out of budget part-way on CI while being correct.
+ * A correct page still answers on its first or second reading, so the longer
+ * budget only lengthens a failure.
  */
 export async function reaches<T>(
   read: () => Promise<T>,
   claim: (value: T) => boolean,
-  timeout = 8000,
+  timeout = 30_000,
 ): Promise<T> {
   const started = Date.now();
   let last = await read();
