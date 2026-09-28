@@ -401,14 +401,24 @@ round trip through Play and all export formats.
 ### 9. Scalable hierarchy navigation
 
 **Priority:** P1
-**Status:** Proposed
+**Status:** In progress
+
+**Status note (2026-09-28).** The scene tree has a filter. Typing part of a name or a type
+lists only the matching objects, each shown with the groups above it; those groups are
+dimmed and named "contains a match". The `/` key focuses the filter and Escape clears it.
+**Expand all groups** and **Collapse all groups** sit beside the filter. Selecting an object
+anywhere, including on the canvas, opens the groups above its row and scrolls the row into
+view. All of this is local UI state and never changes the document. Covered by
+`tests/tree.spec.ts` on both projects. Still to do: range-select, keyboard reordering and
+parent changes, virtualization, the 1,000-node fixture, and scannable hidden/invalid
+states.
 
 **User problem.** Deep groups, many objects, multiple selections, and drag reordering make the
 scene tree increasingly difficult to scan and manipulate accurately.
 
 **Proposed scope.**
 
-- [ ] Add tree search/filter, expand/collapse all, ancestor context, and reveal-selection.
+- [x] Add tree search/filter, expand/collapse all, ancestor context, and reveal-selection.
 - [ ] Improve multi-select, range-select, drop targets, keyboard reordering, and parent
   changes with explicit feedback.
 - [ ] Virtualize long trees while preserving selection, expansion, and accessible position
@@ -427,7 +437,7 @@ parenting commands.
   manually expanding every ancestor.
 - [ ] Pointer and keyboard moves use identical legality checks and cannot create cycles or
   unexpectedly alter world position.
-- [ ] Filtering never mutates the document, loses selection, or makes matches ambiguous about
+- [x] Filtering never mutates the document, loses selection, or makes matches ambiguous about
   ancestry.
 
 **Required validation.** Automated: hierarchy command/property tests plus Playwright coverage

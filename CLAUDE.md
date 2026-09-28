@@ -5502,6 +5502,40 @@ is running** — that is a rule about rules. **No `advance` or `duration` on a s
 are a fast-forward and a stop-after in disguise. And **no "while" trigger, no sequencing, no
 `onComplete`** — iteration 28's line, unmoved.
 
+## Scene tree navigation
+
+The scene tree has a filter, **Expand all groups** / **Collapse all groups**, and it reveals
+the selection. None of it changes the document, so there is no schema, reader or exporter
+work to it. The pure half is in `src/ui/treeFilter.ts`.
+
+- **All of it is local `useState` in `SceneTree`**, like `collapsed` always was: never
+  saved, never undoable, never dirty. Filtering never touches `selectedIds`.
+- **A filter forces the groups on a match's path open without writing `collapsed`.**
+  Clearing it puts back exactly what the user had open. The expand/collapse-all buttons and
+  each row's twisty are disabled while a filter is on, because they would change nothing
+  visible.
+- **Rows are not draggable while filtering.** A drop between filtered rows would land
+  relative to siblings the user cannot see.
+- **The match is a substring of the name or the type**, so "sprite" finds every image.
+  `highlightParts` splits the name into `<mark>` parts whose text joins back to the name
+  exactly, so `selectInTree` finds a row whether or not a filter is on.
+- **A group shown only for its ancestry has the class `is-context`**, and its accessible
+  name gains `, contains a match`. `filterTree` returns `visible` (matches plus ancestors) and
+  `matches` separately for that reason.
+- **Reveal is keyed on the primary selected id.** It opens only the collapsed ancestors,
+  returning the same Set when none was closed. It then scrolls the nearest scrolling
+  ancestor by hand. `scrollIntoView` is refused because it also scrolls every ancestor up to
+  the page, and on a phone the Scene panel is a sheet translated off-screen. A filter that
+  hides the selected row is left alone.
+- **`/` is a window event, `FOCUS_TREE_FILTER_EVENT`.** `App.tsx` sends it, `Layout` opens
+  the Scene sheet on a phone, and `SceneTree` focuses the input. It holds the focus for a few
+  frames, because an opening `Sheet` focuses its own first control from an effect a frame
+  later. Escape in the field stops propagation, so it clears the filter without also
+  deselecting.
+- **Names:** the field is `Filter objects` (role `searchbox`) and the buttons are
+  `Expand all groups` / `Collapse all groups`. The inspector's `Expand all sections` stays
+  distinct, and none of the names collides with the tab bar's exactly-matched words.
+
 ## Help
 
 A **?** button beside the project name, and the `?` key outside text fields, open a modal
@@ -6369,6 +6403,8 @@ tests/
                             put it, refused inside a group and repaired from a bad file
   scenes.spec.ts            a second scene: switching, saving, duplicating, exporting
   assets.spec.ts            image import, decode-on-open, removal
+  tree.spec.ts              the scene tree's filter, expand/collapse all, and a
+                            selection revealed from inside a collapsed group
   zoom.spec.ts              the editor's own zoom: steps, limits, 100%, Fit, keys, and
                             a game camera and a saved file it never touches
   help.spec.ts              the Help dialog: one press, search, section and issue

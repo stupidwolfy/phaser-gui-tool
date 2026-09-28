@@ -26,6 +26,10 @@ on a desktop.
 - Select several objects at once — turn on **Multi** in the scene tree and tap them, or
   Shift/Ctrl-click on a desktop — then move, group, duplicate, hide or delete all of them
   in one go
+- Find an object in a long scene: type part of its name or type in the scene tree's filter
+  (or press `/`) and only the matches are listed, each with the groups above it. Expand or
+  collapse every group at once, and selecting an object on the canvas opens the groups
+  above its row so the tree always shows what is selected
 - Line several objects up: align their left, right, top or bottom edges or their
   centres, or spread three or more evenly across or down — or centre one object, or all
   of them, in the scene
@@ -244,6 +248,7 @@ on a desktop.
 | Keys | Does |
 | --- | --- |
 | ? | Open Help |
+| / | Filter the scene tree |
 | Arrow keys | Nudge 1px — hold Shift for 10px |
 | Delete / Backspace | Delete the selection |
 | Escape | Leave paint mode, otherwise deselect |

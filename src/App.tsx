@@ -18,6 +18,7 @@ import { PlayOverlay } from './ui/PlayOverlay';
 import { IssueSummary } from './ui/IssueSummary';
 import { ProjectValidationError, validateProject } from './core/validation';
 import { SceneTree } from './ui/SceneTree';
+import { FOCUS_TREE_FILTER_EVENT } from './ui/treeFilter';
 import { FilePanel, Toolbar, type ToolbarActions } from './ui/Toolbar';
 import { useIsMobile } from './ui/useMediaQuery';
 
@@ -191,6 +192,15 @@ export default function App() {
       if (event.key === '?' && !inField && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         store.openHelp();
+        return;
+      }
+
+      // `/` is the filter's key in most tools with a search box. Matched by
+      // the character, like `?`, and sent as an event because the Scene panel
+      // is a sheet on a phone and only `Layout` knows how to open one.
+      if (event.key === '/' && !inField && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        window.dispatchEvent(new Event(FOCUS_TREE_FILTER_EVENT));
         return;
       }
 

@@ -1,4 +1,12 @@
-import { useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react';
 import {
   countPrefabSpawns,
   countPrefabUses,
@@ -9,6 +17,14 @@ import {
 } from '../core/store';
 import { findParent, type GameObjectNode, type NodeType, type Prefab } from '../core/schema';
 import { TextField } from './fields';
+import {
+  ancestorIdsOf,
+  FOCUS_TREE_FILTER_EVENT,
+  filterTree,
+  groupIdsOf,
+  highlightParts,
+  type TreeFilter,
+} from './treeFilter';
 
 /**
  * The object types the add row offers.
@@ -73,6 +89,61 @@ export function SceneTree() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [target, setTarget] = useState<DropTarget | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [query, setQuery] = useState('');
+  const filterInput = useRef<HTMLInputElement>(null);
+  const treeList = useRef<HTMLUListElement>(null);
+  const filter = useMemo(() => filterTree(scene.children, query), [scene.children, query]);
+  const groupIds = useMemo(() => groupIdsOf(scene.children), [scene.children]);
+  const primaryId = useEditorStore((s) => s.selectedIds[s.selectedIds.length - 1] ?? null);
+
+  // Reveal the selection. A press on the canvas can select a child of a group
+  // the tree has collapsed, which would leave the one row that says what was
+  // picked out of sight. So the groups above the primary selection are opened
+  // — only those, and only when one was closed, so the Set keeps its identity
+  // otherwise — and the row is scrolled to.
+  //
+  // The scroll is done by hand on the nearest scrolling ancestor rather than
+  // with `scrollIntoView`, which also scrolls every ancestor up to the page:
+  // on a phone the Scene panel is a sheet translated off-screen while closed,
+  // and scrolling the document to reach it would shift the canvas under the
+  // user's thumb. A filter that hides the row is left alone — the user asked
+  // for it, and the selection is kept, only not shown.
+  useEffect(() => {
+    if (!primaryId) return;
+    const above = ancestorIdsOf(scene.children, primaryId);
+    setCollapsed((current) => {
+      if (!above.some((id) => current.has(id))) return current;
+      const next = new Set(current);
+      for (const id of above) next.delete(id);
+      return next;
+    });
+    const frame = requestAnimationFrame(() => {
+      const row = treeList.current?.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(primaryId)}"]`);
+      if (row) scrollRowIntoView(row);
+    });
+    return () => cancelAnimationFrame(frame);
+    // Keyed on the id alone: re-running on every document change would undo a
+    // collapse the user makes while the selection sits inside that group.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [primaryId]);
+
+  // The `/` shortcut. `App.tsx` sends it and `Layout` opens the Scene sheet on
+  // a phone. An opening sheet focuses its own first control from an effect a
+  // frame or two later, which would take the focus straight back, so this
+  // holds it for a few frames rather than trusting one.
+  useEffect(() => {
+    const focus = () => {
+      let frames = 8;
+      const hold = () => {
+        const input = filterInput.current;
+        if (input && document.activeElement !== input) input.focus();
+        if ((frames -= 1) > 0) requestAnimationFrame(hold);
+      };
+      requestAnimationFrame(hold);
+    };
+    window.addEventListener(FOCUS_TREE_FILTER_EVENT, focus);
+    return () => window.removeEventListener(FOCUS_TREE_FILTER_EVENT, focus);
+  }, []);
 
   const endDrag = () => {
     setDragId(null);
@@ -112,9 +183,11 @@ export function SceneTree() {
       <div className="panel__header">
         <span>{scene.name}</span>
         <span className="panel__count">
-          {selectedCount > 1
-            ? `${selectedCount} of ${countNodes(scene.children)}`
-            : countNodes(scene.children)}
+          {filter
+            ? `${filter.matches.size} of ${countNodes(scene.children)}`
+            : selectedCount > 1
+              ? `${selectedCount} of ${countNodes(scene.children)}`
+              : countNodes(scene.children)}
         </span>
         {/* The one control that changes what every row below it does, so it
             sits with them rather than in the inspector. Shift-click does the
@@ -140,13 +213,77 @@ export function SceneTree() {
         ))}
       </div>
 
-      <ul className="tree" aria-label="Scene objects">
+      {scene.children.length > 0 && (
+        <div className="tree-tools">
+          {/* A search input rather than the shared TextField: that one is a
+              labelled document field with an undo transaction behind it, and
+              this edits nothing. "Filter objects" collides with none of the
+              mobile tab bar's exactly-matched Scene / Properties / File. */}
+          <input
+            ref={filterInput}
+            className="tree-filter"
+            type="search"
+            aria-label="Filter objects"
+            placeholder="Filter by name or type"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                // Clears the filter and nothing else: without the stop, App's
+                // own Escape would also clear the selection.
+                event.stopPropagation();
+                if (query !== '') {
+                  event.preventDefault();
+                  setQuery('');
+                } else {
+                  event.currentTarget.blur();
+                }
+              } else if (event.key === 'ArrowDown') {
+                const first = treeList.current?.querySelector<HTMLButtonElement>('.tree__label[data-tree-object]');
+                if (first) {
+                  event.preventDefault();
+                  first.focus();
+                }
+              }
+            }}
+          />
+          {groupIds.length > 0 && (
+            <>
+              {/* Disabled while filtering: the filter forces every group on a
+                  match's path open, so these would change nothing visible and
+                  then surprise the user when the filter is cleared. */}
+              <button
+                className="icon-btn"
+                aria-label="Expand all groups"
+                title="Expand all groups"
+                disabled={filter !== null || collapsed.size === 0}
+                onClick={() => setCollapsed(new Set())}
+              >
+                ⊞
+              </button>
+              <button
+                className="icon-btn"
+                aria-label="Collapse all groups"
+                title="Collapse all groups"
+                disabled={filter !== null || groupIds.every((id) => collapsed.has(id))}
+                onClick={() => setCollapsed(new Set(groupIds))}
+              >
+                ⊟
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      <ul className="tree" aria-label="Scene objects" ref={treeList}>
         <TreeRows
           nodes={scene.children}
           depth={0}
           dragId={dragId}
           target={target}
           collapsed={collapsed}
+          filter={filter}
+          query={query}
           onToggleCollapsed={toggleCollapsed}
           onDragStart={setDragId}
           onHover={setTarget}
@@ -157,6 +294,9 @@ export function SceneTree() {
 
       {scene.children.length === 0 && (
         <p className="empty">This scene is empty. Add an object above.</p>
+      )}
+      {filter && filter.matches.size === 0 && (
+        <p className="empty">No objects match “{query.trim()}”.</p>
       )}
 
       <PrefabsSection />
@@ -367,6 +507,9 @@ interface RowsProps {
   dragId: string | null;
   target: DropTarget | null;
   collapsed: ReadonlySet<string>;
+  /** Null when no filter is on; otherwise only `visible` rows render, with their groups forced open. */
+  filter: TreeFilter | null;
+  query: string;
   onToggleCollapsed: (id: string) => void;
   onDragStart: (id: string) => void;
   onHover: (target: DropTarget | null) => void;
@@ -375,7 +518,7 @@ interface RowsProps {
 }
 
 function TreeRows(props: RowsProps) {
-  const { nodes, depth, dragId, target, collapsed } = props;
+  const { nodes, depth, dragId, target, collapsed, filter, query } = props;
   const selectedIds = useEditorStore((s) => s.selectedIds);
   const multiSelect = useEditorStore((s) => s.multiSelect);
   const select = useEditorStore((s) => s.select);
@@ -431,12 +574,19 @@ function TreeRows(props: RowsProps) {
   return (
     <>
       {nodes.map((node) => {
-        const isOpen = node.children.length > 0 && !collapsed.has(node.id);
+        if (filter && !filter.visible.has(node.id)) return null;
+        // A filter opens every group on a match's path without touching
+        // `collapsed`, so clearing it puts back exactly what the user had.
+        const isOpen = node.children.length > 0 && (filter !== null || !collapsed.has(node.id));
+        // Shown only as the ancestry of a match, not a match itself.
+        const isContext = filter !== null && !filter.matches.has(node.id);
         return (
           <li key={node.id} className="tree__group">
             <div
+              data-node-id={node.id}
               className={[
                 'tree__item',
+                isContext ? 'is-context' : '',
                 selectedIds.includes(node.id) ? 'is-selected' : '',
                 node.id === dragId ? 'is-dragging' : '',
                 target?.id === node.id && target.kind === 'into' ? 'is-drop-into' : '',
@@ -445,7 +595,9 @@ function TreeRows(props: RowsProps) {
               ]
                 .filter(Boolean)
                 .join(' ')}
-              draggable
+              // Off while filtering: a drop between filtered rows would land
+              // relative to siblings the user cannot see.
+              draggable={filter === null}
               onDragStart={(event) => {
                 props.onDragStart(node.id);
                 event.dataTransfer.effectAllowed = 'move';
@@ -465,7 +617,7 @@ function TreeRows(props: RowsProps) {
                 <button
                   className="tree__twisty"
                   aria-label={isOpen ? `Collapse ${node.name}` : `Expand ${node.name}`}
-                  disabled={node.children.length === 0}
+                  disabled={node.children.length === 0 || filter !== null}
                   onClick={() => props.onToggleCollapsed(node.id)}
                 >
                   {node.children.length === 0 ? '·' : isOpen ? '▾' : '▸'}
@@ -473,9 +625,15 @@ function TreeRows(props: RowsProps) {
               ) : (
                 <span className="tree__twisty" />
               )}
-              <button className="tree__label" data-tree-object aria-pressed={selectedIds.includes(node.id)} aria-label={`${node.name}, ${node.type}`} onKeyDown={(event) => navigate(event, node)} onClick={(event) => pick(event, node.id)}>
+              <button className="tree__label" data-tree-object aria-pressed={selectedIds.includes(node.id)} aria-label={`${node.name}, ${node.type}${isContext ? ', contains a match' : ''}`} onKeyDown={(event) => navigate(event, node)} onClick={(event) => pick(event, node.id)}>
                 <span className="tree__type" data-type={node.type} />
-                <span className="tree__name">{node.name}</span>
+                <span className="tree__name">
+                  {filter && !isContext
+                    ? highlightParts(node.name, query).map((part, index) =>
+                        part.hit ? <mark key={index}>{part.text}</mark> : part.text,
+                      )
+                    : node.name}
+                </span>
               </button>
               <button
                 className="icon-btn"
@@ -505,4 +663,21 @@ function TreeRows(props: RowsProps) {
       })}
     </>
   );
+}
+
+/**
+ * Scrolls a row into its nearest scrolling ancestor, and nothing further out.
+ * See the reveal effect in `SceneTree` for why `scrollIntoView` is not used.
+ */
+function scrollRowIntoView(row: HTMLElement): void {
+  for (let box = row.parentElement; box; box = box.parentElement) {
+    const overflow = getComputedStyle(box).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && box.scrollHeight > box.clientHeight) {
+      const outer = box.getBoundingClientRect();
+      const inner = row.getBoundingClientRect();
+      if (inner.top < outer.top) box.scrollTop -= outer.top - inner.top;
+      else if (inner.bottom > outer.bottom) box.scrollTop += inner.bottom - outer.bottom;
+      return;
+    }
+  }
 }
