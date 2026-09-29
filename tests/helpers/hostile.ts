@@ -455,6 +455,17 @@ export function hostileProject(): Project {
       { id: `var-5 ${breakout}`, name: 'best', value: 0, persist: true as const },
     ],
     activeSceneId: 'scene-1',
+    // Every setting away from its default, so the config literal they build meets
+    // `Phaser.Types.Core.GameConfig` under `tsc --strict` and boots in the
+    // runnable page. Deliberately *not* moving the boot scene or the canvas
+    // size — both equal what the defaults already give — so `export.spec.ts`'
+    // colour and position readings of this project stay about what they were.
+    settings: {
+      startSceneId: 'scene-1',
+      viewport: { width: 960, height: 540 },
+      pixelArt: true,
+      renderer: 'webgl',
+    },
     scenes: [
       {
         id: 'scene-1',

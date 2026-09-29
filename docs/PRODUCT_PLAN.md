@@ -448,7 +448,36 @@ keyboard, screen reader, mouse, and touch.
 ### 10. Project settings
 
 **Priority:** P1
-**Status:** Proposed
+**Status:** In progress
+
+**Status note (2026-09-29).** A **Project settings** section heads the Properties panel
+when nothing is selected. It edits the game title (the project name), the start scene, a
+fixed game size, the scaling mode (Fit, Fill, None), pixel art and the renderer (Auto,
+WebGL, Canvas). They are saved as an optional `project.settings`, read only through
+`projectSettingsOf`, and fed to one `buildGameConfig` that Play, the `.ts`/`.js` modules,
+the runnable page and the project bundle all share. A project that sets nothing has no
+`settings` key and exports byte for byte what it did before (asserted literally).
+
+- A fixed game size also measures the editor's camera frame, the touch buttons and the
+  parallax offset against the game canvas rather than the scene rectangle.
+- Pixel art is drawn on the editor canvas as well.
+- Deleting the start scene clears the setting in the same undo step.
+- Validation warns about a start scene that no longer exists, a game size that is not
+  positive, and Canvas with effects or masks, which need WebGL. None of these blocks.
+- `SCHEMA_VERSION` is now 18.
+- Covered by `tests/project-settings.spec.ts` on both projects, and by the hostile project
+  through both export toolchains.
+
+Still to do:
+- physics defaults, a transparent background, FPS and orientation;
+- an export package identifier (the bundle dialog's name field covers it for now);
+- the manual checks: older fixtures, and comparing Play with every output at common sizes
+  and on mobile rotation.
+
+Two known limits:
+- Renaming the project from the toolbar still records no undo step, although the settings
+  field does.
+- Text objects are not drawn as pixel art on the canvas, only images.
 
 **User problem.** Project-wide runtime and export assumptions are implicit or distributed
 across scene controls, so users cannot clearly define the game they intend to ship.
@@ -457,9 +486,11 @@ across scene controls, so users cannot clearly define the game they intend to sh
 
 - [ ] Add a Project settings surface for title, logical viewport, scale/resizing policy,
   background/defaults, start scene, renderer, physics defaults, and export identifiers.
-- [ ] Separate editor preferences from saved project settings and per-scene settings.
-- [ ] Define migrations and defaults so older files keep current behavior.
-- [ ] Feed one normalized settings model into Play and every exporter.
+  (Title, viewport, scaling, start scene, renderer and pixel art shipped; background
+  defaults, physics defaults and export identifiers remain.)
+- [x] Separate editor preferences from saved project settings and per-scene settings.
+- [x] Define migrations and defaults so older files keep current behavior.
+- [x] Feed one normalized settings model into Play and every exporter.
 
 **Relevant modules.** `src/core/schema.ts`, `src/core/defaults.ts`,
 `src/core/store.ts`, `src/ui/Inspector.tsx`, `src/App.tsx`,

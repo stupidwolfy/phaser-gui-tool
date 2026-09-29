@@ -6247,6 +6247,66 @@ It changes the document not at all.
   by role (`combobox`), not `getByLabel`: a wrapping label's text includes every option's, so
   an exact label match finds nothing.
 
+## Project settings
+
+`project.settings?: ProjectSettings` describes the game rather than a scene. It holds the
+start scene, a fixed game size (`viewport`), the scaling mode, pixel art and the renderer.
+The title is still `project.name`. The **Project settings** section heads `SceneInspector`,
+for `VariablesSection`'s reason: that panel is reachable on both layouts and costs no
+mobile tab.
+
+- **Absent means what an export did before settings existed**, key by key.
+  `setProjectSettings` deletes a key set back to its default and removes an emptied object,
+  so the document has one spelling of "default". `parseSettings` spreads nothing for a
+  project that chose nothing. `project-settings.spec.ts` pins the old game config text
+  literally rather than comparing the exporter with itself.
+- **`projectSettingsOf` is the only reader.** It repairs on read: a start scene naming
+  nothing reads as absent, a viewport that is not a positive finite size reads as absent,
+  and an unknown mode or renderer reads as the default. `parseSettings` keeps what is
+  well-typed even when it is unusable, so validation can warn about it. It builds a fresh
+  object per call, so it must never be called in a zustand selector (the `tileMapOf` trap).
+- **`bootSceneOf` replaced `activeScene` in the exporter's `prepare`.** That one line moves
+  the module's `export default`, the order of `scene: [...]`, the bundle's entry point,
+  `exportFileName` and Play all together. The exporter no longer imports the store.
+- **`buildGameConfig` takes the resolved settings.**
+  - Every value comes from `RENDERER_CONSTANT` / `SCALE_MODE_CONSTANT` or is a finite number.
+  - `pixelArt: true` is printed only when it is on.
+  - A module gains a header note saying it needs `pixelArt: true`, which is the Arcade
+    note's pattern.
+- **A fixed size is the game canvas, so the canvas-measured readers take it.**
+  - `cameraScrollOf`, `cameraViewOf`, `scrollOffsetOf` and `touchZonesOf` gained a trailing
+    `viewport` parameter. It defaults to the scene rectangle, so every existing call and
+    every project without a fixed size computes exactly what it did.
+  - Callers pass `gameViewportOf(project, scene)`. In the exporter, `ctx.viewport` carries it
+    to the touch helper.
+  - The clamp is Phaser's `clampX` with the viewport and the bounds as two numbers again.
+  - With no fixed size, a non-boot scene is still measured against its own rectangle,
+    although the real game canvas is the boot scene's. That old disagreement is kept
+    deliberately so nothing moves, and choosing a fixed size is what fixes it.
+- **The camera frame is drawn whenever the viewport differs from the scene rectangle**,
+  even for a default camera. It no longer lands on `sceneFrame`, so it no longer says the
+  same thing twice.
+- **Pixel art is drawn on the editor canvas too.** `syncTextures` sets `NEAREST` on every
+  asset texture, and re-filters all of them when the setting flips (`this.pixelArt`, reset
+  on SHUTDOWN). Placeholders are chrome and stay `LINEAR`. Text is not re-filtered, so a
+  pixel-art project's text is smoother on the canvas than in the game. That is a known small
+  gap.
+- **The renderer is export-only.** The editor always runs WebGL. Validation warns that Canvas
+  draws effects and masks as nothing, since filters are WebGL-only. Blend modes are not
+  warned about: Canvas has more of them, not fewer.
+- **`removeScene` clears a start scene naming the deleted scene** in the same undo step
+  (`removeAsset`'s rule). `duplicateScene` needs nothing, because the start scene stays the
+  original.
+- **Settings issues name no scene.** The inspector's empty-selection filter admits issues
+  whose `inspectorSection` is `PROJECT_SETTINGS_SECTION` as well as the active scene's own.
+  That constant is also the persisted section key.
+- **`SCHEMA_VERSION` 18, on the silent-data-loss half.** `parseProject` names project fields
+  one at a time, so a v17 build drops `settings` on open. It would then re-save a game that
+  boots a different scene at a different size, with nothing on screen saying so.
+- **The hostile project carries every setting**: start scene, viewport, pixel art and WebGL.
+  It deliberately keeps the boot scene and the size unchanged, so `export.spec.ts`'s
+  readings of it stay about what they were.
+
 ## Play
 
 The Play button runs `generateRunnableHtml`'s output in a sandboxed iframe over the editor,
@@ -6468,6 +6528,9 @@ tests/
                             selection revealed from inside a collapsed group
   zoom.spec.ts              the editor's own zoom: steps, limits, 100%, Fit, keys, and
                             a game camera and a saved file it never touches
+  project-settings.spec.ts  the game's own settings: a default that exports as before,
+                            a start scene Play boots, a fixed size the camera frame is
+                            drawn at, and pixel art drawn crisp
   help.spec.ts              the Help dialog: one press, search, section and issue
                             links, the shortcut table, and focus in and out
   play.spec.ts              that page run in the editor: a body that falls, and a

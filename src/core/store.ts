@@ -88,6 +88,7 @@ import {
   type PhysicsBody,
   type Prefab,
   type Project,
+  type ProjectSettings,
   type ProjectVariable,
   type RuleAction,
   type RuleCondition,
@@ -407,6 +408,17 @@ export interface EditorState {
   resetProject: () => void;
   markSaved: (fileName: string) => void;
   renameProject: (name: string) => void;
+  /**
+   * Merges a patch into `project.settings`, in one undo step.
+   *
+   * A key whose value is its default — or `undefined` — is *deleted* rather
+   * than stored, because a spread can set a key and never remove one, and a
+   * settings object that emptied out is removed entirely: the document has one
+   * spelling of "the default", so a project that chose nothing saves nothing.
+   * Returns the project by identity when nothing moved, so no undo step is
+   * pushed for a no-op.
+   */
+  setProjectSettings: (patch: Partial<ProjectSettings>) => void;
 
   // -- scenes ----------------------------------------------------------------
   /**
@@ -1866,6 +1878,28 @@ function remapActionRefs(
   return action;
 }
 
+/** Whether a settings value is the one absence already means. */
+function isDefaultSetting(key: keyof ProjectSettings, value: unknown): boolean {
+  switch (key) {
+    case 'scaleMode':
+      return value === 'fit';
+    case 'renderer':
+      return value === 'auto';
+    case 'pixelArt':
+      return value !== true;
+    default:
+      return false;
+  }
+}
+
+function settingsEqual(a: object, b: object): boolean {
+  return JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
+}
+
+function sortKeys(value: object): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).sort(([x], [y]) => (x < y ? -1 : 1)));
+}
+
 export function activeScene(project: Project): SceneDoc {
   return (
     project.scenes.find((scene) => scene.id === project.activeSceneId) ??
@@ -2123,6 +2157,23 @@ export const useEditorStore = create<EditorState>((set, get) => {
     renameProject: (name) =>
       set((state) => ({ project: { ...state.project, name }, dirty: true })),
 
+    setProjectSettings: (patch) =>
+      editProject((project) => {
+        const next: Record<string, unknown> = { ...(project.settings ?? {}) };
+        for (const [key, value] of Object.entries(patch)) {
+          if (value === undefined || isDefaultSetting(key as keyof ProjectSettings, value)) {
+            delete next[key];
+          } else {
+            next[key] = value;
+          }
+        }
+        if (settingsEqual(project.settings ?? {}, next)) return project;
+        const { settings: _previous, ...rest } = project;
+        return Object.keys(next).length > 0
+          ? { ...rest, settings: next as ProjectSettings }
+          : rest;
+      }),
+
     setActiveScene: (id) =>
       editProject((project) =>
         project.activeSceneId === id || !project.scenes.some((scene) => scene.id === id)
@@ -2250,12 +2301,20 @@ export const useEditorStore = create<EditorState>((set, get) => {
         // The neighbour, and the one before it when the last was removed —
         // where the user was looking, rather than back at the start of the row.
         const fallback = scenes[Math.min(index, scenes.length - 1)];
-        return {
+        const next: Project = {
           ...project,
           scenes,
           activeSceneId:
             project.activeSceneId === id ? fallback.id : project.activeSceneId,
         };
+        // The start scene goes with the scene it names, in the same undo step —
+        // `removeAsset`'s rule: no action in the editor leaves a dangling id.
+        // The game then boots the scene being edited, which is the default.
+        if (project.settings?.startSceneId !== id) return next;
+        const { startSceneId: _gone, ...settings } = project.settings;
+        if (Object.keys(settings).length > 0) return { ...next, settings };
+        const { settings: _empty, ...bare } = next;
+        return bare;
       }),
 
     select: (id) => get().selectMany(id ? [id] : []),

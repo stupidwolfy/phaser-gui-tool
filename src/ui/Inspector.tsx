@@ -23,6 +23,13 @@ import {
   type VariableKind,
   cameraOf,
   cameraViewOf,
+  gameViewportOf,
+  bootSceneOf,
+  projectSettingsOf,
+  MAX_VIEWPORT,
+  PROJECT_SETTINGS_SECTION,
+  type RendererSetting,
+  type ScaleModeSetting,
   canBeTapped,
   canHavePhysics,
   coerceVariableValue,
@@ -126,7 +133,14 @@ export function Inspector() {
   const activeSceneId = project.activeSceneId;
   const issues = useMemo(() => {
     if (nodes.length === 0) {
-      return allIssues.filter((issue) => issue.sceneId === activeSceneId && !issue.objectId);
+      // Plus the project's own settings issues, which name no scene: the
+      // Project settings section sits on this same panel.
+      return allIssues.filter(
+        (issue) =>
+          !issue.objectId &&
+          (issue.sceneId === activeSceneId ||
+            (issue.sceneId === undefined && issue.inspectorSection === PROJECT_SETTINGS_SECTION)),
+      );
     }
     const ids = new Set(nodes.map((node) => node.id));
     return allIssues.filter(
@@ -371,6 +385,13 @@ function SceneInspector() {
       </div>
       <p className="hint">Select an object to edit it.</p>
 
+      {/* First, and above the scene's own fields rather than among the scene
+          settings below them: these describe the whole game, and putting them
+          where a reader meets the scene's size would make the two sizes read as
+          one. On this panel for `VariablesSection`'s reason — it is reachable
+          on both layouts and costs no mobile tab. */}
+      <ProjectSettingsSection />
+
       <TextField
         label="Name"
         value={scene.name}
@@ -477,6 +498,112 @@ function SceneInspector() {
  * because two variables deriving one key is a value silently shared at runtime,
  * and the suffix is the only thing on screen that says so.
  */
+/**
+ * The project's game settings: title, start scene, game size, scaling, pixel
+ * art and renderer. Every write goes through `setProjectSettings`, which deletes
+ * a key set back to its default, so choosing the default option and never
+ * having touched the field are the same document.
+ */
+function ProjectSettingsSection() {
+  const project = useEditorStore((s) => s.project);
+  const renameProject = useEditorStore((s) => s.renameProject);
+  const setProjectSettings = useEditorStore((s) => s.setProjectSettings);
+  // Derived outside the selector: a fresh object per call, the `tileMapOf` trap.
+  const settings = projectSettingsOf(project);
+  const boot = bootSceneOf(project);
+  const startScene = project.scenes.find((scene) => scene.id === settings.startSceneId);
+
+  return (
+    <Section
+      title={PROJECT_SETTINGS_SECTION}
+      summary={summary.projectSettingsSummary(settings, startScene?.name ?? null)}
+    >
+      <TextField label="Game title" value={project.name} onChange={renameProject} />
+      <SelectField
+        label="Start scene"
+        value={settings.startSceneId ?? ''}
+        options={[
+          { value: '', label: 'Scene being edited' },
+          ...project.scenes.map((scene) => ({ value: scene.id, label: scene.name })),
+        ]}
+        onChange={(id) => setProjectSettings({ startSceneId: id || undefined })}
+      />
+      <SelectField
+        label="Game size"
+        value={settings.viewport ? 'fixed' : 'scene'}
+        options={[
+          { value: 'scene', label: "Each scene's own size" },
+          { value: 'fixed', label: 'Fixed size' },
+        ]}
+        onChange={(mode) =>
+          setProjectSettings({
+            // Seeded from the scene the game boots, which is the size an export
+            // already builds — so choosing "Fixed size" changes nothing until a
+            // number is typed.
+            viewport: mode === 'fixed' ? { width: boot.width, height: boot.height } : undefined,
+          })
+        }
+      />
+      {settings.viewport && (
+        <div className="field-row">
+          <NumberField
+            label="Game width"
+            value={settings.viewport.width}
+            min={1}
+            max={MAX_VIEWPORT}
+            onChange={(width) =>
+              settings.viewport &&
+              width >= 1 &&
+              setProjectSettings({ viewport: { ...settings.viewport, width: Math.min(MAX_VIEWPORT, Math.round(width)) } })
+            }
+          />
+          <NumberField
+            label="Game height"
+            value={settings.viewport.height}
+            min={1}
+            max={MAX_VIEWPORT}
+            onChange={(height) =>
+              settings.viewport &&
+              height >= 1 &&
+              setProjectSettings({ viewport: { ...settings.viewport, height: Math.min(MAX_VIEWPORT, Math.round(height)) } })
+            }
+          />
+        </div>
+      )}
+      <SelectField
+        label="Scaling"
+        value={settings.scaleMode}
+        options={[
+          { value: 'fit', label: 'Fit (bars around the game)' },
+          { value: 'envelop', label: 'Fill (crop the edges)' },
+          { value: 'none', label: 'None (own size)' },
+        ]}
+        onChange={(mode) => setProjectSettings({ scaleMode: mode as ScaleModeSetting })}
+      />
+      <CheckboxField
+        label="Pixel art"
+        value={settings.pixelArt}
+        onChange={(on) => setProjectSettings({ pixelArt: on ? true : undefined })}
+      />
+      <SelectField
+        label="Renderer"
+        value={settings.renderer}
+        options={[
+          { value: 'auto', label: 'Auto (WebGL, else Canvas)' },
+          { value: 'webgl', label: 'WebGL' },
+          { value: 'canvas', label: 'Canvas' },
+        ]}
+        onChange={(renderer) => setProjectSettings({ renderer: renderer as RendererSetting })}
+      />
+      <p className="hint">
+        {settings.renderer === 'canvas'
+          ? 'Effects and masks need WebGL: under Canvas they draw nothing.'
+          : 'These apply to Play game and every export. Pixel art turns off smoothing on every image.'}
+      </p>
+    </Section>
+  );
+}
+
 function VariablesSection() {
   const project = useEditorStore((s) => s.project);
   const variables = project.variables;
@@ -1281,7 +1408,7 @@ function defaultAction(
       // Offset from where the camera already looks, never equal to it — the
       // tween destination's rule. A pan seeded on the current centre is a pan
       // that runs for a second and arrives where it started.
-      const view = cameraViewOf(scene);
+      const view = cameraViewOf(scene, gameViewportOf(project, scene));
       return {
         kind: 'cameraPan',
         x: Math.round(view.x + view.width * 0.75),

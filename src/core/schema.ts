@@ -201,8 +201,14 @@
  * variable keeps its name, its id and its value. A v16 build also drops the
  * `resetPersisted` action through `ruleActionsOf`'s `default: break`, which on
  * its own would only be an old build doing less.
+ *
+ * **v18 is project settings, on the silent-data-loss half again.**
+ * `Project.settings` is a project-level field and `parseProject` names those one
+ * at a time, so a v17 build drops it on open and re-saves a game that boots a
+ * different scene, at a different size, blurred — with nothing on screen saying
+ * so, because every scene still looks the same.
  */
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /** The Phaser release this editor targets and will export code for. */
 export const TARGET_PHASER_VERSION = '4.2.1';
@@ -3296,7 +3302,10 @@ export function drivenIn(scene: SceneDoc): GameObjectNode[] {
  * change and loops forever (React error #185). Select the scene and derive
  * outside the selector.
  */
-export function touchZonesOf(scene: SceneDoc): TouchButton[] {
+export function touchZonesOf(
+  scene: SceneDoc,
+  viewport: { width: number; height: number } = scene,
+): TouchButton[] {
   let pad = false;
   let vertical = false;
   let jump = false;
@@ -3311,7 +3320,7 @@ export function touchZonesOf(scene: SceneDoc): TouchButton[] {
 
   const radius = Math.max(
     TOUCH_MIN_RADIUS,
-    Math.min(scene.width, scene.height) * TOUCH_RADIUS_RATIO,
+    Math.min(viewport.width, viewport.height) * TOUCH_RADIUS_RATIO,
   );
   const margin = radius;
   // The cross's centre, placed so that the whole cross — up and down included —
@@ -3319,7 +3328,7 @@ export function touchZonesOf(scene: SceneDoc): TouchButton[] {
   // keeps left and right where they were when a top-down object joins a
   // platformer one: adding a row must not move the buttons already in use.
   const padX = margin + radius * 3;
-  const padY = scene.height - margin - radius * 3;
+  const padY = viewport.height - margin - radius * 3;
 
   const buttons: TouchButton[] = [
     { key: 'left', label: '\u2190', x: padX - radius * 2, y: padY, radius },
@@ -3336,7 +3345,7 @@ export function touchZonesOf(scene: SceneDoc): TouchButton[] {
     buttons.push({
       key: 'jump',
       label: '\u25b2',
-      x: scene.width - margin - radius,
+      x: viewport.width - margin - radius,
       y: padY,
       radius,
     });
@@ -3473,9 +3482,9 @@ export function isDefaultCamera(camera: SceneCamera): boolean {
  * guessing is that the bounds clamp moves the **scroll** rather than cropping
  * the view — which is exactly why this is the half worth having on its own.
  *
- * The viewport is the scene's own width and height because that is the size of
- * the game canvas an export builds — the same "one number, one place" that
- * gives a sprite no width of its own.
+ * The viewport defaults to the scene's own width and height, which is what the
+ * game canvas was before a project could choose a fixed size; callers pass
+ * `gameViewportOf` so that a chosen size reaches every reader at once.
  *
  * Split out of `cameraViewOf` rather than copied, so the frame the canvas draws
  * and the offset `scrollOffsetOf` applies cannot disagree about where the shot
@@ -3487,23 +3496,28 @@ export function isDefaultCamera(camera: SceneCamera): boolean {
  * shot the scene opens on; a camera in motion is the thing the editor does not
  * run, exactly as it does not run a physics step.
  */
-export function cameraScrollOf(scene: SceneDoc): { x: number; y: number } {
+export function cameraScrollOf(
+  scene: SceneDoc,
+  viewport: { width: number; height: number } = scene,
+): { x: number; y: number } {
   const camera = cameraOf(scene);
-  const width = scene.width / camera.zoom;
-  const height = scene.height / camera.zoom;
+  const width = viewport.width / camera.zoom;
+  const height = viewport.height / camera.zoom;
 
-  // Phaser's `clampX`, where the viewport and the bounds are both the scene's
-  // own size — which is what makes the two arguments one number here.
-  const clamp = (scroll: number, display: number, size: number) => {
+  // Phaser's `clampX`: the low edge is the bounds' origin shifted by half the
+  // difference between the zoomed display and the unzoomed viewport, and the
+  // bounds are the scene rectangle. With no fixed game size the viewport *is*
+  // the scene rectangle, which is what made these one number before settings.
+  const clamp = (scroll: number, display: number, view: number, size: number) => {
     if (!camera.boundToScene) return scroll;
-    const low = (display - size) / 2;
+    const low = (display - view) / 2;
     const high = Math.max(low, low + size - display);
     return Math.min(high, Math.max(low, scroll));
   };
 
   return {
-    x: clamp(camera.scrollX, width, scene.width),
-    y: clamp(camera.scrollY, height, scene.height),
+    x: clamp(camera.scrollX, width, viewport.width, scene.width),
+    y: clamp(camera.scrollY, height, viewport.height, scene.height),
   };
 }
 
@@ -3530,9 +3544,13 @@ export function cameraScrollOf(scene: SceneDoc): { x: number; y: number } {
  * canonical HUD case — a camera that *follows* a target still opens where it
  * was put.
  */
-export function scrollOffsetOf(scene: SceneDoc, factor: ScrollFactor): { x: number; y: number } {
+export function scrollOffsetOf(
+  scene: SceneDoc,
+  factor: ScrollFactor,
+  viewport: { width: number; height: number } = scene,
+): { x: number; y: number } {
   if (isDefaultScrollFactor(factor)) return { x: 0, y: 0 };
-  const scroll = cameraScrollOf(scene);
+  const scroll = cameraScrollOf(scene, viewport);
   return { x: scroll.x * (1 - factor.x), y: scroll.y * (1 - factor.y) };
 }
 
@@ -3542,15 +3560,18 @@ export function scrollOffsetOf(scene: SceneDoc, factor: ScrollFactor): { x: numb
  * See `cameraScrollOf` for the clamp; the centring here is the other half of
  * Phaser's `preRender`.
  */
-export function cameraViewOf(scene: SceneDoc): { x: number; y: number; width: number; height: number } {
+export function cameraViewOf(
+  scene: SceneDoc,
+  viewport: { width: number; height: number } = scene,
+): { x: number; y: number; width: number; height: number } {
   const camera = cameraOf(scene);
-  const width = scene.width / camera.zoom;
-  const height = scene.height / camera.zoom;
-  const { x: scrollX, y: scrollY } = cameraScrollOf(scene);
+  const width = viewport.width / camera.zoom;
+  const height = viewport.height / camera.zoom;
+  const { x: scrollX, y: scrollY } = cameraScrollOf(scene, viewport);
 
   return {
-    x: scrollX + scene.width / 2 - width / 2,
-    y: scrollY + scene.height / 2 - height / 2,
+    x: scrollX + viewport.width / 2 - width / 2,
+    y: scrollY + viewport.height / 2 - height / 2,
     width,
     height,
   };
@@ -5148,6 +5169,135 @@ export interface Project {
   variables: ProjectVariable[];
   scenes: SceneDoc[];
   activeSceneId: string;
+  /**
+   * What the game is, as against what one scene holds: which scene it boots,
+   * how big its canvas is, how that canvas fits a screen, and how it renders.
+   * Optional, and absent means exactly what an export did before the field
+   * existed. Read it only through `projectSettingsOf`.
+   */
+  settings?: ProjectSettings;
+}
+
+/**
+ * The inspector section the settings live in. A section title is a persisted
+ * storage key and a validation target, so it is named once.
+ */
+export const PROJECT_SETTINGS_SECTION = 'Project settings';
+
+/** How the game canvas fits the page it lands on. Phaser's own three modes. */
+export type ScaleModeSetting = 'fit' | 'envelop' | 'none';
+export const SCALE_MODES: readonly ScaleModeSetting[] = ['fit', 'envelop', 'none'];
+
+/** Which renderer the exported game asks Phaser for. */
+export type RendererSetting = 'auto' | 'webgl' | 'canvas';
+export const RENDERERS: readonly RendererSetting[] = ['auto', 'webgl', 'canvas'];
+
+/**
+ * Largest game canvas side the settings accept. A canvas is a GPU texture, and
+ * a hand-edited six-figure size is a game that allocates one and fails to boot;
+ * 8192 is the common WebGL `MAX_TEXTURE_SIZE` floor.
+ */
+export const MAX_VIEWPORT = 8192;
+
+/**
+ * Project-wide game settings, as stored. Every key is optional and a key at its
+ * default is never written — `setProjectSettings` deletes it — so the document
+ * has one spelling of "the default" and a project that chose nothing saves no
+ * `settings` at all.
+ */
+export interface ProjectSettings {
+  /** The scene the game boots. Absent: the scene being edited, as before. */
+  startSceneId?: string;
+  /**
+   * A fixed game canvas size. Absent: each scene is measured against its own
+   * size, which is what the editor drew before this field existed — and the
+   * export sizes the canvas from the boot scene, as it always has.
+   */
+  viewport?: { width: number; height: number };
+  scaleMode?: ScaleModeSetting;
+  /** True or absent, never false — `ProjectVariable.persist`'s rule. */
+  pixelArt?: true;
+  renderer?: RendererSetting;
+}
+
+/** `ProjectSettings` with every default filled in and every value usable. */
+export interface ResolvedProjectSettings {
+  /** Null when no usable start scene is stored: the active scene boots. */
+  startSceneId: string | null;
+  /** Null when no usable fixed size is stored: each scene's own size. */
+  viewport: { width: number; height: number } | null;
+  scaleMode: ScaleModeSetting;
+  pixelArt: boolean;
+  renderer: RendererSetting;
+}
+
+/** A stored viewport Phaser can be handed, or null. */
+export function usableViewport(value: unknown): { width: number; height: number } | null {
+  if (!value || typeof value !== 'object') return null;
+  const { width, height } = value as { width?: unknown; height?: unknown };
+  if (typeof width !== 'number' || typeof height !== 'number') return null;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width < 1 || height < 1) return null;
+  return {
+    width: Math.min(MAX_VIEWPORT, Math.round(width)),
+    height: Math.min(MAX_VIEWPORT, Math.round(height)),
+  };
+}
+
+/**
+ * The only reader of `project.settings`, in the `cameraOf` family: it fills in
+ * every default and repairs what a hand-edited file can hold. A start scene
+ * naming no scene reads as absent, so the active scene boots; a viewport that is
+ * not a positive finite size reads as absent, so each scene keeps its own size;
+ * an unknown mode or renderer reads as the default. Each repair narrows what the
+ * document says to what it said before the field existed, never wider.
+ *
+ * A fresh object per call, so `useEditorStore((s) => projectSettingsOf(...))`
+ * compares unequal on every store change and loops forever (React error #185) —
+ * the `tileMapOf` trap. Select the project and derive outside the selector.
+ */
+export function projectSettingsOf(project: Project): ResolvedProjectSettings {
+  const stored: Partial<Record<keyof ProjectSettings, unknown>> =
+    project.settings && typeof project.settings === 'object' ? project.settings : {};
+  const start = stored.startSceneId;
+  return {
+    startSceneId:
+      typeof start === 'string' && project.scenes.some((scene) => scene.id === start)
+        ? start
+        : null,
+    viewport: usableViewport(stored.viewport),
+    scaleMode: SCALE_MODES.includes(stored.scaleMode as ScaleModeSetting)
+      ? (stored.scaleMode as ScaleModeSetting)
+      : 'fit',
+    pixelArt: stored.pixelArt === true,
+    renderer: RENDERERS.includes(stored.renderer as RendererSetting)
+      ? (stored.renderer as RendererSetting)
+      : 'auto',
+  };
+}
+
+/**
+ * The scene the game boots: the chosen start scene, else the scene being
+ * edited, else the first. The exporter's `prepare` reads this, so the default
+ * export, the order Phaser registers scenes in and Play all follow it at once.
+ */
+export function bootSceneOf(project: Project): SceneDoc {
+  const { startSceneId } = projectSettingsOf(project);
+  const id = startSceneId ?? project.activeSceneId;
+  return project.scenes.find((scene) => scene.id === id) ?? project.scenes[0];
+}
+
+/**
+ * The game canvas a scene runs in: the fixed size when one is chosen, else the
+ * scene's own rectangle. That fallback is not the boot scene's size, although
+ * that is what an export without a fixed size really builds — it is what every
+ * reader here measured against before settings existed, so a project that
+ * chooses nothing draws exactly what it drew before. Choosing a size is how the
+ * camera frame, the touch buttons and the parallax offset come to agree with a
+ * non-boot scene's real canvas.
+ */
+export function gameViewportOf(project: Project, scene: SceneDoc): { width: number; height: number } {
+  return projectSettingsOf(project).viewport ?? { width: scene.width, height: scene.height };
 }
 
 export function findAsset(

@@ -101,6 +101,19 @@ export const HELP_TOPICS: readonly HelpTopic[] = [
     ],
   },
   {
+    id: 'project-settings',
+    title: 'Project settings',
+    keywords: ['settings', 'project', 'game', 'start', 'boot', 'first scene', 'size', 'resolution', 'viewport', 'scale', 'scaling', 'fit', 'pixel', 'pixel art', 'blurry', 'smoothing', 'renderer', 'webgl', 'canvas', 'title'],
+    body: [
+      'Project settings describe the game as a whole rather than one scene. They sit at the top of the Properties panel when nothing is selected, and they apply to Play game and to every export alike.',
+      'Start scene is the scene the game opens on. Left as "Scene being edited", the game starts wherever you were working, as it always has.',
+      "Game size fixes the size of the game's canvas. Left as each scene's own size, the game takes the size of the scene it starts on. A fixed size also sizes the camera frame and the on-screen buttons in every scene.",
+      'Scaling decides how the canvas fits a screen: Fit shows the whole game with bars around it, Fill covers the screen and crops the edges, and None draws it at its own size.',
+      'Pixel art turns off smoothing on every image, so small sprites scaled up stay crisp. The canvas in the editor shows it too.',
+      'Renderer is usually best left on Auto. Effects and masks need WebGL, so the Canvas renderer draws them as nothing, and the editor warns you about that.',
+    ],
+  },
+  {
     id: 'selection-groups',
     title: 'Selecting, grouping and arranging',
     keywords: ['select', 'multi', 'multiple', 'group', 'container', 'order', 'front', 'back', 'layer', 'parent', 'tree', 'filter', 'search', 'find', 'expand', 'collapse'],
@@ -243,6 +256,7 @@ export const HELP_TOPIC_FOR_SECTION: Readonly<Record<string, string>> = {
   Controls: 'physics',
   Rules: 'rules-variables',
   Variables: 'rules-variables',
+  'Project settings': 'project-settings',
   Camera: 'camera',
   Effects: 'effects',
   Blend: 'effects',

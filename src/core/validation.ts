@@ -1,5 +1,5 @@
 import { inspectorSectionFor } from './sections';
-import { SCHEMA_VERSION, type GameObjectNode, type Project, type SceneDoc, type ValidationIssue } from './schema';
+import { SCHEMA_VERSION, PROJECT_SETTINGS_SECTION, projectSettingsOf, usableViewport, type GameObjectNode, type Project, type SceneDoc, type ValidationIssue } from './schema';
 export type { ValidationIssue } from './schema';
 
 export const blockingIssues = (issues: readonly ValidationIssue[]): ValidationIssue[] =>
@@ -101,7 +101,35 @@ export function validateProject(project: Project): ValidationIssue[] {
     if (!HEX.test(scene.backgroundColor)) add({ code: 'value.color-malformed', severity: 'warning', message: 'Scene background is not a six-digit hex colour; the export uses a default.', sceneId: scene.id, fieldPath: `scenes.${index}.backgroundColor`, inspectorSection: 'Scene', blocksExport: false });
   });
   project.prefabs.forEach((prefab, index) => walk(prefab.children, undefined, `prefabs.${index}.children`));
+  validateSettings(project, add);
   return issues;
+}
+
+/**
+ * The project settings' own issues. None blocks export, because
+ * `projectSettingsOf` repairs every one of them on read — each says what the
+ * game does instead, which is the reason to list it at all.
+ */
+function validateSettings(project: Project, add: (issue: ValidationIssue) => void): void {
+  const stored = project.settings;
+  if (!stored) return;
+  const common = { severity: 'warning' as const, inspectorSection: PROJECT_SETTINGS_SECTION, blocksExport: false };
+  if (stored.startSceneId !== undefined && !project.scenes.some((scene) => scene.id === stored.startSceneId)) {
+    add({ ...common, code: 'config.start-scene-missing', message: 'The start scene no longer exists; the game boots the scene being edited.', fieldPath: 'settings.startSceneId' });
+  }
+  if (stored.viewport !== undefined && usableViewport(stored.viewport) === null) {
+    add({ ...common, code: 'config.viewport-invalid', message: "The game size is not a positive size; each scene's own size is used.", fieldPath: 'settings.viewport' });
+  }
+  // Filters and masks are WebGL-only, so under Canvas every effect in the
+  // project silently draws nothing. Blend modes are not in this list: Canvas
+  // has more of them than WebGL does, not fewer.
+  if (projectSettingsOf(project).renderer === 'canvas') {
+    const hasEffects = (nodes: readonly GameObjectNode[]): boolean =>
+      nodes.some((node) => (Array.isArray(node.fx) && node.fx.length > 0) || ('children' in node && hasEffects(node.children)));
+    if (project.scenes.some((scene) => hasEffects(scene.children)) || project.prefabs.some((prefab) => hasEffects(prefab.children))) {
+      add({ ...common, code: 'config.canvas-renderer-effects', message: 'Effects and masks need WebGL; under the Canvas renderer they draw nothing.', fieldPath: 'settings.renderer' });
+    }
+  }
 }
 
 export function assertProjectExportable(project: Project): ValidationIssue[] {
