@@ -14,6 +14,7 @@ import { ZoomBar } from './ui/ZoomBar';
 import { Inspector } from './ui/Inspector';
 import { Layout } from './ui/Layout';
 import { HelpDialog } from './ui/HelpDialog';
+import { ExportBundleDialog } from './ui/ExportBundleDialog';
 import { PlayOverlay } from './ui/PlayOverlay';
 import { IssueSummary } from './ui/IssueSummary';
 import { ProjectValidationError, validateProject } from './core/validation';
@@ -186,6 +187,9 @@ export default function App() {
       // an arrow pressed on a topic button would nudge an object nobody can
       // see. The dialog handles its own Escape.
       if (store.helpTopic !== null) return;
+      // The bundle dialog is modal for the same reason, and handles its own
+      // Escape the same way.
+      if (store.bundleDialogOpen) return;
 
       // `?` is Shift+/ on most layouts, so it is matched by the character, and
       // above the modifier block only in the sense that it never carries Ctrl.
@@ -354,6 +358,7 @@ export default function App() {
     onExportSceneTs: () => handleExportScene('ts'),
     onExportSceneJs: () => handleExportScene('js'),
     onExportHtml: handleExportHtml,
+    onExportBundle: () => useEditorStore.getState().setBundleDialogOpen(true),
     onOpen: () => void handleOpen(),
     onSave: () => void handleSave(false),
     onSaveAs: () => void handleSave(true),
@@ -385,6 +390,7 @@ export default function App() {
       />
       <PlayOverlay />
       <HelpDialog />
+      <ExportBundleDialog notify={notify} />
       <IssueSummary />
       {toast && (
         <div className="toast" role="status">

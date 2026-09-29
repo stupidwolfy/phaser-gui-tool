@@ -9,6 +9,7 @@ export interface ToolbarActions {
   onExportSceneTs: () => void;
   onExportSceneJs: () => void;
   onExportHtml: () => void;
+  onExportBundle: () => void;
 }
 
 /**
@@ -287,6 +288,14 @@ export function Toolbar({
           >
             .html
           </button>
+          <button
+            className="btn"
+            onClick={actions.onExportBundle}
+            title="Export a ready-to-build project with the assets as files"
+            aria-label="Export project bundle"
+          >
+            .zip
+          </button>
         </div>
       )}
     </header>
@@ -370,10 +379,14 @@ export function FilePanel({ actions }: { actions: ToolbarActions }) {
         <button className="btn btn--block" onClick={actions.onExportHtml}>
           Playable game page (.html)
         </button>
+        <button className="btn btn--block" onClick={actions.onExportBundle}>
+          Project bundle (.zip)…
+        </button>
       </div>
       <p className="hint">
         The .ts and .js files are ES modules that drop into an existing Phaser project.
-        The .html needs nothing — open it in a browser and the scene runs.
+        The .html needs nothing — open it in a browser and the scene runs. The bundle
+        is a ready-to-build project with every image, sound and font as a file.
       </p>
 
       <p className="hint">

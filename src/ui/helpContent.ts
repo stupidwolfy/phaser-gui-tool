@@ -82,9 +82,10 @@ export const HELP_TOPICS: readonly HelpTopic[] = [
   {
     id: 'export',
     title: 'Exporting to Phaser',
-    keywords: ['export', 'code', 'typescript', 'javascript', 'html', 'ts', 'js', 'scene class', 'download'],
+    keywords: ['export', 'code', 'typescript', 'javascript', 'html', 'ts', 'js', 'scene class', 'download', 'bundle', 'zip', 'vite', 'deploy', 'npm'],
     body: [
       'Export turns the project into real Phaser code. The .ts and .js files are Scene classes that drop into an existing Phaser project; the .html file is a complete game page that runs when opened in a browser.',
+      'The .zip bundle is a whole project to keep building: a Vite project with the scenes as source, every image, sound and font as a file, and a README. Run npm install, then npm run dev to play it or npm run build for a minified site in dist/ that runs from any web host. Before it downloads, the bundle dialog lists every file, the total size and any warnings.',
       'Every scene is exported. The one you are looking at is the one the game starts on.',
       'On a phone the export buttons are in the File panel.',
     ],

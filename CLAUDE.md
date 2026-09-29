@@ -6186,6 +6186,67 @@ Generated code is built from free user text, and the escaping is not optional:
 - The document title, the CSS background colour and the CDN version all come from the
   project file, so they are escaped or validated rather than interpolated raw.
 
+## Export bundles
+
+`src/io/exportBundle.ts` builds the fourth export: a ZIP holding a Vite project. The
+preflight is `src/ui/ExportBundleDialog.tsx`. Inside the ZIP:
+- `src/scenes.(ts|js)`, one Scene class per scene;
+- every asset some scene uses, as a file under `public/assets/`;
+- `src/main`, the entry module;
+- `package.json`, `index.html`, `vite.config`, and a `tsconfig.json` for TypeScript;
+- a README and a `.gitignore`.
+
+It changes the document not at all.
+
+- **It is built from the other exports, not beside them.** `src/scenes` is
+  `generateScene(project, language, { assetPaths: true })`. `src/main` prints the game config
+  that `buildGameConfig` returns, and `generateRunnableHtml` builds its config through the
+  same function. So a bundle opens exactly as Play does, since Play runs the runnable page.
+  `bundleManifestOf` hands the bundle the exporter's own collected tables, which means the
+  bundle never re-derives which assets are used or what a class is called.
+- **`assetPaths` changes only the three table values.** `preload()` already reads
+  `ASSETS[key]`, `AUDIO[key]` and `FONTS[key]`, so a bundle's rows become relative paths and
+  nothing else moves. With the option omitted, every output is byte for byte what it was. The
+  default runnable page was checked against the previous build's output on the hostile
+  project, and `bundle.spec.ts` asserts `generateScene(p, 'ts', {})` equals the default.
+- **`bundleAssetPath` is the whole collision policy.** A path is
+  `assets/<images|audio|fonts>/<key>.<ext>`, built from the key the table already allocated:
+  - a texture key and an audio key are each de-duplicated identifiers in their own table;
+  - a font family is an identifier-safe token, unique by `fontFamilyFor`;
+  - each table has its own folder.
+
+  So no two assets can share a path, and no path can hold a separator or a `..`. A second
+  naming scheme, such as the file's own name, would be a second answer to what an asset is
+  called.
+- **Paths are relative, and `vite.config` sets `base: './'`.** Phaser's loader resolves an
+  asset path against the page, so `dist/` runs from a sub-folder as well as from the root.
+  The smoke test serves it from `/play/` for exactly that reason, because a rooted path would
+  404 there and nowhere else.
+- **`ATLASES` stays inline.** The frame data is not a file anybody has, and the loader
+  already takes an object where a URL would go.
+- **Deterministic.** Entries are sorted, and every entry carries a fixed 1980 `mtime`. The
+  same project exports the same bytes on every press, which the suite asserts.
+- **`MIME_EXTENSIONS` moved to `src/io/mime.ts`** so the project archive and the bundle cannot
+  disagree about an extension. `decodeAsset` is exported from `fileIO.ts` for the same reason.
+- **Toolchain versions are this repository's own.** `BUNDLE_VITE_VERSION` and
+  `BUNDLE_TYPESCRIPT_VERSION` are asserted to equal `package.json`, so update them together.
+  Phaser is pinned exactly, to the project's `phaserVersion`, which is the pin the runnable
+  page's CDN URL already takes.
+- **The bundle's `tsconfig` includes only `src`.** `vite.config.ts` would pull Vite's Node
+  types into a strict check that has `types: []`.
+- **No minified/development toggle.** `npm run dev` and `npm run build` are that pair. A
+  toggle would be a second answer to a question the scripts already answer.
+- **The dialog is `HelpDialog`'s shape**: a fixed overlay, focus moved in and handed back, and
+  an Escape that stops propagating. Its open state is `bundleDialogOpen`, beside `helpTopic`,
+  and `App.tsx`'s key handler returns early while it is set. The project is read once, on
+  open, like `PlayFrame`. The bundle is built with `useMemo` per change of name or language,
+  so the size and the file list are exact. The fields are plain inputs, never `TextField`,
+  which opens an undo transaction.
+- **Names:** the toolbar button is `Export project bundle`, the File sheet's is
+  `Project bundle (.zip)…`, and the dialog is `Export bundle`. The Language picker is reached
+  by role (`combobox`), not `getByLabel`: a wrapping label's text includes every option's, so
+  an exact label match finds nothing.
+
 ## Play
 
 The Play button runs `generateRunnableHtml`'s output in a sandboxed iframe over the editor,
@@ -6413,6 +6474,9 @@ tests/
                             document that does not move while it does
   export.spec.ts            the runnable page, actually run
   export-toolchain.spec.ts  the .ts under tsc --strict, the .js through a Vite build
+  bundle.spec.ts            the project bundle: a preflight that lists what it holds, each
+                            asset once at a safe path, the same bytes every time, and a
+                            real tsc + vite build that boots from a sub-path
   helpers/editor.ts         the page object: panels, fields, gestures, downloads
   helpers/pixels.ts         canvas readback, colour centroids and colour extents
   helpers/hostile.ts        the project made of everything a project should not contain

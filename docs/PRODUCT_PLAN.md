@@ -520,7 +520,35 @@ behavior on desktop and mobile, and compare Play with an exported bundle.
 ### 12. Export bundles
 
 **Priority:** P1
-**Status:** Proposed
+**Status:** In progress
+
+**Status note (2026-09-29).** **Export project bundle** (`.zip` in the toolbar, **Project
+bundle (.zip)…** in the File sheet on a phone) opens a preflight dialog. It takes a folder
+name and a language, and shows the scenes, the asset counts, the exact ZIP size, the full
+file list, any validation warnings, and notes on remembered variables and touch buttons. A
+blocking error disables the download.
+
+The ZIP is a Vite project:
+- `package.json`, with Phaser pinned to the project's version;
+- `index.html`, `vite.config`, and `tsconfig.json` for TypeScript;
+- `src/scenes`, which is `generateScene` with its asset tables holding relative paths;
+- `src/main`, whose game config comes from the same builder as the runnable page and Play;
+- `public/assets/{images,audio,fonts}/<key>.<ext>`, holding each used asset once;
+- a README and a `.gitignore`.
+
+The paths are built from the exporter's own de-duplicated keys, so they are unique and safe
+by construction. The archive is deterministic. The `.ts`, `.js` and `.html` exports are
+unchanged byte for byte.
+
+`tests/bundle.spec.ts` covers:
+- the dialog on both projects;
+- the manifest, path safety and determinism;
+- a real `tsc` and `vite build` of the hostile project in both languages, served from a
+  sub-path and asserted to boot with every asset request answered.
+
+Narrowed: there is no minified/development toggle, because `npm run dev` and
+`npm run build` already are those two. Still to do: manual checks on a clean host and on
+other browsers, and the named-input export contract once #11 lands.
 
 **User problem.** Individual source or HTML exports do not provide an obvious, structured
 handoff for continued development, deployment, or sharing with all assets and configuration
@@ -528,11 +556,12 @@ accounted for.
 
 **Proposed scope.**
 
-- [ ] Add a downloadable project bundle with source, assets, configuration, entry point,
+- [x] Add a downloadable project bundle with source, assets, configuration, entry point,
   dependency metadata, and a short generated README.
-- [ ] Offer readable external asset files rather than data URLs where the format allows it.
-- [ ] Provide bundle naming, language, and minified/development choices with safe defaults.
-- [ ] Show a preflight summary of warnings, contents, estimated size, and unsupported
+- [x] Offer readable external asset files rather than data URLs where the format allows it.
+- [x] Provide bundle naming, language, and minified/development choices with safe defaults
+  (minified/development is the `build`/`dev` script pair rather than a toggle).
+- [x] Show a preflight summary of warnings, contents, estimated size, and unsupported
   features before download.
 
 **Relevant modules.** `src/io/exportPhaser.ts`, `src/core/schema.ts`,
@@ -543,9 +572,9 @@ stable asset filenames and collision policy; named input export contract.
 
 **Acceptance criteria.**
 
-- [ ] A bundle extracted into an empty directory installs, builds, and runs using only its
+- [x] A bundle extracted into an empty directory installs, builds, and runs using only its
   documented commands.
-- [ ] Every referenced asset is present exactly once at a deterministic safe path, and no
+- [x] Every referenced asset is present exactly once at a deterministic safe path, and no
   unreferenced embedded data is required.
 - [ ] The bundle's initial scene and runtime behavior match Play for the acceptance fixture.
 

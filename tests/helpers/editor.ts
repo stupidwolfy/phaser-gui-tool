@@ -1780,4 +1780,43 @@ export class EditorPage {
     for await (const chunk of stream) chunks.push(chunk as Buffer);
     return { name: file.suggestedFilename(), contents: Buffer.concat(chunks).toString('utf8') };
   }
+
+  /** Opens the export-bundle preflight from the toolbar, or the File sheet on a phone. */
+  async openBundleDialog(): Promise<Locator> {
+    await this.openPanel('file');
+    const button = this.isMobile
+      ? this.panel('file').getByRole('button', { name: 'Project bundle (.zip)…', exact: true })
+      : this.panel('file').getByRole('button', { name: 'Export project bundle', exact: true });
+    await button.click();
+    const dialog = this.page.getByRole('dialog', { name: 'Export bundle' });
+    await dialog.waitFor();
+    return dialog;
+  }
+
+  /**
+   * Downloads a project bundle through the preflight, optionally naming it and
+   * choosing its language first, and answers with the ZIP's bytes.
+   */
+  async exportBundle(
+    options: { name?: string; language?: 'ts' | 'js' } = {},
+  ): Promise<{ name: string; bytes: Buffer }> {
+    const dialog = await this.openBundleDialog();
+    if (options.name !== undefined) {
+      await dialog.getByLabel('Folder name', { exact: true }).fill(options.name);
+    }
+    if (options.language) {
+      // By role: `getByLabel` reads a wrapping label's whole text, which
+      // for a select includes every option's.
+      await dialog
+        .getByRole('combobox', { name: 'Language', exact: true })
+        .selectOption(options.language);
+    }
+    const download = this.page.waitForEvent('download');
+    await dialog.getByRole('button', { name: 'Download bundle', exact: true }).click();
+    const file = await download;
+    const stream = await file.createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    return { name: file.suggestedFilename(), bytes: Buffer.concat(chunks) };
+  }
 }

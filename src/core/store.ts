@@ -311,6 +311,13 @@ export interface EditorState {
   helpTopic: string | null;
   openHelp: (topic?: string) => void;
   closeHelp: () => void;
+  /**
+   * The export-bundle preflight dialog. Editor state beside `helpTopic` and for
+   * its reason: never saved, never dirty, never undoable, and in the store only
+   * so the key handler can go quiet while the dialog is modal.
+   */
+  bundleDialogOpen: boolean;
+  setBundleDialogOpen: (open: boolean) => void;
   showValidationIssues: (issues: ValidationIssue[]) => void;
   focusValidationIssue: (issue: ValidationIssue) => void;
 
@@ -1972,6 +1979,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     previewMotion: false,
     playGameRunning: false,
     helpTopic: null,
+    bundleDialogOpen: false,
     validationIssues: [],
     validationFocusPath: null,
     validationFocusSection: null,
@@ -2018,6 +2026,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
     openHelp: (topic) => set({ helpTopic: topic ?? 'index' }),
     closeHelp: () => set({ helpTopic: null }),
+    setBundleDialogOpen: (open) => set({ bundleDialogOpen: open }),
     showValidationIssues: (validationIssues) => set({ validationIssues }),
     clearValidationFocusSection: () => set({ validationFocusSection: null }),
     focusValidationIssue: (issue) => set((state) => ({
