@@ -234,6 +234,12 @@ on a desktop.
   JavaScript, or a self-contained runnable HTML page — images included, so an export needs
   no files alongside it. The scene you are editing is the module's default export and the
   one the page starts; the rest are registered alongside it, ready for `scene.start`
+- Export a project bundle: a ready-to-build Vite project in a `.zip`, with the scenes as
+  TypeScript or JavaScript source, every image, sound and font the scenes use as a real
+  file under `public/assets/`, an entry point that boots the game exactly as Play game does,
+  and a README. `npm install`, then `npm run dev` or `npm run build` — the build is a static
+  site that runs from any path on any web host. Before it downloads, a preflight lists every
+  file, the exact size and any warnings
 - Three panels on desktop, canvas plus bottom sheets on a phone
 - The properties panel is a stack of collapsible sections, closed until you open
   them. What you open stays open — across objects, and the next time you visit

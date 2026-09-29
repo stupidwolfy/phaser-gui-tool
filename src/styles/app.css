@@ -1705,3 +1705,59 @@ select {
     border-radius: 0;
   }
 }
+
+/*
+ * The export-bundle preflight reuses the Help dialog's overlay and panel, so
+ * it is modal, fixed and full-screen on a phone for the same reasons. Only the
+ * summary and the footer are its own.
+ */
+.bundle .field {
+  margin-top: 8px;
+}
+
+.bundle .field__input {
+  /* 16px or iOS Safari zooms the page on focus. */
+  font-size: 16px;
+}
+
+.bundle__summary,
+.bundle__warnings {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.bundle__summary p {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+
+.bundle__facts,
+.bundle__warnings ul,
+.bundle__files ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.bundle__files summary {
+  min-height: var(--touch);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.bundle__files code {
+  overflow-wrap: anywhere;
+}
+
+.bundle__size {
+  color: var(--text-dim);
+}
+
+.bundle__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+}

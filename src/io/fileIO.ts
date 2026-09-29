@@ -1,5 +1,6 @@
 import { DEFAULT_FRAME_RATE } from '../core/defaults';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { MIME_EXTENSIONS } from './mime';
 import {
   BASE_FRAME,
   FONT_FAMILY,
@@ -98,24 +99,11 @@ export const serializeProject = (project: Project): string =>
 
 const MAX_ARCHIVE_ENTRY_SIZE = 32 * 1024 * 1024;
 const MAX_ARCHIVE_SIZE = 128 * 1024 * 1024;
-const MIME_EXTENSIONS: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'audio/mpeg': 'mp3',
-  'audio/ogg': 'ogg',
-  'audio/wav': 'wav',
-  'audio/mp4': 'm4a',
-  'audio/webm': 'webm',
-  'font/ttf': 'ttf',
-  'font/otf': 'otf',
-  'font/woff': 'woff',
-  'font/woff2': 'woff2',
-};
 
 const safeAssetName = (id: string): string =>
   Array.from(strToU8(id), (byte) => byte.toString(16).padStart(2, '0')).join('');
 
-function decodeAsset(dataUrl: string, expectedMime: string): Uint8Array {
+export function decodeAsset(dataUrl: string, expectedMime: string): Uint8Array {
   const match = /^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/.exec(dataUrl);
   if (!match || match[1] !== expectedMime || !MIME_EXTENSIONS[expectedMime]) {
     throw new ProjectParseError(`Asset has unsupported or mismatched MIME type "${expectedMime}".`);

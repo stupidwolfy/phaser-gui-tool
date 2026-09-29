@@ -1,4 +1,5 @@
 import { activeScene } from '../core/store';
+import { MIME_EXTENSIONS } from './mime';
 import { assertProjectExportable } from '../core/validation';
 import {
   RULE_OPERATOR_JS,
@@ -97,7 +98,7 @@ function escapeForScriptTag(js: string): string {
 }
 
 /** Escapes text interpolated into HTML markup (the document title). */
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -532,6 +533,28 @@ function collectAssets(
   return used;
 }
 
+/** The three asset tables, and the folder each one's files go in. */
+export type BundleAssetFolder = 'images' | 'audio' | 'fonts';
+
+/**
+ * Where an export bundle puts one asset, relative to the page — and therefore
+ * the value its table row holds in a bundle's scene module.
+ *
+ * Built from the key the table already allocated rather than from the file's
+ * own name, and that is the whole collision policy: a texture key, an audio
+ * key and a font family are each de-duplicated identifiers within their own
+ * table, and each table has its own folder, so two paths can never be one and
+ * no path can hold a separator or a `..`. A second naming scheme would be a
+ * second answer to what an asset is called, free to disagree with the key the
+ * code loads it by.
+ *
+ * Relative, never rooted: Phaser's loader resolves it against the page, so a
+ * built bundle runs from whatever path it is deployed under.
+ */
+export function bundleAssetPath(folder: BundleAssetFolder, key: string, mimeType: string): string {
+  return `assets/${folder}/${key}.${MIME_EXTENSIONS[mimeType] ?? 'bin'}`;
+}
+
 /**
  * The image table, as an object literal keyed by texture key.
  *
@@ -540,14 +563,25 @@ function collectAssets(
  * — swapping embedded bytes for real asset paths — is a single object at the
  * top, not a data URL buried in the middle of `preload`.
  */
-function buildAssetTable(used: Map<string, UsedAsset>, indent: string): string {
+function buildAssetTable(
+  used: Map<string, UsedAsset>,
+  indent: string,
+  paths = false,
+): string {
   const lines = [
     '/**',
-    ' * Images from the editor, embedded so this file needs nothing alongside it.',
-    ' * To serve them as real files instead, replace each value with its path.',
+    ...(paths
+      ? [' * Images from the editor, served from public/assets/images.']
+      : [
+          ' * Images from the editor, embedded so this file needs nothing alongside it.',
+          ' * To serve them as real files instead, replace each value with its path.',
+        ]),
     ' */',
     'const ASSETS = {',
-    ...[...used.values()].map(({ asset, key }) => `  ${str(key)}: ${str(asset.dataUrl)},`),
+    ...[...used.values()].map(
+      ({ asset, key }) =>
+        `  ${str(key)}: ${str(paths ? bundleAssetPath('images', key, asset.mimeType) : asset.dataUrl)},`,
+    ),
     '};',
   ];
   return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
@@ -667,14 +701,25 @@ function collectAudio(project: Project, scenes: SceneDoc[]): Map<string, UsedAud
  * thing a reader is most likely to want to change — swapping embedded bytes for
  * real asset paths — should be one object at the top of the file.
  */
-function buildAudioTable(used: Map<string, UsedAudio>, indent: string): string {
+function buildAudioTable(
+  used: Map<string, UsedAudio>,
+  indent: string,
+  paths = false,
+): string {
   const lines = [
     '/**',
-    ' * Sounds from the editor, embedded so this file needs nothing alongside it.',
-    ' * To serve them as real files instead, replace each value with its path.',
+    ...(paths
+      ? [' * Sounds from the editor, served from public/assets/audio.']
+      : [
+          ' * Sounds from the editor, embedded so this file needs nothing alongside it.',
+          ' * To serve them as real files instead, replace each value with its path.',
+        ]),
     ' */',
     'const AUDIO = {',
-    ...[...used.values()].map(({ audio, key }) => `  ${str(key)}: ${str(audio.dataUrl)},`),
+    ...[...used.values()].map(
+      ({ audio, key }) =>
+        `  ${str(key)}: ${str(paths ? bundleAssetPath('audio', key, audio.mimeType) : audio.dataUrl)},`,
+    ),
     '};',
   ];
   return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
@@ -1400,14 +1445,25 @@ function familiesIn(
  * The font table, `ASSETS`' and `AUDIO`' sibling and a named const for their
  * reason.
  */
-function buildFontTable(used: Map<string, FontAsset>, indent: string): string {
+function buildFontTable(
+  used: Map<string, FontAsset>,
+  indent: string,
+  paths = false,
+): string {
   const lines = [
     '/**',
-    ' * Fonts from the editor, embedded so this file needs nothing alongside it.',
-    ' * To serve them as real files instead, replace each value with its path.',
+    ...(paths
+      ? [' * Fonts from the editor, served from public/assets/fonts.']
+      : [
+          ' * Fonts from the editor, embedded so this file needs nothing alongside it.',
+          ' * To serve them as real files instead, replace each value with its path.',
+        ]),
     ' */',
     'const FONTS = {',
-    ...[...used.values()].map((font) => `  ${str(font.family)}: ${str(font.dataUrl)},`),
+    ...[...used.values()].map(
+      (font) =>
+        `  ${str(font.family)}: ${str(paths ? bundleAssetPath('fonts', font.family, font.mimeType) : font.dataUrl)},`,
+    ),
     '};',
   ];
   return lines.map((line) => (line ? `${indent}${line}` : '')).join('\n');
@@ -4914,7 +4970,7 @@ function buildCreateBody(
  * document.
  */
 const arcadeConfig = (needed: boolean) =>
-  needed ? "        physics: { default: 'arcade' },\n" : '';
+  needed ? "  physics: { default: 'arcade' },\n" : '';
 
 const physicsNote = (needed: boolean) =>
   needed
@@ -5216,6 +5272,117 @@ ${created.body}
 }
 
 /**
+ * The `new Phaser.Game({...})` statement that boots a whole export, at zero
+ * indent.
+ *
+ * Shared by the runnable page and a bundle's entry module, which is what keeps
+ * the size, the background, the Arcade key, the scale mode and the scene order
+ * of the two from drifting — and Play runs the runnable page, so a bundle's
+ * game opens exactly as Play does. The page shifts it right rather than being
+ * passed an indent, `buildSceneClass`' arrangement.
+ *
+ * Phaser starts the first scene in the list and registers the rest, so the
+ * scene the editor was showing goes first and the others are there for it to
+ * `scene.start`. A single-scene project passes the class itself, which is what
+ * it always emitted.
+ */
+function buildGameConfig(scenes: UsedScene[], boot: UsedScene, arcade: boolean): string {
+  const registered =
+    scenes.length > 1
+      ? `[${[boot, ...scenes.filter((entry) => entry !== boot)]
+          .map((entry) => entry.className)
+          .join(', ')}]`
+      : boot.className;
+  return `new Phaser.Game({
+  type: Phaser.AUTO,
+  width: ${num(boot.scene.width)},
+  height: ${num(boot.scene.height)},
+  backgroundColor: ${str(boot.scene.backgroundColor)},
+${arcadeConfig(arcade)}  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
+  scene: ${registered},
+});`;
+}
+
+/**
+ * How a generated module is to be shaped, beyond its language.
+ *
+ * `assetPaths` makes the three asset tables hold relative file paths
+ * (`bundleAssetPath`) rather than data URLs, for an export bundle that ships
+ * the bytes beside the code. Omitted, every output is byte for byte what it
+ * was — the rule every table in this file follows.
+ */
+export interface ExportOptions {
+  assetPaths?: boolean;
+}
+
+/** One asset file an export bundle has to carry, at the path its table names. */
+export interface BundleAsset {
+  path: string;
+  dataUrl: string;
+  mimeType: string;
+}
+
+/**
+ * Everything an export bundle needs from the exporter besides the module text:
+ * which asset files the tables name, and the entry module's imports and boot.
+ *
+ * Built from the same `prepare` the module is, so a bundle never re-derives
+ * which assets are used or what a class is called — the collected tables *are*
+ * the answer, and they hold only what some scene uses, so nothing unreferenced
+ * ships. Each table is de-duplicated across scenes already, which is what makes
+ * every file appear exactly once.
+ */
+export interface BundleManifest {
+  assets: BundleAsset[];
+  /** The default export: the scene the editor is on. */
+  bootClass: string;
+  /** Every other class, for the entry module's named import. */
+  otherClasses: string[];
+  sceneNames: string[];
+  /** The `new Phaser.Game(...)` statement, at zero indent. */
+  gameConfig: string;
+  /** The boot scene's background, validated, for the page around the canvas. */
+  pageBackground: string;
+  remembersVariables: boolean;
+  touchControls: boolean;
+}
+
+export function bundleManifestOf(project: Project): BundleManifest {
+  assertProjectExportable(project);
+  const { scenes, ctx, boot, physics, touch } = prepare(project);
+  const assets: BundleAsset[] = [
+    ...[...ctx.assets.values()].map(({ asset, key }) => ({
+      path: bundleAssetPath('images', key, asset.mimeType),
+      dataUrl: asset.dataUrl,
+      mimeType: asset.mimeType,
+    })),
+    ...[...ctx.audio.values()].map(({ audio, key }) => ({
+      path: bundleAssetPath('audio', key, audio.mimeType),
+      dataUrl: audio.dataUrl,
+      mimeType: audio.mimeType,
+    })),
+    ...[...ctx.fonts.values()].map((font) => ({
+      path: bundleAssetPath('fonts', font.family, font.mimeType),
+      dataUrl: font.dataUrl,
+      mimeType: font.mimeType,
+    })),
+  ];
+  return {
+    assets,
+    bootClass: boot.className,
+    otherClasses: scenes.filter((entry) => entry !== boot).map((entry) => entry.className),
+    sceneNames: [boot, ...scenes.filter((entry) => entry !== boot)].map((entry) => entry.scene.name),
+    gameConfig: buildGameConfig(scenes, boot, physics.arcade),
+    pageBackground: cssColor(boot.scene.backgroundColor),
+    remembersVariables: persistedVariables(ctx.variables).length > 0,
+    touchControls: touch,
+  };
+}
+
+/**
  * The Scene classes as a module to drop into an existing Phaser project — one
  * class per scene in the project, in document order.
  *
@@ -5238,24 +5405,29 @@ ${created.body}
  * no imports, is what the runnable HTML export already produces, so the three
  * outputs cover the three real cases without overlapping.
  */
-export function generateScene(project: Project, language: SceneLanguage = 'ts'): string {
+export function generateScene(
+  project: Project,
+  language: SceneLanguage = 'ts',
+  options: ExportOptions = {},
+): string {
+  const paths = options.assetPaths === true;
   assertProjectExportable(project);
   const { scenes, ctx, boot, physics, touch, rules, labels, effects } = prepare(project);
 
   // A project with no images emits no ASSETS const and no preload() at all, so
   // shape-only projects export exactly what they always did.
-  const table = ctx.assets.size > 0 ? `\n${buildAssetTable(ctx.assets, '')}\n` : '';
+  const table = ctx.assets.size > 0 ? `\n${buildAssetTable(ctx.assets, '', paths)}\n` : '';
   // The same rule a fourth time, so a project that predates audio exports byte
   // for byte what it always did. Immediately after `ASSETS` because the two are
   // the same kind of thing — embedded bytes a reader swaps for paths — and
   // before `TILEMAPS`, which is derived from an asset rather than being one.
-  const audio = ctx.audio.size > 0 ? `\n${buildAudioTable(ctx.audio, '')}\n` : '';
+  const audio = ctx.audio.size > 0 ? `\n${buildAudioTable(ctx.audio, '', paths)}\n` : '';
   // Gated on an image actually being cut by an atlas rather than on the asset
   // table having anything in it, or every project with a plain image would emit
   // an empty `const ATLASES = {}` — which passes every test and breaks the
   // byte-for-byte property every table before it has kept.
   const atlases = hasAtlasIn(ctx.assets) ? `\n${buildAtlasTable(ctx.assets, '')}\n` : '';
-  const fonts = ctx.fonts.size > 0 ? `\n${buildFontTable(ctx.fonts, '')}\n` : '';
+  const fonts = ctx.fonts.size > 0 ? `\n${buildFontTable(ctx.fonts, '', paths)}\n` : '';
   // The table and its helper as one block, exactly as `TILEMAPS` is followed by
   // the function that reads it — because here too the helper is the table's
   // only reader, and splitting them puts a `for` loop a screen away from the
@@ -5433,17 +5605,6 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
     .join('\n\n')
     .trimStart();
 
-  // Phaser starts the first scene in the list and registers the rest, so the
-  // scene the editor was showing goes first and the others are there for it to
-  // `scene.start`. A single-scene project passes the class itself, which is
-  // what it always emitted.
-  const registered =
-    scenes.length > 1
-      ? `[${[boot, ...scenes.filter((entry) => entry !== boot)]
-          .map((entry) => entry.className)
-          .join(', ')}]`
-      : boot.className;
-
   /**
    * The whole script, escaped in one pass at the end rather than fragment by
    * fragment.
@@ -5459,17 +5620,7 @@ export function generateRunnableHtml(project: Project, phaserSrc?: string): stri
 
 ${table}${audio}${atlases}${fonts}${variables}${tiles}${bodies}${fitted}${circled}${matter}${ground}${buttons}${keyFn}${tapFn}${matterHitFn}${labelValueFn}${bindLabelFn}${onVarFn}${effectsFn}${factories}      ${classes}
 
-      new Phaser.Game({
-        type: Phaser.AUTO,
-        width: ${num(boot.scene.width)},
-        height: ${num(boot.scene.height)},
-        backgroundColor: ${str(boot.scene.backgroundColor)},
-${arcadeConfig(physics.arcade)}        scale: {
-          mode: Phaser.Scale.FIT,
-          autoCenter: Phaser.Scale.CENTER_BOTH,
-        },
-        scene: ${registered},
-      });`;
+      ${buildGameConfig(scenes, boot, physics.arcade).replace(/\n(?!$)/g, '\n      ')}`;
 
   return `<!doctype html>
 <html lang="en">
