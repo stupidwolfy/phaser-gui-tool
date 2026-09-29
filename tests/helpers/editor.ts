@@ -341,6 +341,25 @@ export class EditorPage {
     await this.settle();
   }
 
+  /** Types into the scene tree's filter; an empty string clears it. */
+  async filterTree(text: string): Promise<void> {
+    await this.openPanel('scene');
+    await this.panel('scene').getByRole('searchbox', { name: 'Filter objects', exact: true }).fill(text);
+    await this.settle();
+  }
+
+  /**
+   * The names of the rows the tree is showing, top to bottom.
+   *
+   * Read from `.tree__name`, with the CSS ` (selected)` suffix stripped in case
+   * the reading includes generated content, as `selectInTree`'s locator does.
+   */
+  async treeRowNames(): Promise<string[]> {
+    await this.openPanel('scene');
+    const names = await this.panel('scene').locator('.tree__item .tree__name').allInnerTexts();
+    return names.map((name) => name.replace(/ \(selected\)$/, ''));
+  }
+
   async selectInTree(name: string): Promise<void> {
     await this.openPanel('scene');
     // By the row's name text rather than its accessible name, which is

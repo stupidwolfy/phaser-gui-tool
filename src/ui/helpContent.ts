@@ -30,6 +30,7 @@ export interface HelpTopic {
  */
 export const SHORTCUTS: readonly { keys: string; does: string }[] = [
   { keys: '?', does: 'Open Help' },
+  { keys: '/', does: 'Filter the scene tree' },
   { keys: 'Arrow keys', does: 'Nudge the selection 1px — hold Shift for 10px' },
   { keys: 'Delete / Backspace', does: 'Delete the selection' },
   { keys: 'Escape', does: 'Leave paint mode, otherwise deselect' },
@@ -101,11 +102,12 @@ export const HELP_TOPICS: readonly HelpTopic[] = [
   {
     id: 'selection-groups',
     title: 'Selecting, grouping and arranging',
-    keywords: ['select', 'multi', 'multiple', 'group', 'container', 'order', 'front', 'back', 'layer', 'parent', 'tree'],
+    keywords: ['select', 'multi', 'multiple', 'group', 'container', 'order', 'front', 'back', 'layer', 'parent', 'tree', 'filter', 'search', 'find', 'expand', 'collapse'],
     body: [
       'Turn on Multi in the Scene panel and tap objects to build a selection, or Shift/Ctrl-click on a desktop. While Multi is on a press never moves anything; turn it off to drag what you picked.',
       'Group wraps the selection in a container. Everything inside a group moves with it. Select a group from the Scene panel, then drag any of its contents to move it.',
       'Draw order is the order of the Scene panel list: the first row is furthest back. Arrange in the Properties panel moves an object forward or back.',
+      'To find an object in a long list, type part of its name or its type in the Scene panel filter, or press /. Matches are shown with the groups they sit in. Escape clears the filter. The buttons beside it expand or collapse every group, and selecting an object on the canvas opens the groups above its row.',
     ],
   },
   {

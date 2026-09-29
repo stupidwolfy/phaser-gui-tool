@@ -1,8 +1,9 @@
-import { useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useEditorStore } from '../core/store';
 import { MoveBar } from './MoveBar';
 import { TileBar } from './TileBar';
 import { Sheet } from './Sheet';
+import { FOCUS_TREE_FILTER_EVENT } from './treeFilter';
 
 export type MobileTab = 'scene' | 'inspect' | 'file' | null;
 
@@ -61,6 +62,16 @@ export function Layout({
   const inspectTab = useRef<HTMLButtonElement>(null);
   const fileTab = useRef<HTMLButtonElement>(null);
   const painting = useEditorStore((s) => s.paintingId !== null);
+
+  // The `/` shortcut focuses the scene tree's filter, which on a phone is in a
+  // sheet that may be closed. Opening it here is the one half the tree cannot
+  // do for itself.
+  useEffect(() => {
+    if (!isMobile) return;
+    const open = () => setTab('scene');
+    window.addEventListener(FOCUS_TREE_FILTER_EVENT, open);
+    return () => window.removeEventListener(FOCUS_TREE_FILTER_EVENT, open);
+  }, [isMobile]);
 
   if (!isMobile) {
     return (
