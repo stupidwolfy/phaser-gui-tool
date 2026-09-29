@@ -158,8 +158,9 @@ test('a project with a blocking error is refused, and the other exports are unch
   const hostile = hostileProject();
   expect(generateScene(hostile, 'ts', {})).toBe(generateScene(hostile, 'ts'));
   expect(generateScene(hostile, 'ts')).toContain('data:image/png;base64,');
-  // And the runnable page still boots through the shared game config.
-  expect(generateRunnableHtml(hostile)).toContain('new Phaser.Game({\n        type: Phaser.AUTO,');
+  // And the runnable page still boots through the shared game config — WebGL,
+  // because the hostile project asks for it in its settings.
+  expect(generateRunnableHtml(hostile)).toContain('new Phaser.Game({\n        type: Phaser.WEBGL,');
 });
 
 test('the bundle asks for the toolchain this editor is built with', () => {
