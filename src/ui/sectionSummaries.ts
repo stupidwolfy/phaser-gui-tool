@@ -11,6 +11,7 @@ import {
   type PhysicsBody,
   type PhysicsEngine,
   type ProjectVariable,
+  type ResolvedProjectSettings,
   type SceneCamera,
   type ScenePhysics,
   type ScrollFactor,
@@ -385,4 +386,24 @@ export function objectsSummary(nodes: readonly Pick<GameObjectNode, 'type'>[]): 
   for (const node of nodes) counts.set(node.type, (counts.get(node.type) ?? 0) + 1);
   const text = [...counts].map(([type, n]) => (n > 1 ? `${TYPE_WORD[type]} ×${n}` : TYPE_WORD[type])).join(', ');
   return counts.size > 1 ? { text, state: 'mixed' } : quiet(text);
+}
+
+/**
+ * The project's game settings: only what differs from the default, so an
+ * untouched project reads "Defaults" and a configured one lists its choices in
+ * the order the fields sit.
+ */
+export function projectSettingsSummary(
+  settings: ResolvedProjectSettings,
+  startSceneName: string | null,
+): SectionSummary {
+  const parts: string[] = [];
+  if (startSceneName !== null) parts.push(`Starts ${clip(startSceneName, 16)}`);
+  if (settings.viewport) parts.push(`${settings.viewport.width}×${settings.viewport.height}`);
+  if (settings.scaleMode === 'envelop') parts.push('Fill');
+  if (settings.scaleMode === 'none') parts.push('No scaling');
+  if (settings.pixelArt) parts.push('Pixel art');
+  if (settings.renderer === 'webgl') parts.push('WebGL');
+  if (settings.renderer === 'canvas') parts.push('Canvas');
+  return parts.length > 0 ? set(parts.join(' · ')) : quiet('Defaults');
 }

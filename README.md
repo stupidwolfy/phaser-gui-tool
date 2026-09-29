@@ -232,8 +232,14 @@ on a desktop.
   Phaser comes from the editor's own copy, so Play game works with no connection at all
 - Export the project as real Phaser code: a Scene class per scene in TypeScript or
   JavaScript, or a self-contained runnable HTML page — images included, so an export needs
-  no files alongside it. The scene you are editing is the module's default export and the
-  one the page starts; the rest are registered alongside it, ready for `scene.start`
+  no files alongside it. The start scene (or, if you have not chosen one, the scene you are
+  editing) is the module's default export and the one the page starts; the rest are
+  registered alongside it, ready for `scene.start`
+- **Project settings** for the game as a whole, at the top of the Properties panel when
+  nothing is selected: the game's title, the scene it starts on, a fixed game size, how the
+  canvas scales to a screen (fit with bars, fill and crop, or none), pixel art (no smoothing
+  on images, shown on the editor canvas too) and the renderer. Play game and every export
+  use the same settings. A project that changes nothing exports exactly as before
 - Export a project bundle: a ready-to-build Vite project in a `.zip`, with the scenes as
   TypeScript or JavaScript source, every image, sound and font the scenes use as a real
   file under `public/assets/`, an entry point that boots the game exactly as Play game does,

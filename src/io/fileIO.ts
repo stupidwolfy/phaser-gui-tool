@@ -5,6 +5,11 @@ import {
   BASE_FRAME,
   FONT_FAMILY,
   SCHEMA_VERSION,
+  SCALE_MODES,
+  RENDERERS,
+  type ProjectSettings,
+  type ScaleModeSetting,
+  type RendererSetting,
   type AnimationClip,
   type AtlasFrame,
   type AudioAsset,
@@ -796,7 +801,42 @@ export function parseProject(contents: string): Project {
     variables: parseVariables(candidate.variables),
     scenes,
     activeSceneId,
+    // Absent before v18, which is a valid project that boots the scene being
+    // edited at that scene's own size. The line the v18 bump is about, spread
+    // so that a project that chose nothing gains no `settings` key on open.
+    ...parseSettings((raw as { settings?: unknown }).settings),
   };
+}
+
+/**
+ * Keeps each settings key only in a shape the type allows, and drops the rest.
+ * What it keeps is not yet *usable* — a start scene may name nothing, a size
+ * may be zero — and that is deliberate: `projectSettingsOf` repairs both on
+ * read and validation says so, where dropping them here would repair a
+ * hand-edited file silently.
+ */
+function parseSettings(value: unknown): { settings?: ProjectSettings } {
+  if (!value || typeof value !== 'object') return {};
+  const raw = value as Record<string, unknown>;
+  const settings: ProjectSettings = {};
+  if (typeof raw.startSceneId === 'string') settings.startSceneId = raw.startSceneId;
+  const viewport = raw.viewport as { width?: unknown; height?: unknown } | null | undefined;
+  if (
+    viewport &&
+    typeof viewport === 'object' &&
+    typeof viewport.width === 'number' &&
+    typeof viewport.height === 'number'
+  ) {
+    settings.viewport = { width: viewport.width, height: viewport.height };
+  }
+  if (SCALE_MODES.includes(raw.scaleMode as ScaleModeSetting) && raw.scaleMode !== 'fit') {
+    settings.scaleMode = raw.scaleMode as ScaleModeSetting;
+  }
+  if (raw.pixelArt === true) settings.pixelArt = true;
+  if (RENDERERS.includes(raw.renderer as RendererSetting) && raw.renderer !== 'auto') {
+    settings.renderer = raw.renderer as RendererSetting;
+  }
+  return Object.keys(settings).length > 0 ? { settings } : {};
 }
 
 export interface OpenResult {

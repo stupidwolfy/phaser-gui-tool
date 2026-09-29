@@ -52,7 +52,7 @@ test('a remembered variable round-trips, and unticking takes the key out', async
   // v17: a v16 build rebuilds each variable field by field and would drop the
   // flag on a re-save, which is a game that silently stops remembering.
   const document = await saved(editor);
-  expect(document.schemaVersion).toBe(17);
+  expect(document.schemaVersion).toBe(18);
   expect(document.variables).toEqual([
     { id: expect.any(String), name: 'Best', value: 0, persist: true },
   ]);

@@ -33,6 +33,8 @@ import {
   rulePointsOf,
   scrollFactorOf,
   scrollOffsetOf,
+  gameViewportOf,
+  projectSettingsOf,
   particleFollowOf,
   textStyleOf,
   tileLayerOf,
@@ -813,6 +815,11 @@ export class EditorScene extends Phaser.Scene {
   private tileData = new Map<string, number[][]>();
   private assetTextures = new Set<string>();
   /**
+   * The pixel-art setting the asset textures were last filtered for. A texture
+   * is created LINEAR, so false is the state before anything has been applied.
+   */
+  private pixelArt = false;
+  /**
    * Animation keys this scene registered.
    *
    * Animations live on the *game*'s manager, not the scene's — `this.anims` is
@@ -1262,6 +1269,9 @@ export class EditorScene extends Phaser.Scene {
       // user had ever imported.
       for (const key of this.assetTextures) this.textures.remove(key);
       this.assetTextures.clear();
+      // What they were filtered for goes with them: a rebuilt scene starts
+      // from LINEAR textures again.
+      this.pixelArt = false;
       // Animations belong to the game's manager, exactly as textures belong to
       // the game's texture manager, so they leak the same way if left behind.
       for (const key of this.animationKeys) this.anims.remove(key);
@@ -1414,6 +1424,19 @@ export class EditorScene extends Phaser.Scene {
    */
   private syncTextures(project: Project): void {
     const wanted = new Set<string>();
+    // The project's pixel-art setting, applied as the exported game's
+    // `pixelArt: true` applies it: nearest-neighbour sampling on every image.
+    // Only the textures built from the document take it — the placeholders are
+    // editor chrome — and a change of setting re-filters every one of them,
+    // because nothing about a texture's key says how it is sampled.
+    const nearest = projectSettingsOf(project).pixelArt;
+    const filter = nearest
+      ? Phaser.Textures.FilterMode.NEAREST
+      : Phaser.Textures.FilterMode.LINEAR;
+    if (nearest !== this.pixelArt) {
+      this.pixelArt = nearest;
+      for (const key of this.assetTextures) this.textures.get(key).setFilter(filter);
+    }
 
     for (const asset of project.assets) {
       const key = textureKeyForAsset(asset);
@@ -1432,6 +1455,7 @@ export class EditorScene extends Phaser.Scene {
         if (sheet) this.textures.addSpriteSheet(key, image, { ...sheet });
         else if (atlas) this.textures.addAtlas(key, image, atlasDataOf(atlas));
         else this.textures.addImage(key, image);
+        if (nearest) this.textures.get(key).setFilter(filter);
         this.assetTextures.add(key);
         // **`syncFonts`' `textStyles.clear()`, one cache over, and leaving it
         // out is a bug nothing else would catch.** `applyEffects` is
@@ -3073,7 +3097,7 @@ export class EditorScene extends Phaser.Scene {
       this.destroyDisplayObject(id, object);
     }
 
-    this.applyFollows(scene);
+    this.applyFollows(scene, gameViewportOf(state.project, scene));
     this.publishMeasuredBounds();
 
     // After the objects, not before: `zoomToFit` frames the scene rectangle,
@@ -3264,10 +3288,17 @@ export class EditorScene extends Phaser.Scene {
    * like the grid, because on almost every frame none of it has moved.
    */
   private drawCamera(): void {
-    const scene = activeScene(useEditorStore.getState().project);
+    const { project } = useEditorStore.getState();
+    const scene = activeScene(project);
     const { zoom } = this.cameras.main;
-    const view = cameraViewOf(scene);
-    const signature = isDefaultCamera(cameraOf(scene))
+    // Measured against the game's canvas, which a fixed game size makes
+    // something other than this scene's own rectangle — and then the frame is
+    // worth drawing even for a camera at its default, because it no longer
+    // lands on `sceneFrame`.
+    const viewport = gameViewportOf(project, scene);
+    const view = cameraViewOf(scene, viewport);
+    const fitsScene = viewport.width === scene.width && viewport.height === scene.height;
+    const signature = isDefaultCamera(cameraOf(scene)) && fitsScene
       ? ''
       : `${view.x}:${view.y}:${view.width}:${view.height}:${zoom}`;
     if (signature === this.cameraSignature) return;
@@ -3301,9 +3332,11 @@ export class EditorScene extends Phaser.Scene {
    * player is going to be standing on.
    */
   private drawTouchZones(): void {
-    const scene = activeScene(useEditorStore.getState().project);
+    const { project } = useEditorStore.getState();
+    const scene = activeScene(project);
     const { zoom } = this.cameras.main;
-    const buttons = touchZonesOf(scene);
+    // Laid out against the game's canvas, the exporter's `ctx.viewport` rule.
+    const buttons = touchZonesOf(scene, gameViewportOf(project, scene));
     const signature = buttons.length
       ? `${zoom}:${buttons.map((b) => `${b.key}@${b.x},${b.y}/${b.radius}`).join('|')}`
       : '';
@@ -4074,7 +4107,7 @@ export class EditorScene extends Phaser.Scene {
     // `scrollOffsetOf` answers and what the violet frame already claims to show.
     const scene = activeScene(this.syncing);
     const factor = scrollFactorOf(node, topLevel);
-    const scroll = scrollOffsetOf(scene, factor);
+    const scroll = scrollOffsetOf(scene, factor, gameViewportOf(this.syncing, scene));
     // And a trail: Phaser fires a following emitter's particles at the target's
     // `x`/`y` plus the emitter's own, so the emitter's stored position is an
     // offset and it is drawn beside the target. The target's **document**
@@ -4720,7 +4753,7 @@ export class EditorScene extends Phaser.Scene {
    * because an emitter can come before its target in the array and the target's
    * display object may be the one this very sync has just built.
    */
-  private applyFollows(scene: SceneDoc): void {
+  private applyFollows(scene: SceneDoc, viewport: { width: number; height: number }): void {
     for (const node of scene.children) {
       if (node.type !== 'particles') continue;
       const emitter = this.emitters.get(node.id);
@@ -4733,7 +4766,7 @@ export class EditorScene extends Phaser.Scene {
       }
       // Where `applyNode` puts the target when no tween holds it — the same sum,
       // so the difference is zero whenever nothing is moving.
-      const rest = scrollOffsetOf(scene, scrollFactorOf(target, true));
+      const rest = scrollOffsetOf(scene, scrollFactorOf(target, true), viewport);
       emitter.startFollow(
         object,
         -(target.transform.x + rest.x),
